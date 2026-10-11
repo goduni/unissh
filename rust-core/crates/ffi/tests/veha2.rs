@@ -1869,6 +1869,64 @@ fn push_refused_for_size_reports_what_the_server_said() {
     );
 }
 
+/// "Pull this vault" hands the vault to the core page by page. A later page
+/// verifies against what the earlier calls applied (the manifest and the
+/// vault record reach the server first), so the vault arrives whole — here
+/// with the smallest pages there are, one object each.
+#[test]
+fn a_vault_pulled_page_by_page_arrives_whole() {
+    use unissh_ffi::FfiSyncTransport;
+    use unissh_sync::SyncObject;
+
+    let dir_a = tempfile::tempdir().unwrap();
+    let core_a = new_core(dir_a.path());
+    let secret = core_a.create_account(Some("pw".to_owned())).unwrap();
+    let keyset_blob = std::fs::read(dir_a.path().join("keyset.bin")).unwrap();
+    let vid = core_a
+        .create_cloud_vault("Paged".to_owned(), TENANT.to_owned())
+        .unwrap();
+    core_a
+        .save_note(
+            vid.clone(),
+            "runbook".to_owned(),
+            "restart nginx".to_owned(),
+        )
+        .unwrap();
+    let server = sync_server();
+    core_a
+        .sync_now(server.clone(), TENANT.to_owned(), FfiSyncMode::Full)
+        .unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let core_b = new_core(dir_b.path());
+    core_b
+        .unlock_from_server_blob(keyset_blob, Some("pw".to_owned()), secret)
+        .unwrap();
+    // What `GET /v1/sync/delta?vault=<id>` serves: that vault's objects, in
+    // the order the server received them.
+    let raw_vid = hex::decode(&vid).unwrap();
+    let pages: Vec<Vec<u8>> = server
+        .delta_since(0)
+        .into_iter()
+        .map(|item| item.object)
+        .filter(|o| {
+            SyncObject::from_bytes(o).is_ok_and(|o| o.vault_id() == Some(raw_vid.as_slice()))
+        })
+        .collect();
+    assert!(pages.len() >= 2, "the vault record and the note at least");
+
+    for page in pages {
+        core_b
+            .apply_pulled_vault(TENANT.to_owned(), vec![page])
+            .unwrap();
+    }
+
+    let items = core_b.list_items(vid).unwrap();
+    assert!(
+        items.iter().any(|i| i.item_id == "runbook"),
+        "the note of the last page verified against the earlier pages"
+    );
+}
+
 /// The first upload of a vault moved into a space the device does not sync
 /// must not pull under that space's label: the pull would start from an empty
 /// cursor and stamp the label on a cloud vault the user unbound on purpose.

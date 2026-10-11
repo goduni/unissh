@@ -877,7 +877,9 @@ pub async fn server_list_vaults(
 
 /// **Pull ONE vault** (by hex id) from a server (defaults to active) onto this device:
 /// targeted fetch of just that vault's objects + verify-before-apply, WITHOUT advancing
-/// the pull cursor. Requires a session.
+/// the pull cursor. The vault is fetched and applied page by page, in the server's
+/// order, so it is never held in memory whole; the report is the sum over the pages.
+/// Requires a session.
 #[tauri::command]
 pub async fn server_pull_vault(
     vault_id: String,
@@ -890,9 +892,32 @@ pub async fn server_pull_vault(
     let report = blocking_api(move || {
         let space = cfg.space_id.clone();
         let transport = HttpSyncTransport::new(cfg.base_url, access);
-        let objects = transport.delta_for_vault(&vault_id);
-        core.apply_pulled_vault(space, objects)
-            .map_err(ApiError::from)
+        let mut total = unissh_ffi::FfiSyncReport {
+            applied: 0,
+            skipped_stale: 0,
+            conflicts: 0,
+            rejected: 0,
+            pushed: 0,
+            too_large: Vec::new(),
+        };
+        let mut cursor = 0_u64;
+        loop {
+            let (objects, next) = transport.vault_delta_page(&vault_id, cursor);
+            if !objects.is_empty() {
+                let page = core
+                    .apply_pulled_vault(space.clone(), objects)
+                    .map_err(ApiError::from)?;
+                total.applied = total.applied.saturating_add(page.applied);
+                total.skipped_stale = total.skipped_stale.saturating_add(page.skipped_stale);
+                total.conflicts = total.conflicts.saturating_add(page.conflicts);
+                total.rejected = total.rejected.saturating_add(page.rejected);
+            }
+            match next {
+                Some(next) => cursor = next,
+                None => break,
+            }
+        }
+        Ok(total)
     })
     .await?;
     Ok(report.into())
@@ -944,7 +969,8 @@ pub async fn server_bind_and_push_vault(
 /// 3. The first push runs — a push only (`FfiSyncMode::PushOnly`), not a full sync: a
 ///    pull under a space label this device does not otherwise sync would start
 ///    from an empty cursor and bind every unbound cloud vault it meets to that
-///    space. A failed push does NOT undo the conversion: the vault stays bound and
+///    space. It carries the vault data alone: the account state and the audit
+///    log go with the ordinary sync of the primary space. A failed push does NOT undo the conversion: the vault stays bound and
 ///    dirty, a later sync of its space uploads it, and the failure comes back in
 ///    `push_error` next to the new vault id.
 #[tauri::command]

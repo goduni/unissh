@@ -104,40 +104,33 @@ impl HttpSyncTransport {
         Ok(out)
     }
 
-    /// `GET /v1/sync/delta?vault=<hex>` — the raw object blobs for ONE vault (paginated).
-    /// Best-effort like `delta_since`: on any transport error it returns what it has;
-    /// the core re-verifies every object before applying.
-    pub fn delta_for_vault(&self, vault_id_hex: &str) -> Vec<Vec<u8>> {
-        let http = client::http();
-        let mut out = Vec::new();
-        let mut cur: u64 = 0;
-        loop {
-            let path =
-                format!("/v1/sync/delta?cursor={cur}&limit={DELTA_LIMIT}&vault={vault_id_hex}");
-            let resp = match client::headers(
-                http.get(client::url(&self.base_url, &path)),
-                Some(&self.bearer),
-            )
-            .send()
-            {
-                Ok(r) if r.status().is_success() => r,
-                _ => break,
-            };
-            let v: Value = match resp.json() {
-                Ok(v) => v,
-                Err(_) => break,
-            };
-            out.extend(
-                items_of(&v)
-                    .filter_map(|item| item.get("object").and_then(Value::as_str))
-                    .filter_map(|obj_b64| client::unb64(obj_b64).ok()),
-            );
-            match next_page(&v, cur) {
-                Some(next) => cur = next,
-                None => break,
-            }
-        }
-        out
+    /// One page of `GET /v1/sync/delta?vault=<hex>`: the raw object blobs of ONE
+    /// vault that follow `cursor` (0 for the first page), and the cursor of the
+    /// next page — `None` after the last one. The caller hands each page to the
+    /// core before it asks for the next, so a large vault is never held in
+    /// memory whole. Best-effort like `delta_since`: any transport error ends
+    /// the paging with an empty page; the core verifies every object before
+    /// applying it, and what the earlier pages brought stays applied.
+    pub fn vault_delta_page(&self, vault_id_hex: &str, cursor: u64) -> (Vec<Vec<u8>>, Option<u64>) {
+        let path =
+            format!("/v1/sync/delta?cursor={cursor}&limit={DELTA_LIMIT}&vault={vault_id_hex}");
+        let resp = match client::headers(
+            client::http().get(client::url(&self.base_url, &path)),
+            Some(&self.bearer),
+        )
+        .send()
+        {
+            Ok(r) if r.status().is_success() => r,
+            _ => return (Vec::new(), None),
+        };
+        let Ok(v) = resp.json::<Value>() else {
+            return (Vec::new(), None);
+        };
+        let objects = items_of(&v)
+            .filter_map(|item| item.get("object").and_then(Value::as_str))
+            .filter_map(|obj_b64| client::unb64(obj_b64).ok())
+            .collect();
+        (objects, next_page(&v, cursor))
     }
 }
 
