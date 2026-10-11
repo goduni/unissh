@@ -24,7 +24,11 @@
 //! A lock of the core ([`Approvals::refuse_all`]) empties the line of
 //! everything, forwarded requests included: nothing can be signed without the
 //! unlocked state, and a request the person was asked about before they locked
-//! must not be put to them again once they unlock.
+//! must not be put to them again once they unlock. It also moves the line's
+//! lock epoch, which every request carries from before its asker saw the core
+//! unlocked ([`Asker`]), so one that set out before a lock and reaches the
+//! line after it is refused at the door. Nothing has to be reopened: a request
+//! made after the next unlock carries the current value.
 //!
 //! A request belongs to a [`Connection`] (a system-agent connection, or one
 //! agent channel of a forwarded session), which withdraws it when it closes:
@@ -73,6 +77,10 @@ struct Line {
     /// carries the value its listener started under and is let in only while
     /// that is still the current one.
     system_epoch: u64,
+    /// Bumped by every lock of the core ([`Approvals::refuse_all`]). A request
+    /// carries the value read before its asker saw the core unlocked and is
+    /// let in only while that is still the current one.
+    locks: u64,
 }
 
 impl Line {
@@ -90,10 +98,15 @@ struct Waiting {
 
 /// Where a request put to [`Approvals::ask`] comes from. Either way `gone`
 /// says whether the request's connection has ended ([`Connection::closed`]);
-/// it is called under the line's lock, once, as the request joins.
+/// it is called under the line's lock, once, as the request joins. And either
+/// way `locks` is [`Approvals::lock_epoch`] as the asker read it *before* it
+/// checked, under the core's state lock, that the core is unlocked: the
+/// request is let in only if no lock has happened since.
 pub(crate) enum Asker<'a> {
     /// A forwarded agent.
     Forwarded {
+        /// The line's lock epoch, read before the core was seen unlocked.
+        locks: u64,
         /// Whether the request's agent channel has closed.
         gone: &'a dyn Fn() -> bool,
     },
@@ -101,6 +114,8 @@ pub(crate) enum Asker<'a> {
     System {
         /// [`Approvals::system_epoch`] as it was when the listener started.
         epoch: u64,
+        /// The line's lock epoch, read before the core was seen unlocked.
+        locks: u64,
         /// Whether the request's connection has ended.
         gone: &'a dyn Fn() -> bool,
     },
@@ -210,10 +225,16 @@ impl Approvals {
         lock_recover(&self.line).system_epoch
     }
 
+    /// How many times the core has locked; see [`Asker`]. Takes `line` alone.
+    pub(crate) fn lock_epoch(&self) -> u64 {
+        lock_recover(&self.line).locks
+    }
+
     /// Puts `request` to the registered approver once it is at the front of
     /// the line, and returns the answer. Blocks for as long as that takes.
     ///
-    /// `false` without the approver ever seeing the request when: its
+    /// `false` without the approver ever seeing the request when: the core
+    /// has locked since the asker read the lock epoch, its
     /// connection is gone, the system agent was revoked since its listener
     /// started, it was withdrawn or revoked while it waited, the core was
     /// locked while it waited, too many forwarded requests are waiting
@@ -229,10 +250,13 @@ impl Approvals {
         let (admitted, full) = {
             let mut line = lock_recover(&self.line);
             let (admitted, full) = match asker {
-                Asker::System { epoch, gone } => (epoch == line.system_epoch && !gone(), false),
-                Asker::Forwarded { gone } => {
+                Asker::System { epoch, locks, gone } => (
+                    locks == line.locks && epoch == line.system_epoch && !gone(),
+                    false,
+                ),
+                Asker::Forwarded { locks, gone } => {
                     let full = line.waiting.iter().filter(|w| !w.system).count() >= MAX_FORWARDED;
-                    (!full && !gone(), full)
+                    (locks == line.locks && !full && !gone(), full)
                 }
             };
             if admitted {
@@ -337,15 +361,20 @@ impl Approvals {
     /// The core has locked: ends every request there is, whoever asked. The
     /// ones waiting leave the line refused and the one on screen is cancelled
     /// at the approver, so nothing that joined the line before a lock is put
-    /// to the person after the unlock that follows it. The line stays open: a
-    /// request arriving later joins it as usual, and is signed only if the
-    /// core is unlocked by the time it is approved.
+    /// to the person after the unlock that follows it. The lock epoch moves
+    /// in the same step, so a request whose asker saw the core unlocked
+    /// before this lock is refused at the door if it gets there after it.
+    ///
+    /// Called after the core's state is gone, so an asker that reads the new
+    /// epoch finds the core locked (and refuses without asking) unless it has
+    /// been unlocked again since.
     ///
     /// Lock order: `line` alone, then the approver slot with `line` released.
     /// The caller must not hold the core's state lock.
     pub(crate) fn refuse_all(&self) {
         let shown = {
             let mut line = lock_recover(&self.line);
+            line.locks = line.locks.wrapping_add(1);
             // The front stays where it is: its `Turn` takes it out, so that
             // nothing else is handed over before the approver has let go of it.
             line.waiting.truncate(1);
@@ -449,7 +478,13 @@ mod tests {
 
     /// Asks as an agent channel that stays open would.
     fn ask_forwarded(approvals: &Approvals, id: u64) -> bool {
-        approvals.ask(request(id), Asker::Forwarded { gone: &|| false })
+        approvals.ask(
+            request(id),
+            Asker::Forwarded {
+                locks: approvals.lock_epoch(),
+                gone: &|| false,
+            },
+        )
     }
 
     /// Asks as a system-agent listener started under `epoch` would, for a
@@ -459,6 +494,7 @@ mod tests {
             request(id),
             Asker::System {
                 epoch,
+                locks: approvals.lock_epoch(),
                 gone: &|| false,
             },
         )
@@ -588,6 +624,24 @@ mod tests {
             assert!(!behind.join().unwrap(), "the one in line is refused");
         });
         assert_eq!(desk.handed(), [1], "the one in line was never shown");
+    }
+
+    #[test]
+    fn a_forwarded_request_that_set_out_before_a_lock_is_refused_at_the_door_after_it() {
+        let (approvals, desk) = desk();
+        let before = approvals.lock_epoch();
+
+        approvals.refuse_all();
+
+        let asked = approvals.ask(
+            request(1),
+            Asker::Forwarded {
+                locks: before,
+                gone: &|| false,
+            },
+        );
+        assert!(!asked, "it saw the core unlocked before the lock");
+        assert!(desk.handed().is_empty(), "and was never shown");
     }
 
     #[test]

@@ -1729,10 +1729,13 @@ impl Core {
     /// that follows it.
     ///
     /// Lock order: the state lock is released before the approval line is
-    /// taken (the two are never held together). The line is emptied after the
-    /// state is gone, not before, so that a request slipping in between the
-    /// two steps cannot outlive the lock: whatever joined while the core was
-    /// still unlocked is in the line when it is emptied.
+    /// taken (the two are never held together). The line is emptied, and its
+    /// lock epoch moved, after the state is gone, not before: whatever joined
+    /// while the core was still unlocked is in the line when it is emptied,
+    /// and a request that saw the core unlocked but reaches the line later
+    /// carries the old epoch and is refused there. One that reads the new
+    /// epoch finds the core locked. So no request from before a lock, or
+    /// from while the core is locked, is ever put to the approver.
     #[expect(
         clippy::significant_drop_tightening,
         reason = "the guard must cover the epoch bump, the state reset and the hand-off of the SFTP sessions atomically"
@@ -6976,7 +6979,10 @@ fn connect_with_options(
                             key_id,
                             public_openssh: public,
                             host,
-                            approval: Arc::new(ApprovalBridge::new(Arc::clone(approver))),
+                            approval: Arc::new(ApprovalBridge::new(
+                                Arc::clone(approver),
+                                Arc::clone(state),
+                            )),
                         }));
                 }
             }
@@ -8583,23 +8589,51 @@ fn next_agent_sign_id() -> u64 {
 /// remote host opens gets its own (`for_channel`), so that a channel
 /// that closes (or whose session does) takes its own request out of the line,
 /// or its prompt off the screen, and nobody else's.
+///
+/// Lock order: the line (for its lock epoch) and then the core's `state` are
+/// each taken alone and released, before the request joins the line.
 struct ApprovalBridge {
     approvals: Arc<Approvals>,
+    /// Only to see whether the core is unlocked before asking.
+    state: Arc<Mutex<Option<CoreState>>>,
     /// This channel's request in the line, and whether the channel closed.
     channel: Connection,
 }
 
 impl ApprovalBridge {
-    fn new(approvals: Arc<Approvals>) -> Self {
+    fn new(approvals: Arc<Approvals>, state: Arc<Mutex<Option<CoreState>>>) -> Self {
         Self {
             approvals,
+            state,
             channel: Connection::default(),
         }
     }
 }
 
+/// The approval line's lock epoch for a request about to be asked, or `None`
+/// if the core is locked, when the request is refused without asking: nothing
+/// can be signed then, and a prompt raised while locked must not be waiting
+/// for the person when they unlock.
+///
+/// The epoch is read first and the core checked second, so a lock that falls
+/// anywhere after this check has moved the epoch by the time the request
+/// reaches the line, which then refuses it ([`Asker`]).
+///
+/// Lock order: `line` alone and released, then `state` alone and released.
+fn approval_epoch_if_unlocked(
+    approvals: &Approvals,
+    state: &Mutex<Option<CoreState>>,
+) -> Option<u64> {
+    let locks = approvals.lock_epoch();
+    lock_recover(state).is_some().then_some(locks)
+}
+
 impl unissh_ssh_transport::AgentApproval for ApprovalBridge {
     fn approve(&self, host: &str, blob: &[u8]) -> bool {
+        let Some(locks) = approval_epoch_if_unlocked(&self.approvals, &self.state) else {
+            log::info!("forwarded agent: signature refused (vault locked)");
+            return false;
+        };
         let id = next_agent_sign_id();
         // Named before it joins the line, so that `abandon` can take it out
         // of the line as well as off the screen.
@@ -8625,6 +8659,7 @@ impl unissh_ssh_transport::AgentApproval for ApprovalBridge {
                 waiting: 0,
             },
             Asker::Forwarded {
+                locks,
                 gone: &|| self.channel.closed(),
             },
         );
@@ -8633,7 +8668,10 @@ impl unissh_ssh_transport::AgentApproval for ApprovalBridge {
     }
 
     fn for_channel(&self) -> Arc<dyn unissh_ssh_transport::AgentApproval> {
-        Arc::new(Self::new(Arc::clone(&self.approvals)))
+        Arc::new(Self::new(
+            Arc::clone(&self.approvals),
+            Arc::clone(&self.state),
+        ))
     }
 
     fn abandon(&self) {

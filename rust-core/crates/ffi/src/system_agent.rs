@@ -57,9 +57,10 @@ use unissh_ssh_transport::{
 };
 
 use super::{
-    agent_key_id, attached_certificate, load_key_into_agent, lock_recover, next_agent_sign_id,
-    resolve_vid, userauth_login, AgentSignOrigin, AgentSignRequest, Approvals, Asker, Connection,
-    Core, CoreState, FfiError, InMemoryAgent, Vault, ITEM_TYPE_SSH_KEY,
+    agent_key_id, approval_epoch_if_unlocked, attached_certificate, load_key_into_agent,
+    lock_recover, next_agent_sign_id, resolve_vid, userauth_login, AgentSignOrigin,
+    AgentSignRequest, Approvals, Asker, Connection, Core, CoreState, FfiError, InMemoryAgent,
+    Vault, ITEM_TYPE_SSH_KEY,
 };
 
 mod limits;
@@ -317,8 +318,9 @@ impl AgentKeys for SharedKeys {
 /// Puts each system-agent signature of one connection to the registered
 /// approver, without holding any core lock while the person decides.
 ///
-/// Lock order: the core's `state` is taken alone, before the request joins the
-/// line; `connection` has its own rule ([`Connection`]).
+/// Lock order: the line (for its lock epoch) and then the core's `state` are
+/// each taken alone and released, before the request joins the line;
+/// `connection` has its own rule ([`Connection`]).
 struct SystemApproval {
     /// The approver and the line every request waits in for the one prompt.
     approvals: Arc<Approvals>,
@@ -364,6 +366,11 @@ impl LocalApproval for SystemApproval {
             log::info!("system agent: no approver registered; signature refused");
             return false;
         }
+        // A listener may outlive a lock of the core (only its host stops it).
+        let Some(locks) = approval_epoch_if_unlocked(&self.approvals, &self.state) else {
+            log::info!("system agent: signature refused (vault locked)");
+            return false;
+        };
         let vault = self.vault_name(key);
         let id = next_agent_sign_id();
         // Named before it joins the line, so that `abandon` can take it out
@@ -397,6 +404,7 @@ impl LocalApproval for SystemApproval {
             },
             Asker::System {
                 epoch: self.epoch,
+                locks,
                 gone: &|| self.connection.closed(),
             },
         );
