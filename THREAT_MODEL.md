@@ -280,7 +280,9 @@ neither offered nor attempted.
   master password wipes the material, as does any path that replaces this
   device's keyset (Emergency-Kit or escrow recovery, device pairing, a keyset
   pulled from a server, a new account) and resetting the instance — also when
-  such a change fails after the keyset on disk was already rewritten. A password
+  such a change fails after the keyset on disk was already rewritten, and also
+  when the change lands while biometric unlock is being turned on: the setting
+  is then not turned on, and nothing stays stored. A password
   the keyset no longer accepts is also wiped when it is next tried. Turning the
   setting off wipes both halves at once. A wipe that leaves the sealed password
   on disk is not passed over: the app says so, and Settings offers to forget
@@ -294,7 +296,9 @@ neither offered nor attempted.
   its prompt answers afterwards is discarded: nothing is unlocked, nothing is
   wiped, and a secret the prompt released is zeroized unused — so a Touch ID or
   Hello confirmation that arrives late cannot replace a session opened with the
-  password. That a lock wins is enforced in the core, for every kind of unlock
+  password. Choosing the password also holds for a prompt that had not come up
+  yet: the screen names the attempt it gives up on, and no prompt is shown for
+  it afterwards. That a lock wins is enforced in the core, for every kind of unlock
   (typed, remembered-key and biometric alike): an unlock that began before a
   lock installs nothing, however long its prompt or its key derivation took, so
   it cannot reopen a vault you have locked again. On macOS the abandoned
