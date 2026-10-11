@@ -840,6 +840,9 @@ async function runDir(
   //    disturbs.
   const stayed = files.filter((file) => !ctrl.manifest.get(file.relPath)?.removed).map((file) => file.relPath);
   const unproven = new Map<string, string>();
+  // The folders among them that are positively the destination folder itself:
+  // nothing was copied there, and the row must not say otherwise.
+  const same = new Set<string>();
   if (ctrl.move) {
     const proven = new Set<string>();
     for (const file of files) {
@@ -855,6 +858,7 @@ async function runDir(
           ...(left === undefined ? [] : [i18n.t("sftp.moveError.probeLeft", { detail: left })]),
         ];
         if (why.length) unproven.set(rel, why.join("; "));
+        if (shared) same.add(rel);
       } catch (error) {
         unproven.set(rel, i18n.t("sftp.moveError.folderUnchecked", { detail: apiErrorMessage(error) }));
       }
@@ -872,7 +876,7 @@ async function runDir(
   // a skipped file, one that could not be removed, or one that appeared
   // meanwhile — refuses and stays, along with its parents.
   if (ctrl.move) {
-    for (const [rel, why] of unproven) ctrl.kept.push(`${await sourcePath(rel)}: ${why}`);
+    for (const [rel, why] of unproven) (same.has(rel) ? ctrl.untouched : ctrl.kept).push(`${await sourcePath(rel)}: ${why}`);
     const stuck: string[] = [];
     for (const rel of emptiedDirs(dirs, [...stayed, ...unproven.keys()])) {
       if (ctrl.abort.signal.aborted) break;

@@ -827,7 +827,7 @@ describe("moving between locations", () => {
     await startTransfer(moving("dir"), from, to, resolver);
     expect(to.createNew).not.toHaveBeenCalledWith(expect.stringMatching(/^\/dst\/file\/empty\//));
     expect(from.removeEmptyDir).not.toHaveBeenCalled();
-    expect(current()).toMatchObject({ state: "error", error: "Copied, but the source was not removed: /file/empty: the destination is the same folder" });
+    expect(current()).toMatchObject({ state: "error", error: "Not moved: /file/empty: the destination is the same folder" });
   });
 
   it("does not probe a folder again after a file moved out of it showed the two folders apart", async () => {
@@ -866,7 +866,7 @@ describe("moving between locations", () => {
     await startTransfer(moving("dir"), from, to, resolver);
     expect(from.remove).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/^\/file\/\.unissh-.*\.part$/));
     expect(from.removeEmptyDir).not.toHaveBeenCalled();
-    expect(current()).toMatchObject({ state: "error", error: "Copied, but the source was not removed: /file: the destination is the same folder" });
+    expect(current()).toMatchObject({ state: "error", error: "Not moved: /file: the destination is the same folder" });
   });
 
   it.each([
@@ -884,7 +884,7 @@ describe("moving between locations", () => {
     expect(to.createNew).toHaveBeenCalledWith(expect.stringMatching(/^\/dst\/file\/empty\/\.unissh-/));
     if (same) {
       expect(from.removeEmptyDir).not.toHaveBeenCalled();
-      expect(current()).toMatchObject({ state: "error", error: "Copied, but the source was not removed: /file/empty: the destination is the same folder (and 1 more)" });
+      expect(current()).toMatchObject({ state: "error", error: "Not moved: /file/empty: the destination is the same folder (and 1 more)" });
     } else {
       expect(vi.mocked(from.removeEmptyDir).mock.calls).toEqual([["/file/empty"], ["/file"]]);
       expect(current().state).toBe("done");

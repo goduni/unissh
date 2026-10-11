@@ -155,4 +155,9 @@ describe("a local unix path that holds a backslash", () => {
     expect(local.crumbs("/srv/a\\b")).toEqual([{ label: "/", path: "/" }, { label: "srv", path: "/srv" }, { label: "a\\b", path: "/srv/a\\b" }]);
     expect(await local.join("/srv/a\\b", "con")).toBe("/srv/a\\b/con");
   });
+
+  it("keeps the backslash in the file's name", async () => {
+    api.localStat.mockResolvedValue({ isDir: false, size: 1, mtime: 0 });
+    expect((await sourceFor({ kind: "local" }, []).stat("/srv/a\\b"))?.name).toBe("a\\b");
+  });
 });

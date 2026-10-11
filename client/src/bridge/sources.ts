@@ -173,8 +173,10 @@ function fileKind(mode?: number): Entry["fileKind"] {
   }
 }
 
-function baseName(path: string): string {
-  const parts = path.split(/[\\/]/).filter(Boolean);
+// `windows`: whether a backslash separates names here. Elsewhere it is an
+// ordinary character of a name — on a remote side and on a unix local one.
+function baseName(path: string, windows: boolean): string {
+  const parts = path.split(windows ? /[\\/]/ : "/").filter(Boolean);
   return parts.length ? parts[parts.length - 1] : path;
 }
 
@@ -303,7 +305,7 @@ class RemoteSource implements FileSource {
     try {
       const s = await this.withReopen(() => follow ? api.sftpStat(this.id, path, this.cancelId) : api.sftpLstat(this.id, path, this.cancelId));
       return {
-        name: baseName(path),
+        name: baseName(path, false),
         isDir: s.isDir,
         isSymlink: (s.mode & 0o170000) === 0o120000,
         size: s.size,
@@ -409,7 +411,7 @@ class LocalSource implements FileSource {
   }
   async stat(path: string): Promise<Entry | null> {
     const s = await api.localStat(path);
-    return s ? { name: baseName(path), isDir: s.isDir, size: s.size, mtime: s.mtime || undefined } : null;
+    return s ? { name: baseName(path, this.windows), isDir: s.isDir, size: s.size, mtime: s.mtime || undefined } : null;
   }
   async lstat(path: string): Promise<Entry | null> {
     const entry = await api.localLstat(path);
