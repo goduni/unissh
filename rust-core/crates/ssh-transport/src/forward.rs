@@ -1017,13 +1017,13 @@ otqRUgfM3Hf3sdwr66X6ltp1sQlzggaVlhH3pBsCWTPQ6nBzWEgiPA==
     /// Keeps the prompt open until the connection is abandoned, then refuses.
     #[derive(Default)]
     struct HeldOpen {
-        asked: std::sync::atomic::AtomicBool,
+        asked: AtomicBool,
         abandoned: std::sync::Mutex<bool>,
         wake: std::sync::Condvar,
     }
     impl LocalApproval for HeldOpen {
         fn approve(&self, _key: &OfferedKey, _caller: &AgentCaller, _blob: &[u8]) -> bool {
-            self.asked.store(true, std::sync::atomic::Ordering::SeqCst);
+            self.asked.store(true, Ordering::SeqCst);
             let abandoned = self.abandoned.lock().unwrap();
             // Bounded, so a regression fails the test instead of hanging it.
             // Released right away: the answer is `false` whether abandoned or timed out.
@@ -1055,7 +1055,7 @@ otqRUgfM3Hf3sdwr66X6ltp1sQlzggaVlhH3pBsCWTPQ6nBzWEgiPA==
         let served = tokio::spawn(serve(agent, server));
         let request = sign_request(&keys.keys[0].blob().unwrap(), b"to-sign");
         client.write_all(&framed(&request).unwrap()).await.unwrap();
-        while !prompt.asked.load(std::sync::atomic::Ordering::SeqCst) {
+        while !prompt.asked.load(Ordering::SeqCst) {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
 
