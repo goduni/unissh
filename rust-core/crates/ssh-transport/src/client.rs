@@ -1459,69 +1459,7 @@ async fn authenticate(
     };
     let result = timeout(deadline, async {
         let first: AuthResult = match &opts.auth {
-            Auth::Agent { key_id } => {
-                // The private key does NOT leave the agent: the agent itself signs via
-                // russh::auth::Signer. Out of the agent — only the public key /
-                // certificate (bridged into russh::keys via the stable OpenSSH format,
-                // since ssh-agent is on ssh-key 0.6 and russh is on 0.7).
-                let public_openssh = agent
-                    .public_key_openssh(key_id)
-                    .ok_or_else(|| TransportError::KeyEncoding("key not in agent".into()))?;
-                let russh_public = PublicKey::from_openssh(&public_openssh)
-                    .map_err(|e| TransportError::KeyEncoding(e.to_string()))?;
-
-                // RSA is signed with rsa-sha2-512 (as ssh-key does); everything else — without a hash.
-                let hash_alg = russh_public.algorithm().is_rsa().then_some(HashAlg::Sha512);
-
-                let mut signer = AgentSigner {
-                    agent,
-                    key_id: key_id.clone(),
-                };
-
-                // If a certificate is attached to the key — cert-based authentication
-                // (also via Signer, the key does not leave the agent).
-                match agent.certificate_openssh(key_id) {
-                    Some(cert_openssh) => {
-                        let russh_cert = russh::keys::Certificate::from_openssh(&cert_openssh)
-                            .map_err(|e| TransportError::KeyEncoding(e.to_string()))?;
-                        let with_certificate = handle
-                            .authenticate_certificate_with(
-                                opts.user.clone(),
-                                russh_cert,
-                                hash_alg,
-                                &mut signer,
-                            )
-                            .await?;
-                        // A key-only login asks whether the server takes this
-                        // key at all. A server that turns the certificate down
-                        // may still accept the plain key from authorized_keys,
-                        // so that is asked as well, and its answer is the one
-                        // reported.
-                        if offers_plain_key_too(&with_certificate, opts.publickey_only) {
-                            handle
-                                .authenticate_publickey_with(
-                                    opts.user.clone(),
-                                    russh_public,
-                                    hash_alg,
-                                    &mut signer,
-                                )
-                                .await?
-                        } else {
-                            with_certificate
-                        }
-                    }
-                    None => {
-                        handle
-                            .authenticate_publickey_with(
-                                opts.user.clone(),
-                                russh_public,
-                                hash_alg,
-                                &mut signer,
-                            )
-                            .await?
-                    }
-                }
-            }
+            Auth::Agent { key_id } => authenticate_agent_key(handle, opts, agent, key_id).await?,
             Auth::SystemAgent { public_key } => {
                 // The OS agent holds the key; we only say which one and hand it
                 // the bytes. Nothing here ever sees private material — that is
@@ -1609,6 +1547,58 @@ async fn authenticate(
             Err(auth_failure(key_only, partial_success))
         }
     }
+}
+
+/// The publickey step with a key held by the embedded agent.
+///
+/// The private key does NOT leave the agent: the agent itself signs via
+/// `russh::auth::Signer`. Out of the agent — only the public key / certificate
+/// (bridged into `russh::keys` via the stable OpenSSH format, since ssh-agent is
+/// on ssh-key 0.6 and russh is on 0.7).
+///
+/// A key with a certificate attached authenticates with the certificate (also
+/// via `Signer`). A key-only login goes on to the plain public key when the
+/// server turns the certificate down, see [`offers_plain_key_too`].
+async fn authenticate_agent_key(
+    handle: &mut Handle<ClientHandler>,
+    opts: &ConnectOptions,
+    agent: &dyn KeySource,
+    key_id: &[u8],
+) -> Result<AuthResult, TransportError> {
+    let public_openssh = agent
+        .public_key_openssh(key_id)
+        .ok_or_else(|| TransportError::KeyEncoding("key not in agent".into()))?;
+    let russh_public = PublicKey::from_openssh(&public_openssh)
+        .map_err(|e| TransportError::KeyEncoding(e.to_string()))?;
+
+    // RSA is signed with rsa-sha2-512 (as ssh-key does); everything else — without a hash.
+    let hash_alg = russh_public.algorithm().is_rsa().then_some(HashAlg::Sha512);
+
+    let mut signer = AgentSigner {
+        agent,
+        key_id: key_id.to_vec(),
+    };
+
+    let Some(cert_openssh) = agent.certificate_openssh(key_id) else {
+        return handle
+            .authenticate_publickey_with(opts.user.clone(), russh_public, hash_alg, &mut signer)
+            .await;
+    };
+    let russh_cert = russh::keys::Certificate::from_openssh(&cert_openssh)
+        .map_err(|e| TransportError::KeyEncoding(e.to_string()))?;
+    let with_certificate = handle
+        .authenticate_certificate_with(opts.user.clone(), russh_cert, hash_alg, &mut signer)
+        .await?;
+    // A key-only login asks whether the server takes this key at all. A server
+    // that turns the certificate down may still accept the plain key from
+    // authorized_keys, so that is asked as well, and its answer is the one
+    // reported.
+    if offers_plain_key_too(&with_certificate, opts.publickey_only) {
+        return handle
+            .authenticate_publickey_with(opts.user.clone(), russh_public, hash_alg, &mut signer)
+            .await;
+    }
+    Ok(with_certificate)
 }
 
 /// The error for an authentication the server did not complete.
