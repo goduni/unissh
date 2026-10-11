@@ -16,12 +16,13 @@ import { designPx, rem, ROOT_FONT_PX, rootFontPx, TEXT } from "@/theme/tokens";
 import * as api from "@/bridge/api";
 import { useApp, flushTerminalWorkspace } from "@/store/app";
 import { useCtx } from "@/store/ctx";
-import { useTranslation } from "@/i18n";
+import { toast } from "@/store/toast";
+import { i18n, useTranslation } from "@/i18n";
 import { Icon } from "@/components/primitives";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { Sidebar, TitleBar, WindowControls } from "@/shell/Shell";
 import { ResizeEdges, useWindowControls } from "@/shell/WindowChrome";
-import { isDesktopOs, osPlatform } from "@/bridge/platform";
+import { biometricMethod, isDesktopOs, osPlatform } from "@/bridge/platform";
 import { chromeBarHeight } from "@/shell/windowControls";
 import { handleAppShortcut } from "@/support/appShortcuts";
 import { createSystemLockWatcher, handleSystemLockEvent } from "@/support/systemLock";
@@ -412,6 +413,32 @@ function AppShell() {
   useEffect(() => {
     sysLockRef.current?.setGrace(osLockGrace);
   }, [osLockGrace]);
+
+  // Anything that changes this device's keyset (a password change, a recovery,
+  // a pairing, a new account) erases the password stored for biometric unlock.
+  // Two things about that no screen can learn from its own call, so Rust says
+  // them with an event each and they are heard here, once: the erase failed
+  // (whether or not the change itself went through), and a change that failed
+  // had already rewritten the keyset, so biometric unlock is off all the same.
+  useEffect(() => {
+    const disposers: (() => void)[] = [];
+    let alive = true;
+    const hear = async (event: string, key: "settings.biometricWipeFailed" | "settings.biometricTurnedOff") => {
+      try {
+        const un = await listen(event, () => toast(i18n.t(key, { method: biometricMethod() }), "warn"));
+        if (alive) disposers.push(un);
+        else un();
+      } catch {
+        /* no Tauri context */
+      }
+    };
+    void hear("biometric-wipe-failed", "settings.biometricWipeFailed");
+    void hear("biometric-turned-off", "settings.biometricTurnedOff");
+    return () => {
+      alive = false;
+      for (const dispose of disposers) dispose();
+    };
+  }, []);
 
   useEffect(() => {
     sysLockRef.current?.setUnlocked(unlocked);

@@ -175,8 +175,9 @@ impl Controller {
         match self.listen(&path).await {
             Ok((stop, task)) => {
                 // Checked again now that it is bound: a lock that landed while
-                // binding must not leave it serving. (A lock revokes before it
-                // locks the core, so either the epoch or this check sees it.)
+                // binding must not leave it serving. (A lock revokes before and
+                // after it locks the core, so either the epoch or this check
+                // sees it.)
                 if self.core_unlocked().await {
                     self.arm(epoch, &stop);
                 } else {

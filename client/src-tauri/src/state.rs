@@ -78,6 +78,10 @@ pub struct AppState {
     /// back "access token expired" rotates the token and retries itself, and the
     /// only thing that knows how to rotate is this.
     pub cloud: Arc<CloudState>,
+    /// Which biometric unlock attempt may still open the vault: a prompt
+    /// answered after the user moved on (typed the password, locked again)
+    /// must not unlock. Behind an Arc for the blocking closures that use it.
+    pub unlock_attempts: Arc<crate::biometric::UnlockAttempts>,
 }
 
 impl AppState {
@@ -99,6 +103,7 @@ impl AppState {
             exec_handles: DashMap::new(),
             cancels: DashMap::new(),
             cloud: Arc::new(CloudState::new(cloud_path)),
+            unlock_attempts: Arc::default(),
         }
     }
 

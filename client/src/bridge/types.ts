@@ -188,6 +188,9 @@ export interface VaultIntegrityReport {
  *  Mac that cannot do Touch ID or whose build may not use the protected
  *  Keychain, and on Windows without Windows Hello set up. */
 export interface BiometricStatus {
+  /** A sealed password is on disk, usable or not: there is something Settings
+   *  can forget, whatever the vault's password state is now. */
+  stored: boolean;
   supported: boolean;
   /** The sealed password is stored and its biometric-gated device secret
    *  still exists (as far as the platform says without a prompt). */
@@ -214,13 +217,11 @@ export interface BiometricStatus {
  *  The gate is stored only on "confirmed". */
 export type PresenceCheck = "confirmed" | "cancelled" | "unavailable";
 
-/** What a password change did to biometric unlock: nothing was stored, the
- *  stored password was erased, or erasing it failed (it opens nothing any
- *  more and goes at the next biometric attempt). */
-export type KeysetWipe = "nothing" | "erased" | "failed";
-
-/** How `biometric_unlock` ended. Anything but "unlocked" shows the password. */
-export type BiometricUnlockOutcome = "unlocked" | "cancelled" | "invalidated" | "noSecretKey";
+/** How `biometric_unlock` ended. "unlocked": the vault is open. "superseded":
+ *  nobody is waiting for that prompt any more (the password was chosen, a
+ *  newer prompt was asked for, the vault was locked) — the unlock screen
+ *  ignores it. Anything else shows the password. */
+export type BiometricUnlockOutcome = "unlocked" | "cancelled" | "invalidated" | "noSecretKey" | "superseded";
 
 export type DbConsistencyKind =
   | "orphanItem"

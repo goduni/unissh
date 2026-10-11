@@ -110,6 +110,67 @@ fn lock_flushes_partial_capture_and_late_handle_cannot_write_after_unlock() {
         .is_err());
 }
 
+// A second unlock (a biometric prompt answered after the password was typed)
+// must not replace the open session: what is running in it keeps running.
+#[test]
+fn unlock_while_unlocked_keeps_the_open_session() {
+    let (_dir, core, kit) = setup();
+    let target = core.automation_target("v".into(), "h".into()).unwrap();
+    let rec = core
+        .automation_recording(&target, "kept", "Agent", "sleep 30", None)
+        .unwrap()
+        .unwrap();
+    rec.data(false, b"before the second unlock");
+    core.unlock(None, kit).unwrap();
+    assert_eq!(rec.status(), "recording");
+    // Still a credential check, not a free pass.
+    assert!(core.unlock(None, "00".repeat(32)).is_err());
+    rec.exited(Some(0));
+    rec.finish("completed");
+    assert_eq!(cast(&core, "kept")["unissh_mcp"]["outcome"], "completed");
+}
+
+// A lock that lands after an unlock began wins, however long the unlock takes
+// to derive its keys: nothing is installed. Also when the instance was locked
+// all along (the unlock screen is up and the OS locks the screen).
+#[test]
+fn lock_since_the_unlock_began_wins() {
+    let (_dir, core, kit) = setup();
+    core.lock();
+    let began = core.lock_epoch();
+    core.lock();
+    let overtaken = core.unlock_unless_locked_since(began, None, kit.clone());
+    assert!(matches!(overtaken, Err(unissh_ffi::FfiError::Locked)));
+    assert!(!core.is_unlocked());
+    // The next attempt, begun after that lock, is not held to it.
+    core.unlock(None, kit).unwrap();
+    assert!(core.is_unlocked());
+}
+
+// Removing the instance's files leaves nothing behind, also with an unlock on
+// its way: the unlock waits for the removal, then finds no keyset record and
+// fails before it could create an empty database in place of the removed one.
+#[test]
+fn unlock_racing_a_reset_leaves_no_database_behind() {
+    let (dir, core, kit) = setup();
+    core.lock();
+    let (db, keyset) = (dir.path().join("db"), dir.path().join("keyset"));
+    let racing = core.while_no_unlock_runs(|| {
+        let racing = std::thread::spawn({
+            let core = core.clone();
+            move || core.unlock(None, kit)
+        });
+        // Ample time for an unlock that did not wait to read the keyset record.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        std::fs::remove_file(&db).unwrap();
+        std::fs::remove_file(&keyset).unwrap();
+        racing
+    });
+    assert!(racing.join().unwrap().is_err());
+    assert!(!core.is_unlocked());
+    assert!(!db.exists() && !keyset.exists());
+}
+
 #[test]
 fn preference_limits_and_failure_outcomes() {
     let (_dir, core, _) = setup();

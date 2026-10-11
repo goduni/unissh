@@ -10,7 +10,11 @@ import { MONO, rem, rgba, TEXT, UI } from "@/theme/tokens";
 import { Btn, Checkbox, Field, Icon, Input, Logo, NO_AUTOCORRECT, Spinner, Toggle } from "@/components/primitives";
 import { useApp } from "@/store/app";
 import { recoverInstance } from "@/store/recovery";
-import { biometricUnlockReducer, initialBiometricUnlock } from "@/store/biometricUnlock";
+import {
+  BIOMETRIC_CHECK_GRACE_MS,
+  biometricUnlockReducer,
+  initialBiometricUnlock,
+} from "@/store/biometricUnlock";
 import { biometricMethod, isDesktopOs, isWindows, presenceGateApplies } from "@/bridge/platform";
 import { WindowControls } from "@/shell/Shell";
 import { useWindowControls } from "@/shell/WindowChrome";
@@ -735,6 +739,19 @@ function Unlock() {
   // A prompt skipped from the view may still unlock later, beside a manual
   // unlock: the steps after unlocking run once.
   const finished = useRef(false);
+  // The attempt on screen, as Rust numbered it (`biometric_begin`): asked for
+  // before the prompt, handed to the prompt, and to the cancel if the user
+  // gives up on it. Rust does not run the three in the order they were asked
+  // for, and with the number it need not: a cancel that gets there before the
+  // prompt leaves that prompt unshown.
+  const attempt = useRef<Promise<number> | null>(null);
+  // Rust ending the prompt that was given up on ("use the password instead").
+  // The next attempt begins only once that has answered, so the attempts are
+  // begun and ended strictly in turn.
+  const ending = useRef<Promise<void>>(Promise.resolve());
+  // Under the presence gate: whether this device remembers the Secret Key, as
+  // Rust answered — or will, if the answer is still on its way after the grace.
+  const gateRemembers = useRef<Promise<boolean>>(Promise.resolve(false));
 
   // prefill the Secret Key from the OS keychain if it was saved on this device
   // (cached read — at most one keychain access per process)
@@ -750,13 +767,24 @@ function Unlock() {
       .catch(() => {});
   }, [gateMode]);
 
+  // The answer below never holds the password path back for long: past the
+  // grace the fields are there, and a later answer only offers the prompt.
+  useEffect(() => {
+    const timer = setTimeout(() => dispatchBio({ type: "timeout" }), BIOMETRIC_CHECK_GRACE_MS);
+    return () => clearTimeout(timer);
+  }, []);
+
   // Is biometric unlock enabled here? Only a password vault has anything stored
   // behind it; anywhere without an adapter the answer is simply "no".
   useEffect(() => {
     const none = { type: "status", enabled: false, secretKeyRemembered: false } as const;
     if (gateMode) {
-      api
-        .biometricStatus(true)
+      const status = api.biometricStatus(true);
+      gateRemembers.current = status.then(
+        (s) => s.secretKeyRemembered,
+        () => false,
+      );
+      status
         .then((s) =>
           dispatchBio({
             type: "gate",
@@ -772,8 +800,9 @@ function Unlock() {
       dispatchBio(none);
       return;
     }
-    // Without stored material Rust does not touch the keychain for this, so a
-    // device without biometric unlock shows the password field at once.
+    // Without stored material Rust touches neither the platform's biometric
+    // store nor the keychain for this, so a device without biometric unlock
+    // shows the password field at once.
     api
       .biometricStatus(false)
       .then((s) => dispatchBio({ type: "status", enabled: s.enabled, secretKeyRemembered: s.secretKeyRemembered }))
@@ -796,14 +825,19 @@ function Unlock() {
       if (prompted.current) return;
       prompted.current = true;
       waitForReturn.current = false;
+      const gate = bio.gate;
       // The presence gate's Windows prompt shows the reason on its own, as a
-      // sentence; Touch ID puts it after "UniSSH is trying to".
-      const prompt = bio.gate
-        ? api.biometricPresenceUnlock(
-            t(isWindows() ? "onboarding.presenceReasonWindows" : "onboarding.biometricReason"),
-          )
-        : api.biometricUnlock(t("onboarding.biometricReason"));
-      prompt
+      // sentence; Touch ID puts it after "UniSSH is trying to". Never blank
+      // (Touch ID refuses an empty reason): an empty translation falls back
+      // to the English one.
+      const key = gate && isWindows() ? "onboarding.presenceReasonWindows" : "onboarding.biometricReason";
+      const reason = t(key).trim() || t(key, { lng: "en" });
+      // After Rust has ended the prompt given up on, if there was one: which
+      // prompt a result belongs to is Rust's to say (see biometricUnlock.ts).
+      const begun = ending.current.then(() => api.biometricBegin());
+      attempt.current = begun;
+      begun
+        .then((id) => (gate ? api.biometricPresenceUnlock(id, reason) : api.biometricUnlock(id, reason)))
         .then((outcome) => {
           dispatchBio({ type: "outcome", outcome });
           if (outcome === "unlocked") {
@@ -839,6 +873,22 @@ function Unlock() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one prompt per phase entry
   }, [bio.phase]);
 
+  // "Use the password instead": back to the fields at once, and the attempt
+  // is ended in Rust too — the prompt is taken down where the platform can,
+  // and whatever it answers later is discarded there, so it cannot unlock a
+  // vault the user has since opened and locked again by hand.
+  const skipPrompt = () => {
+    dispatchBio({ type: "skip" });
+    // Only what was begun can be ended; a prompt still waiting for a sign of
+    // the user (see above) has not been asked for at all.
+    const begun = attempt.current;
+    attempt.current = null;
+    if (!begun) return;
+    ending.current = begun
+      .then((id) => api.biometricCancel(id))
+      .catch((e) => logWarn(`biometric cancel failed: ${apiErrorMessage(e)}`));
+  };
+
   // Everything after the core said yes, whichever way it was asked.
   const afterUnlock = async () => {
     if (finished.current) return;
@@ -864,9 +914,15 @@ function Unlock() {
       // write (and its prompt) on every unlock. Under the presence gate the
       // field is never prefilled, yet the key is already remembered (that is
       // what the gate guards): no rewrite there either — unless the remembered
-      // one is gone or no longer opens this vault.
-      const remembered = bio.gate && bio.notice !== "noSecretKey";
-      if (!fromKeychain && !remembered) rememberSecretKey(cleanKey);
+      // one is gone or no longer opens this vault. Whether it is remembered
+      // is Rust's own answer, not the screen's state: after the grace that
+      // answer may still be on its way, and the unlock does not wait for it.
+      if (!fromKeychain) {
+        const stale = bio.notice === "noSecretKey";
+        void (gateMode ? gateRemembers.current : Promise.resolve(false)).then((remembered) => {
+          if (!remembered || stale) rememberSecretKey(cleanKey);
+        });
+      }
       await afterUnlock();
     } catch (e) {
       logWarn(`unlock failed: ${apiErrorMessage(e)}`);
@@ -956,7 +1012,7 @@ function Unlock() {
         {bio.phase === "prompting" && (
           // The way out of a prompt that never answers (a dialog behind the
           // window, a hung check): the manual unlock, at once.
-          <Btn type="button" variant="ghost" full onClick={() => dispatchBio({ type: "skip" })}>
+          <Btn type="button" variant="ghost" full onClick={skipPrompt}>
             {t(bio.gate ? "onboarding.presenceSkip" : "onboarding.biometricSkip")}
           </Btn>
         )}
@@ -983,7 +1039,8 @@ function Unlock() {
           </div>
         )}
         {/* Hidden while the biometric status is pending as well, so an enabled
-            Touch ID does not flash the password field before the prompt. */}
+            Touch ID does not flash the password field before the prompt — for
+            BIOMETRIC_CHECK_GRACE_MS at most; "checking" ends by itself. */}
         {requiresPassword !== false && bio.phase !== "prompting" && bio.phase !== "checking" && (
           <Field label={t("onboarding.masterPassword")} labelGap={7}>
             <Input
