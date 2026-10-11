@@ -352,7 +352,7 @@ impl Core {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::load_key_into_agent;
+    use crate::{evict_replaced_agent_keys, load_key_into_agent};
 
     /// An unlocked core with vault `v` holding the SSH key `key`.
     fn fixture(dir: &std::path::Path) -> std::sync::Arc<Core> {
@@ -408,6 +408,37 @@ mod tests {
 
         assert_ne!(pulled, before);
         assert_eq!(connect_key(), pulled);
+    }
+
+    #[test]
+    fn a_pull_unloads_only_the_keys_whose_item_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = fixture(dir.path());
+        core.generate_ssh_key("v".to_owned(), "other".to_owned())
+            .unwrap();
+        core.with_state_mut(|state| {
+            load_key_into_agent(state, "v", "key")?;
+            load_key_into_agent(state, "v", "other")
+        })
+        .unwrap();
+
+        // A rotation finished on another device arrives: new material, same id.
+        behind_the_facade(&core, |vault| {
+            let (private, _) = unissh_ssh_agent::generate_ed25519_openssh().unwrap();
+            vault
+                .put_item(b"key", ITEM_TYPE_SSH_KEY, private.as_bytes())
+                .unwrap();
+        });
+        let loaded = core
+            .with_state_mut(|state| {
+                evict_replaced_agent_keys(state);
+                Ok(["key", "other"].map(|id| state.agent.contains(&agent_key_id("v", id))))
+            })
+            .unwrap();
+
+        // The retired key can no longer sign for a live forwarded agent; the
+        // untouched one still serves the sessions that forward it.
+        assert_eq!(loaded, [false, true]);
     }
 
     #[test]

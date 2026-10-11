@@ -99,7 +99,7 @@ fn write_entries(state: &CoreState, entries: &[Entry]) -> Result<(), FfiError> {
 /// once loaded, and a key replaced by a sync pull would still answer from that
 /// cache. A cached copy that no longer matches the item is evicted here, so
 /// nothing later signs with the old key either.
-fn current_public(
+pub(crate) fn current_public(
     vault: &Vault,
     agent: &mut InMemoryAgent,
     vault_id: &str,
