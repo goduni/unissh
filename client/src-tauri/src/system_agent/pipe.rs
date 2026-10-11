@@ -167,8 +167,10 @@ fn current_user_sid() -> io::Result<String> {
 /// later instance joins the pipe it already owns). Must run inside the tokio
 /// runtime: the instance is registered with its reactor here.
 pub fn create(name: &OsStr, security: &Security, first: bool) -> io::Result<NamedPipeServer> {
+    let length =
+        u32::try_from(std::mem::size_of::<SECURITY_ATTRIBUTES>()).map_err(io::Error::other)?;
     let mut attributes = SECURITY_ATTRIBUTES {
-        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        nLength: length,
         lpSecurityDescriptor: security.descriptor,
         bInheritHandle: 0,
     };
@@ -186,8 +188,12 @@ pub fn create(name: &OsStr, security: &Security, first: bool) -> io::Result<Name
 /// With `FILE_FLAG_FIRST_PIPE_INSTANCE` an existing pipe gives access denied;
 /// one at its instance limit gives pipe busy.
 pub fn in_use(error: &io::Error) -> bool {
-    matches!(error.raw_os_error(), Some(code)
-        if code as u32 == ERROR_ACCESS_DENIED || code as u32 == ERROR_PIPE_BUSY)
+    // Win32 error codes are unsigned and `raw_os_error` hands them back as
+    // `i32`; one that does not convert is not one of these two.
+    error
+        .raw_os_error()
+        .and_then(|code| u32::try_from(code).ok())
+        .is_some_and(|code| code == ERROR_ACCESS_DENIED || code == ERROR_PIPE_BUSY)
 }
 
 /// Whether a failed creation of a further instance leaves the listener usable:
@@ -237,13 +243,13 @@ fn executable(pid: u32) -> Option<String> {
         }
         let process = Owned(process);
         let mut buf = vec![0u16; 32_768];
-        let mut len = buf.len() as u32;
+        let mut len = u32::try_from(buf.len()).ok()?;
         if QueryFullProcessImageNameW(process.0, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len)
             == 0
         {
             return None;
         }
-        buf.truncate(len as usize);
+        buf.truncate(usize::try_from(len).ok()?);
         Some(String::from_utf16_lossy(&buf))
     }
 }
