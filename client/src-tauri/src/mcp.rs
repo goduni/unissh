@@ -224,6 +224,15 @@ pub fn resume_access(app: &tauri::AppHandle) {
         let controller = controller.inner().clone();
         let epoch = controller.broker.lifecycle_epoch();
         tauri::async_runtime::spawn(async move {
+            // Only over an open vault: this is also called on a screen unlock
+            // and a wake, where the vault may well still be locked.
+            let core = controller.core.clone();
+            let unlocked = tauri::async_runtime::spawn_blocking(move || core.is_unlocked())
+                .await
+                .unwrap_or(false);
+            if !unlocked {
+                return;
+            }
             let running = controller.running.lock().await;
             if running
                 .as_ref()

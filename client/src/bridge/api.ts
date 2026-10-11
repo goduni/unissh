@@ -9,7 +9,6 @@ import type {
   AuthMethod,
   BiometricStatus,
   BiometricUnlockOutcome,
-  KeysetWipe,
   PresenceCheck,
   BroadcastEvent,
   ConnectionProfile,
@@ -109,11 +108,15 @@ export const unlock = (password: string | null, secretKeyHex: string) =>
   invoke<void>("unlock", { password, secretKeyHex });
 export const lock = () => invoke<void>("lock");
 export const isUnlocked = () => invoke<boolean>("is_unlocked");
+/** Resolves to whether biometric unlock was on and has been turned off by the
+ *  change (its stored password belonged to the old one). What this cannot say
+ *  — the stored password could not be erased, or a change that failed had
+ *  already turned it off — arrives as an event instead (see App.tsx). */
 export const changePassword = (
   oldPassword: string | null,
   newPassword: string | null,
   secretKeyHex: string,
-) => invoke<KeysetWipe>("change_password", { oldPassword, newPassword, secretKeyHex });
+) => invoke<boolean>("change_password", { oldPassword, newPassword, secretKeyHex });
 export const accountId = () => invoke<string>("account_id");
 
 // ── vaults ─────────────────────────────────────────────────────
@@ -789,7 +792,8 @@ export const biometricDisable = () => invoke<void>("biometric_disable");
 export const biometricUnlock = (reason: string) =>
   invoke<BiometricUnlockOutcome>("biometric_unlock", { reason });
 /** End the biometric attempt whose prompt is up ("use the password instead"):
- *  its result is dropped in Rust and the prompt is closed where the OS can. */
+ *  its result is discarded in Rust and the prompt is closed where the OS can.
+ *  It names no attempt, so a new prompt is asked for only after it resolved. */
 export const biometricCancel = () => invoke<void>("biometric_cancel");
 /** The Secret-Key-only startup gate: the presence prompt, then the remembered-
  *  key unlock, both in Rust. Nothing is stored behind the prompt. */

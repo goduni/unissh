@@ -72,6 +72,7 @@ import {
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { writeSecretToClipboard } from "@/bridge/clipboard";
+import { logWarn } from "@/bridge/log";
 import { readSecretKeyOnce } from "@/bridge/secretKey";
 import { getVersion } from "@tauri-apps/api/app";
 import { arch, platform, version as osVersion } from "@tauri-apps/plugin-os";
@@ -1190,7 +1191,7 @@ function ChangePasswordForm({
     if (busy) return;
     setBusy(true);
     try {
-      const wipe = await api.changePassword(
+      const biometricWiped = await api.changePassword(
         oldPw ? oldPw : null,
         newPw ? newPw : null,
         secretKey.replace(/[\s-]/g, ""),
@@ -1201,10 +1202,19 @@ function ChangePasswordForm({
       toast(t("settings.masterPwChanged"), "ok");
       // A wipe that failed is announced by the app itself (App.tsx hears
       // `biometric-wipe-failed`), the same for every way a keyset changes.
-      onChanged(wipe === "erased");
+      onChanged(biometricWiped);
       onClose();
     } catch (e) {
       toast(apiErrorMessage(e), "err");
+      // A change can fail after the keyset was already rewritten: whether the
+      // vault takes a password is then read back from the keyset rather than
+      // assumed. (If that also turned biometric unlock off, the app says so:
+      // App.tsx hears `biometric-turned-off`.)
+      try {
+        useApp.setState({ requiresPassword: (await api.instanceStatus()).requiresPassword });
+      } catch (statusError) {
+        logWarn(`re-reading the instance status failed: ${apiErrorMessage(statusError)}`);
+      }
       // The biometric rows re-read what is stored now.
       onChanged(false);
       setBusy(false);
@@ -1485,9 +1495,9 @@ function PresenceGateRow() {
   const turnOn = async () => {
     setBusy(true);
     try {
-      const check = await api.biometricConfirmPresence(
-        t(isWindows() ? "settings.presenceGateReasonWindows" : "settings.presenceGateReason"),
-      );
+      // Never blank (Touch ID refuses an empty reason): English if the translation is.
+      const key = isWindows() ? "settings.presenceGateReasonWindows" : "settings.presenceGateReason";
+      const check = await api.biometricConfirmPresence(t(key).trim() || t(key, { lng: "en" }));
       if (check === "confirmed") setOn(true);
       else
         toast(

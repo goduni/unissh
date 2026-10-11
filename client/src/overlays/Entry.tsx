@@ -739,6 +739,14 @@ function Unlock() {
   // A prompt skipped from the view may still unlock later, beside a manual
   // unlock: the steps after unlocking run once.
   const finished = useRef(false);
+  // Rust ending the prompt that was given up on ("use the password instead").
+  // That call names no attempt — it ends whichever is current — so the next
+  // prompt is asked for only once it has answered: it can then never end the
+  // prompt that replaced the one it was meant for.
+  const ending = useRef<Promise<void>>(Promise.resolve());
+  // Under the presence gate: whether this device remembers the Secret Key, as
+  // Rust answered — or will, if the answer is still on its way after the grace.
+  const gateRemembers = useRef<Promise<boolean>>(Promise.resolve(false));
 
   // prefill the Secret Key from the OS keychain if it was saved on this device
   // (cached read — at most one keychain access per process)
@@ -766,8 +774,12 @@ function Unlock() {
   useEffect(() => {
     const none = { type: "status", enabled: false, secretKeyRemembered: false } as const;
     if (gateMode) {
-      api
-        .biometricStatus(true)
+      const status = api.biometricStatus(true);
+      gateRemembers.current = status.then(
+        (s) => s.secretKeyRemembered,
+        () => false,
+      );
+      status
         .then((s) =>
           dispatchBio({
             type: "gate",
@@ -808,19 +820,19 @@ function Unlock() {
       if (prompted.current) return;
       prompted.current = true;
       waitForReturn.current = false;
-      // Results name the prompt they belong to: one that was given up on must
-      // not, when it finally answers, end the prompt that replaced it.
-      const attempt = bio.attempt;
+      const gate = bio.gate;
       // The presence gate's Windows prompt shows the reason on its own, as a
-      // sentence; Touch ID puts it after "UniSSH is trying to".
-      const prompt = bio.gate
-        ? api.biometricPresenceUnlock(
-            t(isWindows() ? "onboarding.presenceReasonWindows" : "onboarding.biometricReason"),
-          )
-        : api.biometricUnlock(t("onboarding.biometricReason"));
-      prompt
+      // sentence; Touch ID puts it after "UniSSH is trying to". Never blank
+      // (Touch ID refuses an empty reason): an empty translation falls back
+      // to the English one.
+      const key = gate && isWindows() ? "onboarding.presenceReasonWindows" : "onboarding.biometricReason";
+      const reason = t(key).trim() || t(key, { lng: "en" });
+      // After Rust has ended the prompt given up on, if there was one: which
+      // prompt a result belongs to is Rust's to say (see biometricUnlock.ts).
+      ending.current
+        .then(() => (gate ? api.biometricPresenceUnlock(reason) : api.biometricUnlock(reason)))
         .then((outcome) => {
-          dispatchBio({ type: "outcome", outcome, attempt });
+          dispatchBio({ type: "outcome", outcome });
           if (outcome === "unlocked") {
             afterUnlock().catch((e) => {
               logWarn(`post-unlock steps failed: ${apiErrorMessage(e)}`);
@@ -830,7 +842,7 @@ function Unlock() {
         })
         .catch((e) => {
           logWarn(`biometric unlock failed: ${apiErrorMessage(e)}`);
-          dispatchBio({ type: "error", attempt });
+          dispatchBio({ type: "error" });
         });
     };
     const osLock = waitForReturn.current;
@@ -856,11 +868,11 @@ function Unlock() {
 
   // "Use the password instead": back to the fields at once, and the attempt
   // is ended in Rust too — the prompt is taken down where the platform can,
-  // and whatever it answers later is dropped there, so it cannot unlock a
+  // and whatever it answers later is discarded there, so it cannot unlock a
   // vault the user has since opened and locked again by hand.
   const skipPrompt = () => {
     dispatchBio({ type: "skip" });
-    api.biometricCancel().catch((e) => logWarn(`biometric cancel failed: ${apiErrorMessage(e)}`));
+    ending.current = api.biometricCancel().catch((e) => logWarn(`biometric cancel failed: ${apiErrorMessage(e)}`));
   };
 
   // Everything after the core said yes, whichever way it was asked.
@@ -888,9 +900,15 @@ function Unlock() {
       // write (and its prompt) on every unlock. Under the presence gate the
       // field is never prefilled, yet the key is already remembered (that is
       // what the gate guards): no rewrite there either — unless the remembered
-      // one is gone or no longer opens this vault.
-      const remembered = bio.gate && bio.notice !== "noSecretKey";
-      if (!fromKeychain && !remembered) rememberSecretKey(cleanKey);
+      // one is gone or no longer opens this vault. Whether it is remembered
+      // is Rust's own answer, not the screen's state: after the grace that
+      // answer may still be on its way, and the unlock does not wait for it.
+      if (!fromKeychain) {
+        const stale = bio.notice === "noSecretKey";
+        void (gateMode ? gateRemembers.current : Promise.resolve(false)).then((remembered) => {
+          if (!remembered || stale) rememberSecretKey(cleanKey);
+        });
+      }
       await afterUnlock();
     } catch (e) {
       logWarn(`unlock failed: ${apiErrorMessage(e)}`);

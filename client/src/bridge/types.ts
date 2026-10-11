@@ -217,16 +217,11 @@ export interface BiometricStatus {
  *  The gate is stored only on "confirmed". */
 export type PresenceCheck = "confirmed" | "cancelled" | "unavailable";
 
-/** What a password change did to biometric unlock: nothing was stored, the
- *  stored password was erased, or erasing it failed. A failed wipe is not
- *  announced through this value: Rust emits `biometric-wipe-failed` for every
- *  keyset install alike, and the app shows it (see App.tsx). */
-export type KeysetWipe = "nothing" | "erased" | "failed";
-
-/** How `biometric_unlock` ended. Anything but "unlocked" shows the password.
- *  "cancelled" is also what an attempt that was superseded (the password was
- *  chosen, the vault was locked, a newer prompt was asked for) reports. */
-export type BiometricUnlockOutcome = "unlocked" | "cancelled" | "invalidated" | "noSecretKey";
+/** How `biometric_unlock` ended. "unlocked": the vault is open. "superseded":
+ *  nobody is waiting for that prompt any more (the password was chosen, a
+ *  newer prompt was asked for, the vault was locked) — the unlock screen
+ *  ignores it. Anything else shows the password. */
+export type BiometricUnlockOutcome = "unlocked" | "cancelled" | "invalidated" | "noSecretKey" | "superseded";
 
 export type DbConsistencyKind =
   | "orphanItem"

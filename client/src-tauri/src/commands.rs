@@ -196,10 +196,25 @@ fn remove_if_present(path: &std::path::Path) {
 #[tauri::command]
 pub async fn reset_instance(app: tauri::AppHandle, state: State<'_, AppState>) -> ApiResult<()> {
     revoke_agent_access(&app);
-    // Never wipe an instance the caller can actually open. Check synchronously
-    // (no `.await` before it) so there is no unlocked->reset race window.
     let core = state.core.clone();
-    if blocking_ok(move || core.is_unlocked()).await? {
+    let attempts = state.unlock_attempts.clone();
+    let unlocked = blocking_ok(move || {
+        // First of all, before anything is deleted: a biometric prompt still up
+        // belongs to the instance that is about to go, and its answer must not
+        // open it.
+        attempts.supersede();
+        // Never wipe an instance the caller can actually open.
+        if core.is_unlocked() {
+            return true;
+        }
+        // Locked, and it stays so: counted as a lock, so that an unlock already
+        // deriving its keys (biometric or typed) installs nothing over the
+        // files removed below.
+        core.lock();
+        false
+    })
+    .await?;
+    if unlocked {
         return Err(ApiError::other(
             "refusing to reset an unlocked instance — lock it first",
         ));
@@ -210,9 +225,6 @@ pub async fn reset_instance(app: tauri::AppHandle, state: State<'_, AppState>) -
     let mut bak = state.keyset_path.clone().into_os_string();
     bak.push(".pre-migration.bak");
     remove_if_present(&std::path::PathBuf::from(bak));
-    // A biometric prompt still up belongs to the instance that is now gone.
-    let attempts = state.unlock_attempts.clone();
-    blocking_ok(move || attempts.supersede()).await?;
     // Forget cloud links + the stale keychain Secret Key so re-onboarding is clean.
     // `clear_all` wipes every registry even when a lock is poisoned; any error it
     // reports is returned after the remaining best-effort steps have run, so one
@@ -374,6 +386,8 @@ pub async fn unlock(
         // The user took the typed path: a biometric prompt still up is over,
         // whatever it answers later and whether or not this unlock succeeds.
         attempts.supersede();
+        // `Ok` only with the vault open: a lock that landed while the keys were
+        // being derived wins in the core, and this fails as `Locked`.
         core.unlock(password, secret_key_hex)
     })
     .await?;
@@ -392,8 +406,10 @@ pub async fn lock(app: tauri::AppHandle, state: State<'_, AppState>) -> ApiResul
     state.exec_handles.clear();
     let core = state.core.clone();
     let attempts = state.unlock_attempts.clone();
-    // A biometric prompt answered after this lock must not undo it, and one
-    // already deriving keys is waited out and then locked (see `UnlockAttempts`).
+    // A biometric prompt answered after this lock must not undo it: its attempt
+    // is ended, the core is locked, and only then is the prompt taken down. An
+    // unlock of any kind that is already deriving keys is refused by the core
+    // (see `Core::unlock`).
     let result = blocking_ok(move || attempts.locking(|| core.lock())).await;
     invalidate_sftp(&state);
     result
@@ -509,10 +525,12 @@ pub async fn set_algorithm_policy(modern: bool, state: State<'_, AppState>) -> A
 
 /// Change, add or remove the master password. The biometric unlock material
 /// sealed for the old password is wiped — also when the change fails after the
-/// keyset was already rewritten. The answer says whether there was any and
-/// whether the wipe worked, so Settings can ask for it to be turned on again
-/// (with the new password, in this session); a wipe that failed is reported to
-/// the window by `installing_keyset`, like for every other keyset install.
+/// keyset was already rewritten. The answer is whether biometric unlock was
+/// turned off by it, so Settings can ask for it to be turned on again (with
+/// the new password, in this session). What the answer cannot carry — a wipe
+/// that failed, or one done by a change that itself failed — reaches the
+/// window as an event from `installing_keyset`, like for every other keyset
+/// install.
 #[tauri::command]
 pub async fn change_password(
     app: tauri::AppHandle,
@@ -520,7 +538,7 @@ pub async fn change_password(
     new_password: Option<String>,
     secret_key_hex: String,
     state: State<'_, AppState>,
-) -> ApiResult<crate::biometric::KeysetWipe> {
+) -> ApiResult<bool> {
     let core = state.core.clone();
     let ((), wipe) = blocking_api(crate::biometric::installing_keyset(
         &app,
@@ -528,7 +546,7 @@ pub async fn change_password(
         move || Ok(core.change_password(old_password, new_password, secret_key_hex)?),
     ))
     .await?;
-    Ok(wipe)
+    Ok(wipe == crate::biometric::KeysetWipe::Erased)
 }
 
 // ---------- vaults ----------

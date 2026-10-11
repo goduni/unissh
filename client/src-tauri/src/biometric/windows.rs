@@ -49,10 +49,13 @@
 //! `UserConsentVerifier.RequestVerificationAsync` documents what a cancel does
 //! to the dialog, and there is no call that closes it. So the request is made,
 //! and nothing depends on it being honoured: if the dialog stays up and is
-//! answered later, the shared code drops that answer unread (see "One attempt,
-//! one result" in `biometric.rs`) — a late Hello can never unlock. Creating
-//! the credential (turning the feature on) is not cancellable and needs not
-//! be: it unlocks nothing.
+//! answered later, the shared code discards that answer — the signature it
+//! released is zeroized unused (see "One attempt, one result" in
+//! `biometric.rs`) — so a late Hello can never unlock. What a dialog left up
+//! can do is get in the way: it may sit in front of the next Hello dialog, or
+//! Windows may refuse to show a second one until the first is dismissed.
+//! Creating the credential (turning the feature on) is not cancellable and
+//! needs not be: it unlocks nothing.
 //!
 //! None of this is unit-testable — every path ends in a Hello prompt or a
 //! Credential Manager the test runner does not have. It is checked by hand on

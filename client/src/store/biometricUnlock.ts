@@ -38,11 +38,15 @@
 // back at once, and the screen tells Rust to end that attempt, so whatever
 // the prompt answers later is dropped there and cannot unlock.
 //
-// Every entry into "prompting" is a new attempt, numbered. A result names the
-// attempt it belongs to, and one from an earlier attempt is ignored: a prompt
-// given up on must not, when it finally reports "cancelled", knock the next
-// one off the screen. The one exception is "unlocked": the vault is open,
-// whoever opened it, and the screen follows.
+// Which prompt a result belongs to is Rust's to know, and it is the only one
+// that counts them: an attempt that was ended — by "skip", by a newer prompt,
+// by a typed unlock, by a lock — reports "superseded" whatever its prompt
+// answered, and that is ignored here in every phase. So a prompt given up on
+// cannot, when it finally answers, knock the next one off the screen, and
+// there is no second count of attempts on this side to drift from Rust's.
+// (The screen asks for a new prompt only after Rust has ended the old one:
+// see Entry.tsx.) "unlocked" is never stale: Rust says it only when the vault
+// is open, and the screen follows, whichever phase it is in.
 //
 // Kept free of React and of the bridge so that the transitions are tested as
 // data (biometricUnlock.test.ts) and the component only performs effects.
@@ -69,8 +73,6 @@ export interface BiometricUnlockState {
   notice: BiometricNotice;
   /** The prompt is the Secret-Key-only presence gate, not biometric unlock. */
   gate: boolean;
-  /** Which prompt this is: counts the entries into "prompting". */
-  attempt: number;
 }
 
 export type BiometricUnlockEvent =
@@ -81,10 +83,10 @@ export type BiometricUnlockEvent =
   | { type: "gate"; on: boolean; secretKeyRemembered: boolean; presenceSupported: boolean }
   /** The status did not arrive within the grace. */
   | { type: "timeout" }
-  /** How prompt `attempt` ended, as reported by `biometric_unlock`. */
-  | { type: "outcome"; outcome: BiometricUnlockOutcome; attempt: number }
-  /** Prompt `attempt` could not run at all (a platform or unlock error). */
-  | { type: "error"; attempt: number }
+  /** How a prompt ended, as reported by `biometric_unlock`. */
+  | { type: "outcome"; outcome: BiometricUnlockOutcome }
+  /** The prompt could not run at all (a platform or unlock error). */
+  | { type: "error" }
   /** "Unlock with Touch ID" pressed on the password view. */
   | { type: "retry" }
   /** "Use password" pressed while the prompt is up. */
@@ -95,13 +97,14 @@ export const initialBiometricUnlock: BiometricUnlockState = {
   available: false,
   notice: null,
   gate: false,
-  attempt: 0,
 };
 
-type Outcome = Omit<BiometricUnlockState, "gate" | "attempt">;
+type Outcome = Omit<BiometricUnlockState, "gate">;
+/** An outcome of the prompt on screen ("superseded" is about one that is not). */
+type Ended = Exclude<BiometricUnlockOutcome, "superseded">;
 
 /** Where each prompt outcome leads, for biometric unlock. */
-const AFTER_PROMPT: Record<BiometricUnlockOutcome, Outcome> = {
+const AFTER_PROMPT: Record<Ended, Outcome> = {
   unlocked: { phase: "done", available: true, notice: null },
   cancelled: { phase: "password", available: true, notice: null },
   invalidated: { phase: "password", available: false, notice: "invalidated" },
@@ -111,87 +114,76 @@ const AFTER_PROMPT: Record<BiometricUnlockOutcome, Outcome> = {
 /** The same for the presence gate. Nothing is stored behind it, so nothing can
  *  be invalidated; a key that vanished — or no longer opens this vault — leaves
  *  only the manual unlock, and the view says so. */
-const AFTER_GATE: Record<BiometricUnlockOutcome, Outcome> = {
+const AFTER_GATE: Record<Ended, Outcome> = {
   unlocked: { phase: "done", available: true, notice: null },
   cancelled: { phase: "password", available: true, notice: "gated" },
   invalidated: { phase: "password", available: false, notice: null },
   noSecretKey: { phase: "password", available: false, notice: "noSecretKey" },
 };
 
-const after = (state: BiometricUnlockState, gate: boolean, outcome: BiometricUnlockOutcome): BiometricUnlockState => ({
+const after = (gate: boolean, outcome: Ended): BiometricUnlockState => ({
   ...(gate ? AFTER_GATE : AFTER_PROMPT)[outcome],
   gate,
-  attempt: state.attempt,
 });
 
-const manual = (
-  state: BiometricUnlockState,
-  to: Pick<BiometricUnlockState, "available" | "notice" | "gate">,
-): BiometricUnlockState => ({ phase: "password", ...to, attempt: state.attempt });
-
-/** A new prompt: the next attempt. */
-const prompt = (state: BiometricUnlockState, gate: boolean): BiometricUnlockState => ({
-  phase: "prompting",
-  available: true,
-  notice: null,
-  gate,
-  attempt: state.attempt + 1,
+const manual = (to: Pick<BiometricUnlockState, "available" | "notice" | "gate">): BiometricUnlockState => ({
+  phase: "password",
+  ...to,
 });
+
+/** A new prompt. */
+const prompt = (gate: boolean): BiometricUnlockState => ({ phase: "prompting", available: true, notice: null, gate });
 
 /** What the answer to "is there a prompt to show" leads to; "prompting" when
  *  it is yes. Shared by the answer in time and the late one. */
-function answered(
-  state: BiometricUnlockState,
-  event: Extract<BiometricUnlockEvent, { type: "status" | "gate" }>,
-): BiometricUnlockState {
+function answered(event: Extract<BiometricUnlockEvent, { type: "status" | "gate" }>): BiometricUnlockState {
   if (event.type === "gate") {
     // Without a remembered Secret Key there is no auto-unlock to guard:
     // the key is typed, as on any device that does not remember it.
     if (!event.on || !event.secretKeyRemembered) {
-      return manual(state, { available: false, notice: null, gate: false });
+      return manual({ available: false, notice: null, gate: false });
     }
     // A prompt that cannot be shown would only "cancel" at once.
-    return event.presenceSupported
-      ? prompt(state, true)
-      : manual(state, { available: false, notice: "gateUnavailable", gate: true });
+    return event.presenceSupported ? prompt(true) : manual({ available: false, notice: "gateUnavailable", gate: true });
   }
-  if (!event.enabled) return manual(state, { available: false, notice: null, gate: false });
+  if (!event.enabled) return manual({ available: false, notice: null, gate: false });
   // Biometric unlock stores only the password; without the remembered
   // Secret Key it cannot open anything, so it is not even prompted for.
-  return event.secretKeyRemembered ? prompt(state, false) : after(state, false, "noSecretKey");
+  return event.secretKeyRemembered ? prompt(false) : after(false, "noSecretKey");
 }
 
 export function biometricUnlockReducer(
   state: BiometricUnlockState,
   event: BiometricUnlockEvent,
 ): BiometricUnlockState {
-  // The vault is open, whichever attempt opened it.
-  if (event.type === "outcome" && event.outcome === "unlocked") return after(state, state.gate, "unlocked");
-  // Anything else an earlier attempt has to say is about a prompt that is gone.
-  if ((event.type === "outcome" || event.type === "error") && event.attempt !== state.attempt) return state;
+  if (event.type === "outcome") {
+    // About a prompt that is no longer the one on screen: nothing to do.
+    if (event.outcome === "superseded") return state;
+    // The vault is open, whichever phase the screen is in.
+    if (event.outcome === "unlocked") return after(state.gate, "unlocked");
+    // Otherwise the prompt's own ending — also of one skipped from the view,
+    // if it ended before Rust was told to end it.
+    return state.phase === "prompting" || state.phase === "password" ? after(state.gate, event.outcome) : state;
+  }
   switch (state.phase) {
     case "checking":
-      if (event.type === "timeout") return manual(state, { available: false, notice: null, gate: false });
-      return event.type === "status" || event.type === "gate" ? answered(state, event) : state;
+      if (event.type === "timeout") return manual({ available: false, notice: null, gate: false });
+      return event.type === "status" || event.type === "gate" ? answered(event) : state;
     case "prompting":
-      if (event.type === "error") return manual(state, { available: true, notice: "failed", gate: state.gate });
-      if (event.type === "skip") return manual(state, { available: true, notice: null, gate: state.gate });
-      if (event.type !== "outcome") return state;
-      return after(state, state.gate, event.outcome);
+      if (event.type === "error") return manual({ available: true, notice: "failed", gate: state.gate });
+      return event.type === "skip" ? manual({ available: true, notice: null, gate: state.gate }) : state;
     case "password":
-      // A prompt skipped from the view may still end: its outcome counts.
-      if (event.type === "outcome") return after(state, state.gate, event.outcome);
       if (event.type === "status" || event.type === "gate") {
         // The answer came after the grace. Only a view that knows nothing yet
         // takes it, and a "yes" is offered as a button, never opened: the user
         // may be typing. (A dismissed gate reads the same as one not yet tried.)
         if (state.available || state.notice !== null || state.gate) return state;
-        const next = answered(state, event);
+        const next = answered(event);
         return next.phase === "prompting"
-          ? manual(state, { available: true, notice: next.gate ? "gated" : null, gate: next.gate })
+          ? manual({ available: true, notice: next.gate ? "gated" : null, gate: next.gate })
           : next;
       }
-      return event.type === "retry" && state.available ? prompt(state, state.gate) : state;
+      return event.type === "retry" && state.available ? prompt(state.gate) : state;
     case "done":
       return state;
   }
