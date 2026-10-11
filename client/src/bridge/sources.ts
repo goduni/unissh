@@ -473,7 +473,7 @@ class LocalSource implements FileSource {
   }
   async join(base: string, name: string): Promise<string> {
     if (name === "..") return this.parent(base);
-    if (!isSafeName(name) || (/^[a-z]:|\\/i.test(base) && !isPortableWindowsName(name))) throw new Error(`Unsupported destination filename: ${name}`);
+    if (!isSafeName(name) || (this.windows && !isPortableWindowsName(name))) throw new Error(`Unsupported destination filename: ${name}`);
     return join(base, name);
   }
   async parent(path: string): Promise<string> {
@@ -484,9 +484,10 @@ class LocalSource implements FileSource {
     }
   }
   crumbs(path: string): Crumb[] {
-    // Windows paths lead with a drive ("C:\…"); unix paths lead with "/".
-    const win = path.includes("\\");
-    const parts = path.split(/[\\/]/).filter(Boolean);
+    // Windows paths lead with a drive ("C:\…"); unix paths lead with "/". Which
+    // it is comes from the platform: on unix a backslash is part of a name.
+    const win = this.windows;
+    const parts = path.split(win ? /[\\/]/ : "/").filter(Boolean);
     const crumbs: Crumb[] = [];
     if (!win) {
       crumbs.push({ label: "/", path: "/" });

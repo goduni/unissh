@@ -5,6 +5,7 @@ const { api } = vi.hoisted(() => ({
   api: { sftpRename: vi.fn(), sftpCommit: vi.fn(), sftpRemove: vi.fn(), sftpRmdir: vi.fn(), sftpStat: vi.fn(), sftpLstat: vi.fn(), sftpListDir: vi.fn(), localListDir: vi.fn(), localLstat: vi.fn(), localStat: vi.fn(), localRemove: vi.fn(), sftpReopen: vi.fn(), sftpListDirCancel: vi.fn(), cancelNew: vi.fn(), cancelTrigger: vi.fn(), cancelDispose: vi.fn() },
 }));
 vi.mock("@/bridge/api", () => api);
+vi.mock("@tauri-apps/api/path", () => ({ join: async (...parts: string[]) => parts.join("/"), dirname: async (path: string) => path.slice(0, path.lastIndexOf("/")) }));
 import { localRenameNeedsCopy, remoteRenameNeedsCopy, sourceFor } from "./sources";
 
 const remote = () => sourceFor({ kind: "remote", sessionId: "s" }, [{ id: "s", label: "server", host: "server", user: "user", port: 22 } as SftpSession]);
@@ -143,5 +144,15 @@ describe("removing an emptied local folder", () => {
     api.localLstat.mockResolvedValue({ name: "moved", isDir: true, isSymlink: true, size: 3, mtime: 0 });
     await expect(sourceFor({ kind: "local" }, []).removeEmptyDir("/src/moved")).rejects.toThrow("Not a directory");
     expect(api.localRemove).not.toHaveBeenCalled();
+  });
+});
+
+describe("a local unix path that holds a backslash", () => {
+  it("is not taken for a Windows path", async () => {
+    // Not on Windows here: the backslash is part of a folder's name, and a
+    // name Windows reserves is an ordinary one.
+    const local = sourceFor({ kind: "local" }, []);
+    expect(local.crumbs("/srv/a\\b")).toEqual([{ label: "/", path: "/" }, { label: "srv", path: "/srv" }, { label: "a\\b", path: "/srv/a\\b" }]);
+    expect(await local.join("/srv/a\\b", "con")).toBe("/srv/a\\b/con");
   });
 });
