@@ -58,8 +58,8 @@ use unissh_ssh_transport::{
 
 use super::{
     agent_key_id, attached_certificate, load_key_into_agent, lock_recover, next_agent_sign_id,
-    resolve_vid, userauth_login, AgentSignOrigin, AgentSignRequest, Approvals, Asker, Core,
-    CoreState, FfiError, InMemoryAgent, Vault, ITEM_TYPE_SSH_KEY,
+    resolve_vid, userauth_login, AgentSignOrigin, AgentSignRequest, Approvals, Asker, Connection,
+    Core, CoreState, FfiError, InMemoryAgent, Vault, ITEM_TYPE_SSH_KEY,
 };
 
 mod limits;
@@ -317,24 +317,16 @@ impl AgentKeys for SharedKeys {
 /// Puts each system-agent signature of one connection to the registered
 /// approver, without holding any core lock while the person decides.
 ///
-/// Lock order: `connection` is taken alone, and by the line while a request
-/// joins it (`Asker::System::gone`); it is never held while asking the line
-/// for anything. The core's `state` is taken alone, before the request joins.
+/// Lock order: the core's `state` is taken alone, before the request joins the
+/// line; `connection` has its own rule ([`Connection`]).
 struct SystemApproval {
     /// The approver and the line every request waits in for the one prompt.
     approvals: Arc<Approvals>,
     /// The line's system-agent epoch when this connection's listener started.
     epoch: u64,
     state: Arc<Mutex<Option<CoreState>>>,
-    connection: Mutex<Connection>,
-}
-
-/// This connection's request in the line (waiting or on screen), if any, and
-/// whether its client left.
-#[derive(Default)]
-struct Connection {
-    closed: bool,
-    pending: Option<u64>,
+    /// This connection's request in the line, and whether its client left.
+    connection: Connection,
 }
 
 impl SystemApproval {
@@ -376,12 +368,8 @@ impl LocalApproval for SystemApproval {
         let id = next_agent_sign_id();
         // Named before it joins the line, so that `abandon` can take it out
         // of the line as well as off the screen.
-        {
-            let mut connection = lock_recover(&self.connection);
-            if connection.closed {
-                return false;
-            }
-            connection.pending = Some(id);
+        if !self.connection.begin(id) {
+            return false;
         }
         let login = userauth_login(blob);
         // Blocks until this request is at the front of the line and answered.
@@ -409,23 +397,16 @@ impl LocalApproval for SystemApproval {
             },
             Asker::System {
                 epoch: self.epoch,
-                gone: &|| lock_recover(&self.connection).closed,
+                gone: &|| self.connection.closed(),
             },
         );
-        lock_recover(&self.connection).pending = None;
+        self.connection.finish();
         approved
     }
 
     fn abandon(&self) {
-        let pending = {
-            let mut connection = lock_recover(&self.connection);
-            connection.closed = true;
-            connection.pending.take()
-        };
         // Waiting in line, it gives up its place; on screen, it is withdrawn.
-        if let Some(id) = pending {
-            self.approvals.withdraw(id);
-        }
+        self.connection.close(&self.approvals);
     }
 }
 
@@ -485,7 +466,7 @@ impl SystemAgent {
             approvals: self.approvals.clone(),
             epoch: self.epoch,
             state: self.keys.state.clone(),
-            connection: Mutex::new(Connection::default()),
+            connection: Connection::default(),
         });
         let _withdraw = Withdraw(approval.clone());
         let policy = Arc::new(LocalAgent {

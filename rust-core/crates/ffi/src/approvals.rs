@@ -21,10 +21,15 @@
 //! requests and closes it to every listener that existed until then, so
 //! nothing of theirs is handed to the approver afterwards.
 //!
-//! Lock order: `line`, then the asker's own lock inside [`Asker::System`]'s
-//! `gone` (the system agent's per-connection lock), and nothing else. The
-//! approver slot is locked only with `line` released, and the approver itself
-//! is called with neither held. The core's state lock is never taken here.
+//! A request belongs to a [`Connection`] (a system-agent connection, or one
+//! agent channel of a forwarded session), which withdraws it when it closes:
+//! waiting, the request leaves the line; on screen, its prompt is cancelled.
+//!
+//! Lock order: `line`, then the asker's [`Connection`] lock inside its `gone`,
+//! and nothing else. A `Connection`'s lock is otherwise taken alone, never
+//! while it asks the line for anything. The approver slot is locked only with
+//! `line` released, and the approver itself is called with neither held. The
+//! core's state lock is never taken here.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -77,18 +82,82 @@ struct Waiting {
     system: bool,
 }
 
-/// Where a request put to [`Approvals::ask`] comes from.
+/// Where a request put to [`Approvals::ask`] comes from. Either way `gone`
+/// says whether the request's connection has ended ([`Connection::closed`]);
+/// it is called under the line's lock, once, as the request joins.
 pub(crate) enum Asker<'a> {
     /// A forwarded agent.
-    Forwarded,
+    Forwarded {
+        /// Whether the request's agent channel has closed.
+        gone: &'a dyn Fn() -> bool,
+    },
     /// The system agent.
     System {
         /// [`Approvals::system_epoch`] as it was when the listener started.
         epoch: u64,
-        /// Whether the request's connection has ended. Called under the line's
-        /// lock, once, as the request joins.
+        /// Whether the request's connection has ended.
         gone: &'a dyn Fn() -> bool,
     },
+}
+
+/// One client's standing in the line: a connection to the system agent, or one
+/// agent channel of a forwarded session. Either serves one request at a time,
+/// so it has at most one in the line, and closing it takes that one out.
+///
+/// The order that leaves no gap: the request is named here ([`Self::begin`])
+/// before it joins the line, and [`Self::close`] marks the connection closed
+/// before it withdraws. So a close either finds the request named and
+/// withdraws it, or comes first and the request is refused, here or at the
+/// door of the line ([`Asker`]'s `gone`).
+#[derive(Default)]
+pub(crate) struct Connection {
+    state: Mutex<ConnectionState>,
+}
+
+#[derive(Default)]
+struct ConnectionState {
+    closed: bool,
+    /// This connection's request in the line (waiting or on screen), if any.
+    pending: Option<u64>,
+}
+
+impl Connection {
+    /// Names `id` as this connection's request, about to be put to
+    /// [`Approvals::ask`]. `false`, naming nothing, once the connection has
+    /// closed: the request must then be refused without asking.
+    pub(crate) fn begin(&self, id: u64) -> bool {
+        let mut state = lock_recover(&self.state);
+        let open = !state.closed;
+        if open {
+            state.pending = Some(id);
+        }
+        drop(state);
+        open
+    }
+
+    /// Whether [`Self::close`] has been called; what [`Asker`]'s `gone` asks.
+    pub(crate) fn closed(&self) -> bool {
+        lock_recover(&self.state).closed
+    }
+
+    /// The request named by [`Self::begin`] has been answered.
+    pub(crate) fn finish(&self) {
+        lock_recover(&self.state).pending = None;
+    }
+
+    /// The connection ended: its request, if it has one, gives up its place in
+    /// `approvals`' line or has its prompt withdrawn, and any later one is
+    /// refused. Safe to call more than once.
+    pub(crate) fn close(&self, approvals: &Approvals) {
+        let pending = {
+            let mut state = lock_recover(&self.state);
+            state.closed = true;
+            state.pending.take()
+        };
+        if let Some(id) = pending {
+            approvals.withdraw(id);
+        }
+    }
 }
 
 /// A request's place at the front of the line; the next one moves up on drop.
@@ -138,38 +207,43 @@ impl Approvals {
     /// Puts `request` to the registered approver once it is at the front of
     /// the line, and returns the answer. Blocks for as long as that takes.
     ///
-    /// `false` without the approver ever seeing the request when: the system
-    /// agent was revoked since its listener started, its connection is gone,
-    /// it was withdrawn or revoked while it waited, too many forwarded
-    /// requests are waiting already, or no approver is registered.
+    /// `false` without the approver ever seeing the request when: its
+    /// connection is gone, the system agent was revoked since its listener
+    /// started, it was withdrawn or revoked while it waited, too many
+    /// forwarded requests are waiting already, or no approver is registered.
     ///
     /// The request is handed over with [`AgentSignRequest::waiting`] set to
     /// the number of requests behind it at that moment.
     pub(crate) fn ask(&self, mut request: AgentSignRequest, asker: Asker<'_>) -> bool {
         let id = request.id;
         let system = matches!(asker, Asker::System { .. });
-        let admitted = {
+        // `full`: a forwarded request that found no room, as opposed to one
+        // whose channel had closed.
+        let (admitted, full) = {
             let mut line = lock_recover(&self.line);
-            let admitted = match asker {
-                Asker::System { epoch, gone } => epoch == line.system_epoch && !gone(),
-                Asker::Forwarded => {
-                    line.waiting.iter().filter(|w| !w.system).count() < MAX_FORWARDED
+            let (admitted, full) = match asker {
+                Asker::System { epoch, gone } => (epoch == line.system_epoch && !gone(), false),
+                Asker::Forwarded { gone } => {
+                    let full = line.waiting.iter().filter(|w| !w.system).count() >= MAX_FORWARDED;
+                    (!full && !gone(), full)
                 }
             };
             if admitted {
                 line.waiting.push_back(Waiting { id, system });
             }
             drop(line);
-            admitted
+            (admitted, full)
         };
         if !system {
-            if admitted {
+            if full {
+                if !self.crowded.swap(true, Ordering::Relaxed) {
+                    log::warn!(
+                        "forwarded agent: too many signature requests waiting; refusing new \
+                         ones until the line shortens"
+                    );
+                }
+            } else {
                 self.crowded.store(false, Ordering::Relaxed);
-            } else if !self.crowded.swap(true, Ordering::Relaxed) {
-                log::warn!(
-                    "forwarded agent: too many signature requests waiting; refusing new ones \
-                     until the line shortens"
-                );
             }
         }
         if !admitted {
@@ -203,12 +277,12 @@ impl Approvals {
         approver.approve(request)
     }
 
-    /// The request `id` is no longer wanted (its connection ended). One still
-    /// waiting leaves the line and its `ask` returns `false`; the one the
-    /// approver is being asked about is cancelled there. Unknown ids are
-    /// ignored: a request that has not joined yet is refused at the door by
-    /// its own `gone`.
-    pub(crate) fn withdraw(&self, id: u64) {
+    /// The request `id` is no longer wanted (its connection ended; see
+    /// [`Connection::close`]). One still waiting leaves the line and its `ask`
+    /// returns `false`; the one the approver is being asked about is cancelled
+    /// there. Unknown ids are ignored: a request that has not joined yet is
+    /// refused at the door by its own `gone`.
+    fn withdraw(&self, id: u64) {
         let shown = {
             let mut line = lock_recover(&self.line);
             let shown = line.place(id) == Some(0);
@@ -341,6 +415,11 @@ mod tests {
         }
     }
 
+    /// Asks as an agent channel that stays open would.
+    fn ask_forwarded(approvals: &Approvals, id: u64) -> bool {
+        approvals.ask(request(id), Asker::Forwarded { gone: &|| false })
+    }
+
     /// Asks as a system-agent listener started under `epoch` would, for a
     /// connection that stays open.
     fn ask_system(approvals: &Approvals, epoch: u64, id: u64) -> bool {
@@ -366,7 +445,7 @@ mod tests {
     fn a_forwarded_and_a_system_request_are_put_to_the_approver_one_after_the_other() {
         let (approvals, desk) = desk();
         std::thread::scope(|scope| {
-            let forwarded = scope.spawn(|| approvals.ask(request(1), Asker::Forwarded));
+            let forwarded = scope.spawn(|| ask_forwarded(&approvals, 1));
             desk.wait_handed(&[1]);
             let local = scope.spawn(|| ask_system(&approvals, approvals.system_epoch(), 2));
             wait_for_line(&approvals, 2);
@@ -385,11 +464,11 @@ mod tests {
     fn a_request_is_handed_over_with_the_number_waiting_behind_it() {
         let (approvals, desk) = desk();
         std::thread::scope(|scope| {
-            let first = scope.spawn(|| approvals.ask(request(1), Asker::Forwarded));
+            let first = scope.spawn(|| ask_forwarded(&approvals, 1));
             desk.wait_handed(&[1]);
-            let second = scope.spawn(|| approvals.ask(request(2), Asker::Forwarded));
+            let second = scope.spawn(|| ask_forwarded(&approvals, 2));
             wait_for_line(&approvals, 2);
-            let third = scope.spawn(|| approvals.ask(request(3), Asker::Forwarded));
+            let third = scope.spawn(|| ask_forwarded(&approvals, 3));
             wait_for_line(&approvals, 3);
 
             desk.answer(1, true);
@@ -470,13 +549,13 @@ mod tests {
             let waiting: Vec<_> = (1..=MAX_FORWARDED)
                 .map(|place| {
                     let id = u64::try_from(place).unwrap();
-                    let asked = scope.spawn(move || approvals.ask(request(id), Asker::Forwarded));
+                    let asked = scope.spawn(move || ask_forwarded(approvals, id));
                     wait_for_line(approvals, place);
                     asked
                 })
                 .collect();
 
-            assert!(!approvals.ask(request(0), Asker::Forwarded), "one too many");
+            assert!(!ask_forwarded(approvals, 0), "one too many");
 
             for (id, asked) in (1_u64..).zip(waiting) {
                 desk.wait_handed(&(1..=id).collect::<Vec<_>>());

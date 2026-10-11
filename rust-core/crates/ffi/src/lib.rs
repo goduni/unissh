@@ -64,7 +64,7 @@ mod ssh_include;
 mod system_agent;
 mod terminal_workspace;
 
-use approvals::{Approvals, Asker};
+use approvals::{Approvals, Asker, Connection};
 pub use key_rotation::KeyRotationLink;
 pub use system_agent::{SharedAgentKey, SystemAgent};
 pub use unissh_ssh_transport::AgentCaller;
@@ -6962,9 +6962,7 @@ fn connect_with_options(
                             key_id,
                             public_openssh: public,
                             host,
-                            approval: Arc::new(ApprovalBridge {
-                                approvals: Arc::clone(approver),
-                            }),
+                            approval: Arc::new(ApprovalBridge::new(Arc::clone(approver))),
                         }));
                 }
             }
@@ -8563,16 +8561,39 @@ fn next_agent_sign_id() -> u64 {
 /// authentication blob so the prompt can name it. Asks through the core's one
 /// line ([`approvals`]), so a forwarded request's prompt and its minute start
 /// only when every request ahead of it, forwarded or local, is over.
+///
+/// The one given to a session only makes the others: every agent channel the
+/// remote host opens gets its own (`for_channel`), so that a channel
+/// that closes (or whose session does) takes its own request out of the line,
+/// or its prompt off the screen, and nobody else's.
 struct ApprovalBridge {
     approvals: Arc<Approvals>,
+    /// This channel's request in the line, and whether the channel closed.
+    channel: Connection,
+}
+
+impl ApprovalBridge {
+    fn new(approvals: Arc<Approvals>) -> Self {
+        Self {
+            approvals,
+            channel: Connection::default(),
+        }
+    }
 }
 
 impl unissh_ssh_transport::AgentApproval for ApprovalBridge {
     fn approve(&self, host: &str, blob: &[u8]) -> bool {
+        let id = next_agent_sign_id();
+        // Named before it joins the line, so that `abandon` can take it out
+        // of the line as well as off the screen.
+        if !self.channel.begin(id) {
+            return false;
+        }
         let login = userauth_login(blob);
-        self.approvals.ask(
+        // Blocks until this request is at the front of the line and answered.
+        let approved = self.approvals.ask(
             AgentSignRequest {
-                id: next_agent_sign_id(),
+                id,
                 origin: AgentSignOrigin::Forwarded,
                 host: host.to_owned(),
                 key: String::new(),
@@ -8586,8 +8607,21 @@ impl unissh_ssh_transport::AgentApproval for ApprovalBridge {
                     .unwrap_or_default(),
                 waiting: 0,
             },
-            Asker::Forwarded,
-        )
+            Asker::Forwarded {
+                gone: &|| self.channel.closed(),
+            },
+        );
+        self.channel.finish();
+        approved
+    }
+
+    fn for_channel(&self) -> Arc<dyn unissh_ssh_transport::AgentApproval> {
+        Arc::new(Self::new(Arc::clone(&self.approvals)))
+    }
+
+    fn abandon(&self) {
+        // Waiting in line, it gives up its place; on screen, it is withdrawn.
+        self.channel.close(&self.approvals);
     }
 }
 

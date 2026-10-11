@@ -21,6 +21,10 @@
 //! * **Every signature is confirmed.** A request that is not approved is
 //!   refused. Silent use is the actual risk; a prompt is what turns it into
 //!   something you can see.
+//! * **A request ends with its channel.** The remote host opens an agent
+//!   channel per connection to its socket; when one closes, or the session
+//!   does, the request it was waiting on is withdrawn rather than left for
+//!   someone to approve.
 //!
 //! The system agent ([`LocalAgent`]) offers a list of keys to programs on this
 //! machine, and confirms every signature the same way, naming the key and the
@@ -84,8 +88,18 @@ const MAX_FRAME: usize = 256 * 1024;
 pub trait AgentApproval: Send + Sync {
     /// `host` is where the request came from; `blob` is the data to be signed,
     /// so an implementation may inspect it (an SSH authentication request names
-    /// the host it logs into).
+    /// the host it logs into). Called on a blocking thread; it may wait for a
+    /// person.
     fn approve(&self, host: &str, blob: &[u8]) -> bool;
+    /// A fresh approval for one more agent channel of the same session. The
+    /// remote host opens a channel per connection to its socket, and each
+    /// gets its own, so that [`Self::abandon`] reaches that channel's request
+    /// and no other.
+    fn for_channel(&self) -> std::sync::Arc<dyn AgentApproval>;
+    /// The channel this approval was made for closed, or its session did:
+    /// withdraw a pending prompt (it must then answer `false`) and refuse any
+    /// later one.
+    fn abandon(&self) {}
 }
 
 /// One identity an agent offers.
@@ -160,11 +174,45 @@ pub struct ForwardedAgent {
     pub public_openssh: String,
     /// Host label, for the confirmation prompt.
     pub host: String,
-    /// Who approves each signature.
+    /// Who approves each signature. For the agent given to a session this is
+    /// only where each channel's own approval comes from
+    /// ([`AgentApproval::for_channel`]).
     pub approval: std::sync::Arc<dyn AgentApproval>,
 }
 
+/// Withdraws an agent channel's request when its serving ends, whichever way:
+/// the remote side closed the channel, the session ended, or the serving
+/// future was dropped.
+struct Withdraw(std::sync::Arc<dyn AgentApproval>);
+
+impl Drop for Withdraw {
+    fn drop(&mut self) {
+        self.0.abandon();
+    }
+}
+
 impl ForwardedAgent {
+    /// Serves the agent protocol on one agent channel of the session until the
+    /// channel closes; a closing session closes its channels. The channel gets
+    /// an approval of its own, and whichever way serving ends, a request still
+    /// waiting for an answer is withdrawn ([`AgentApproval::abandon`]) and its
+    /// answer discarded.
+    pub async fn serve_channel<S>(&self, stream: S)
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    {
+        let approval = self.approval.for_channel();
+        let _withdraw = Withdraw(approval.clone());
+        let channel = std::sync::Arc::new(Self {
+            keys: self.keys.clone(),
+            key_id: self.key_id.clone(),
+            public_openssh: self.public_openssh.clone(),
+            host: self.host.clone(),
+            approval,
+        });
+        serve(channel, stream).await;
+    }
+
     fn comment(&self) -> String {
         self.public_openssh
             .split_whitespace()
@@ -196,6 +244,12 @@ impl AgentKeys for ForwardedAgent {
                 None
             }
         }
+    }
+
+    /// Only ever reached on a channel's own agent ([`Self::serve_channel`]),
+    /// whose approval is that channel's alone.
+    fn hang_up(&self) {
+        self.approval.abandon();
     }
 }
 
@@ -564,9 +618,17 @@ mod tests {
         fn approve(&self, _host: &str, _blob: &[u8]) -> bool {
             self.0
         }
+        fn for_channel(&self) -> Arc<dyn AgentApproval> {
+            Arc::new(Self(self.0))
+        }
     }
 
     fn agent(approve: bool) -> (Arc<ForwardedAgent>, Arc<FixedKey>) {
+        agent_asking(Arc::new(Approval(approve)))
+    }
+
+    /// A session's forwarded agent whose signatures `approval` decides.
+    fn agent_asking(approval: Arc<dyn AgentApproval>) -> (Arc<ForwardedAgent>, Arc<FixedKey>) {
         let keys = Arc::new(FixedKey {
             signed: std::sync::Mutex::new(Vec::new()),
         });
@@ -580,7 +642,7 @@ mod tests {
                 key_id: b"k".to_vec(),
                 public_openssh: public,
                 host: "bastion".to_owned(),
-                approval: Arc::new(Approval(approve)),
+                approval,
             }),
             keys,
         )
@@ -1021,8 +1083,9 @@ otqRUgfM3Hf3sdwr66X6ltp1sQlzggaVlhH3pBsCWTPQ6nBzWEgiPA==
         abandoned: std::sync::Mutex<bool>,
         wake: std::sync::Condvar,
     }
-    impl LocalApproval for HeldOpen {
-        fn approve(&self, _key: &OfferedKey, _caller: &AgentCaller, _blob: &[u8]) -> bool {
+    impl HeldOpen {
+        /// The prompt: open until [`Self::release`] (or the bound below).
+        fn hold(&self) {
             self.asked.store(true, Ordering::SeqCst);
             let abandoned = self.abandoned.lock().unwrap();
             // Bounded, so a regression fails the test instead of hanging it.
@@ -1032,11 +1095,35 @@ otqRUgfM3Hf3sdwr66X6ltp1sQlzggaVlhH3pBsCWTPQ6nBzWEgiPA==
                     .wait_timeout_while(abandoned, std::time::Duration::from_secs(10), |a| !*a)
                     .unwrap(),
             );
+        }
+        fn release(&self) {
+            *self.abandoned.lock().unwrap() = true;
+            self.wake.notify_all();
+        }
+    }
+    impl LocalApproval for HeldOpen {
+        fn approve(&self, _key: &OfferedKey, _caller: &AgentCaller, _blob: &[u8]) -> bool {
+            self.hold();
             false
         }
         fn abandon(&self) {
-            *self.abandoned.lock().unwrap() = true;
-            self.wake.notify_all();
+            self.release();
+        }
+    }
+
+    /// One agent channel's approval over a prompt every channel of the test's
+    /// session shares.
+    struct HeldChannel(Arc<HeldOpen>);
+    impl AgentApproval for HeldChannel {
+        fn approve(&self, _host: &str, _blob: &[u8]) -> bool {
+            self.0.hold();
+            false
+        }
+        fn for_channel(&self) -> Arc<dyn AgentApproval> {
+            Arc::new(Self(self.0.clone()))
+        }
+        fn abandon(&self) {
+            self.0.release();
         }
     }
 
@@ -1063,6 +1150,33 @@ otqRUgfM3Hf3sdwr66X6ltp1sQlzggaVlhH3pBsCWTPQ6nBzWEgiPA==
         tokio::time::timeout(std::time::Duration::from_secs(5), served)
             .await
             .expect("serving ends as soon as the client is gone")
+            .unwrap();
+        assert!(
+            *prompt.abandoned.lock().unwrap(),
+            "the prompt was withdrawn"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_agent_channel_that_closes_withdraws_its_pending_forwarded_prompt() {
+        use tokio::io::AsyncWriteExt;
+
+        let prompt = Arc::new(HeldOpen::default());
+        let (session, _keys) = agent_asking(Arc::new(HeldChannel(prompt.clone())));
+        let request = sign_request(&key_blob(&session.public_openssh).unwrap(), b"to-sign");
+        let (mut remote, channel) = tokio::io::duplex(64 * 1024);
+        let served = tokio::spawn(async move {
+            session.serve_channel(channel).await;
+        });
+        remote.write_all(&framed(&request).unwrap()).await.unwrap();
+        while !prompt.asked.load(Ordering::SeqCst) {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        drop(remote);
+        tokio::time::timeout(std::time::Duration::from_secs(5), served)
+            .await
+            .expect("serving ends as soon as the channel is closed")
             .unwrap();
         assert!(
             *prompt.abandoned.lock().unwrap(),
