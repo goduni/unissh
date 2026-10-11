@@ -108,6 +108,23 @@ describe.skipIf(!hasSh)("authorizedKeysRemoveCmd under /bin/sh", () => {
     });
   });
 
+  it("takes a commented-out old-key line for no key at all, but not the same key under another type name", () => {
+    // sshd skips the first line and reads the second, whatever it makes of it.
+    const commented = ` \t# ${OLD} retired 2026`;
+    const retyped = `ssh-rsa ${OLD.split(" ")[1]}`;
+    const left = (extra: string) => {
+      let out: [number | null, string] = [null, ""];
+      withHome(`${OLD} user@laptop\n${extra}\n${CAND}\n`, (home, file) => {
+        out = [run(home, authorizedKeysRemoveCmd(OLD, CAND)).status, fs.readFileSync(file, "utf8")];
+      });
+      return out;
+    };
+    expect([left(commented), left(retyped)]).toEqual([
+      [0, `${commented}\n${CAND}\n`],
+      [REMOVE_EXIT_STILL_PRESENT, `${retyped}\n${CAND}\n`],
+    ]);
+  });
+
   it("touches nothing unless the new key is there as a plain line", () => {
     // The candidate behind an options prefix is a restricted login, not a replacement.
     const before = `${OLD} user@laptop\ncommand="/bin/false" ${CAND}\n`;

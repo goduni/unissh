@@ -21,12 +21,11 @@ const quoteKey = (openssh: string) => shQuote(openssh.trim());
 const posix = (script: string) => `sh -c ${shQuote(script)}`;
 
 /** Exit status of `authorizedKeysRemoveCmd` when the old key's plain lines are
- *  gone but its blob is still somewhere in the file, in a form this command
- *  does not touch: a line with an options prefix (`from=…`, `command=…`), which
- *  still authorizes the key; the same blob under another key type name; or a
- *  commented-out line, which authorizes nothing but cannot be told apart by
- *  the check (it errs on the side of reporting). Nothing else was changed;
- *  what is left has to be looked at and removed by hand. */
+ *  gone but its blob is still on a line sshd reads, in a form this command does
+ *  not touch: a line with an options prefix (`from=…`, `command=…`), which
+ *  still authorizes the key, or the same blob under another key type name.
+ *  Nothing else was changed; what is left has to be looked at and removed by
+ *  hand. */
 export const REMOVE_EXIT_STILL_PRESENT = 3;
 /** Exit status of `authorizedKeysRemoveCmd` when there is no authorized_keys. */
 export const REMOVE_EXIT_NO_FILE = 4;
@@ -82,8 +81,10 @@ const AWK_KEY_LINE = `{ k = $2; sub(/\\r$/, "", k) } $1 == t && k == b`;
  *  authorized_keys is followed first, so the link stays and its target is what
  *  gets rewritten.
  *
- *  Afterwards, if the old key's base64 blob still appears on any line, it exits
- *  with `REMOVE_EXIT_STILL_PRESENT` rather than claim the key is gone. A key
+ *  Afterwards, if the old key's base64 blob still appears on any line sshd
+ *  reads, it exits with `REMOVE_EXIT_STILL_PRESENT` rather than claim the key
+ *  is gone. A comment line (first non-blank character `#`) is not one of
+ *  those: sshd skips it, so it accepts nothing and may keep the blob. A key
  *  that is truly absent is a success, so a rerun converges. */
 export function authorizedKeysRemoveCmd(oldOpenssh: string, keepOpenssh: string): string {
   const o = keyFields(oldOpenssh);
@@ -100,6 +101,7 @@ export function authorizedKeysRemoveCmd(oldOpenssh: string, keepOpenssh: string)
       `cp -p "$f" "$t" && ` +
       `awk -v t=${o.type} -v b=${o.blob} '${AWK_KEY_LINE} { next } { print }' "$f" > "$t" && ` +
       `has ${k.type} ${k.blob} "$t" && mv -f "$t" "$f" || { rm -f "$t"; exit 1; }; ` +
-      `if grep -qF ${o.blob} "$f"; then echo 'old key data still in authorized_keys: a line with options, another key type, or a commented-out line' >&2; exit ${REMOVE_EXIT_STILL_PRESENT}; fi`,
+      `if awk -v b=${o.blob} '/^[ \\t]*#/ { next } index($0, b) { found = 1 } END { exit found ? 0 : 1 }' "$f"; then ` +
+      `echo 'old key data still in authorized_keys: a line with options, or the same key under another key type' >&2; exit ${REMOVE_EXIT_STILL_PRESENT}; fi`,
   );
 }

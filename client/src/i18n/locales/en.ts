@@ -1366,7 +1366,7 @@ export const en = {
     "unconfirmed": "Old line removed, old key not re-checked",
     "failedAt": "{{step}} failed: {{error}}",
     "timedOut": "timed out",
-    "oldKeyStillPresent": "the old key's data is still in authorized_keys in a form that is not removed automatically: a line with options (from=…, command=…), the same key under another type name, or a commented-out line — check it and remove it by hand, then retry",
+    "oldKeyStillPresent": "the old key's data is still in authorized_keys in a form that is not removed automatically: a line with options (from=…, command=…) or the same key under another type name — check it and remove it by hand, then retry",
     "removeNeedsSecondFactor": "new key accepted; remove the old line by hand (host needs a second factor), then retry",
     "oldKeyStillAccepted": "new key works, old key is STILL accepted (not through ~/.ssh/authorized_keys: authorized_keys2, another AuthorizedKeysFile, AuthorizedKeysCommand or a CA) — revoke it on the server, then retry",
     "oldKeyCheckFailed": "could not check that the old key is refused: {{error}}",
