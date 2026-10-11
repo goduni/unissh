@@ -429,8 +429,8 @@ boundary, so what crosses it is spelled out here.
   input for its first half second, so a click meant for the previous one
   cannot answer it. A client that disconnects withdraws its open prompt or
   gives up its place in line, and so does a connection the listener cuts. A
-  forwarded request has no such signal: once in line it stays until it is
-  answered or times out, even if its session has ended. A client that only half-closes its side
+  forwarded request does the same when the remote host closes the agent
+  channel it came in on, or when its SSH session ends. A client that only half-closes its side
   (`shutdown(SHUT_WR)` after sending) counts as gone too, so its prompt is
   withdrawn. OpenSSH's own clients keep the stream open and are unaffected.
   At most 64 connections are served at once (one beyond that is closed
