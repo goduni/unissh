@@ -71,9 +71,21 @@ mod flag {
     pub const RSA_SHA2_512: u32 = 4;
 }
 
-/// Whether the last signature request for an offered key was refused for
-/// asking an RSA key for SHA-1; the refusal is logged when this turns true.
+/// Whether a request has been refused for asking an RSA key for SHA-1 since
+/// the last one that got as far as the policy ([`AgentKeys::sign`]); the
+/// refusal is logged when this turns true.
+///
+/// This and the two below are the refusals whoever can reach an agent decides
+/// the number of. Each is logged once per streak, and a streak ends only at a
+/// request that is put to the policy, which for every agent here means a
+/// person is asked: nothing a caller can do by itself starts a new one.
 static SHA1_REFUSED: AtomicBool = AtomicBool::new(false);
+
+/// The same, for a signature request naming a key that is not offered.
+static UNOFFERED_REFUSED: AtomicBool = AtomicBool::new(false);
+
+/// The same, for a request of a type that is never served.
+static KIND_REFUSED: AtomicBool = AtomicBool::new(false);
 
 /// A frame longer than this is refused rather than allocated. The remote side
 /// declares the length, so without a ceiling it decides how much memory we
@@ -398,7 +410,9 @@ fn reply<A: AgentKeys + ?Sized>(agent: &A, request: &[u8]) -> Option<Vec<u8>> {
                 .find(|key| key.blob().as_deref() == Some(want_blob))
             else {
                 // A key we do not offer. Refused rather than substituted.
-                log::warn!("agent: signature requested for a key we do not offer");
+                if !UNOFFERED_REFUSED.swap(true, Ordering::Relaxed) {
+                    log::warn!("agent: signature requested for a key we do not offer");
+                }
                 return None;
             };
             let rsa = if flags & flag::RSA_SHA2_256 != 0 {
@@ -425,7 +439,10 @@ fn reply<A: AgentKeys + ?Sized>(agent: &A, request: &[u8]) -> Option<Vec<u8>> {
             } else {
                 RsaHash::default() // not an RSA key: no hash to choose
             };
+            // Put to the policy: every streak of refusals ends here.
             SHA1_REFUSED.store(false, Ordering::Relaxed);
+            UNOFFERED_REFUSED.store(false, Ordering::Relaxed);
+            KIND_REFUSED.store(false, Ordering::Relaxed);
             let (algorithm, signature) = agent.sign(&key, data, rsa)?;
             let mut inner = Vec::new();
             put_string(&mut inner, algorithm.as_bytes())?;
@@ -437,7 +454,9 @@ fn reply<A: AgentKeys + ?Sized>(agent: &A, request: &[u8]) -> Option<Vec<u8>> {
         // Everything else — add, remove, lock, unlock, extensions. Whoever can
         // reach the socket does not get to reshape what the agent holds.
         other => {
-            log::warn!("agent: refusing request type {other}");
+            if !KIND_REFUSED.swap(true, Ordering::Relaxed) {
+                log::warn!("agent: refusing request type {other}");
+            }
             None
         }
     }
