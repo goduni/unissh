@@ -13,7 +13,8 @@ import { usePalette } from "@/theme/ThemeProvider";
 import { useTranslation } from "@/i18n";
 import { Btn, Icon, Spinner } from "@/components/primitives";
 import { useApp } from "@/store/app";
-import { useUpdate } from "@/store/update";
+import { installProgressLabel, useUpdate } from "@/store/update";
+import { downloadPercent } from "@/bridge/updater";
 import { rem, TEXT } from "@/theme/tokens";
 
 export function UpdateBanner() {
@@ -22,6 +23,7 @@ export function UpdateBanner() {
   const info = useUpdate((s) => s.info);
   const dismissed = useUpdate((s) => s.dismissed);
   const installing = useUpdate((s) => s.installing);
+  const progress = useUpdate((s) => s.progress);
   const dismiss = useUpdate((s) => s.dismiss);
   const install = useUpdate((s) => s.install);
   const openReleasePage = useUpdate((s) => s.openReleasePage);
@@ -29,6 +31,10 @@ export function UpdateBanner() {
   const allPanes = useApp((s) => s.allPanes);
 
   if (!info || dismissed) return null;
+
+  const downloading = progress?.phase === "downloading" ? progress : null;
+  const percent = downloading ? downloadPercent(downloading.received, downloading.total) : null;
+  const stalled = downloading?.stalled ?? false;
 
   const start = () => {
     const live = allPanes().filter((pane) => pane.status === "online").length;
@@ -86,16 +92,35 @@ export function UpdateBanner() {
       </div>
 
       <div style={{ fontSize: rem(12.5), color: p.txt3, lineHeight: 1.45, marginBottom: rem(12) }}>
-        {t("update.currentIs", { version: info.currentVersion })}
+        {installing ? installProgressLabel(progress) : t("update.currentIs", { version: info.currentVersion })}
+        {stalled ? <div style={{ marginTop: rem(6), color: p.txt2 }}>{t("update.stalled")}</div> : null}
       </div>
+
+      {installing && percent !== null ? (
+        <div
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={percent}
+          style={{
+            height: 3,
+            borderRadius: 2,
+            background: p.line2,
+            marginBottom: rem(12),
+            overflow: "hidden",
+          }}
+        >
+          <div style={{ width: `${percent}%`, height: "100%", background: p.txt2 }} />
+        </div>
+      ) : null}
 
       <div style={{ display: "flex", alignItems: "center", gap: rem(8) }}>
         <Btn size="sm" onClick={start} disabled={installing}>
           {installing ? <Spinner size={13} /> : null}
-          {installing ? t("update.installing") : t("update.install")}
+          {installing ? t("update.working") : t("update.install")}
         </Btn>
-        <Btn size="sm" variant="ghost" onClick={openReleasePage} disabled={installing}>
-          {t("update.notes")}
+        <Btn size="sm" variant="ghost" onClick={openReleasePage} disabled={installing && !stalled}>
+          {stalled ? t("update.openDownloads") : t("update.notes")}
         </Btn>
       </div>
     </div>

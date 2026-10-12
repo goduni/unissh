@@ -11,13 +11,16 @@ import {
   RELEASES_URL,
   checkForUpdate,
   checkForUpdateIfDue,
+  downloadPercent,
   installUpdate,
   isAutoCheckEnabled,
   setAutoCheckEnabled,
+  type InstallProgress,
   type UpdateInfo,
 } from "@/bridge/updater";
 import { toast } from "@/store/toast";
 import { i18n } from "@/i18n";
+import { fmtSize } from "@/i18n/format";
 
 /** What the About panel shows next to the version. */
 export type CheckState =
@@ -31,6 +34,8 @@ interface UpdateStore {
   info: UpdateInfo | null;
   state: CheckState;
   installing: boolean;
+  /** Where the running install is; null when none is running. */
+  progress: InstallProgress | null;
   /** The banner was dismissed for this session; About still shows the update. */
   dismissed: boolean;
   autoCheck: boolean;
@@ -47,6 +52,7 @@ export const useUpdate = create<UpdateStore>((set, get) => ({
   info: null,
   state: "idle",
   installing: false,
+  progress: null,
   dismissed: false,
   autoCheck: isAutoCheckEnabled(),
 
@@ -91,20 +97,20 @@ export const useUpdate = create<UpdateStore>((set, get) => ({
 
   install: async () => {
     if (get().installing || !get().info) return;
-    set({ installing: true });
+    set({ installing: true, progress: { phase: "preparing" } });
 
-    const res = await installUpdate();
+    const res = await installUpdate((progress) => set({ progress }));
     if (res.status === "manual") {
       // Not necessarily a breakage: a .deb/.rpm install belongs to the system
       // package manager and cannot be swapped in place. Hand the user the page.
-      set({ installing: false });
+      set({ installing: false, progress: null });
       toast(i18n.t("update.installManual"), "warn");
       get().openReleasePage();
       return;
     }
     // On success the process is replaced or relaunched; if relaunch failed the
     // new version is still on disk and takes effect on the next start.
-    set({ installing: false, info: null, state: "current", dismissed: false });
+    set({ installing: false, progress: null, info: null, state: "current", dismissed: false });
     toast(i18n.t("update.installedRestart"), "ok");
   },
 
@@ -121,3 +127,31 @@ export const useUpdate = create<UpdateStore>((set, get) => ({
     });
   },
 }));
+
+/** The one-line label for a running install, shared by the banner and Settings. */
+export function installProgressLabel(progress: InstallProgress | null): string {
+  switch (progress?.phase) {
+    case "preparing":
+      return i18n.t("update.phasePreparing");
+    case "downloading": {
+      if (progress.received === 0 && progress.total === null) {
+        return i18n.t("update.phaseConnecting");
+      }
+      const received = fmtSize(progress.received);
+      const percent = downloadPercent(progress.received, progress.total);
+      if (progress.total === null || percent === null) {
+        return i18n.t("update.phaseDownloadingUnknown", { received });
+      }
+      return i18n.t("update.phaseDownloading", {
+        received,
+        total: fmtSize(progress.total),
+        percent,
+      });
+    }
+    case "restarting":
+      return i18n.t("update.phaseRestarting");
+    case "installing":
+    case undefined:
+      return i18n.t("update.installing");
+  }
+}
