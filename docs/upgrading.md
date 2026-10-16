@@ -1,8 +1,8 @@
 # Upgrading UniSSH
 
 Read the **Compatibility** and any **Breaking changes** entries in the
-[changelog](../CHANGELOG.md#060--2026-10-11) before upgrading. The changes in
-0.6.0 preserve the vault format, AAD encodings and encrypted-sync
+[changelog](../CHANGELOG.md#061--2026-10-16) before upgrading. The changes in
+0.6.1 preserve the vault format, AAD encodings and encrypted-sync
 protocol; no vault conversion is required.
 
 ## Before installing

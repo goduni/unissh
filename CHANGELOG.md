@@ -32,6 +32,8 @@ starts with `0.`:
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-10-16
+
 ### Changed
 
 - The desktop updater says where an update is: contacting the download server,
@@ -47,6 +49,15 @@ starts with `0.`:
   commands or 32 sessions, and full output storage no longer truncates every
   new command. `busy` now means connections or commands in progress fill a
   limit, or the session is running another command.
+
+### Security
+
+- rustls updated to 0.23.46 (RUSTSEC-2026-0346, -0347, -0348, -0349): debug
+  output of client session values could expose TLS secrets, application data
+  could reach the outer server after an ECH rejection, certificate
+  decompression could allocate up to 1 GiB before authentication, and an
+  unauthenticated ServerHello could downgrade later connections to classical
+  key exchange.
 
 ## [0.6.0] — 2026-10-11
 
