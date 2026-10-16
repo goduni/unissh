@@ -650,3 +650,41 @@
   border: 1px solid var(--mcp-line);
   border-radius: 0.5625rem;
 }
+.mcp-limits-details > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.mcp-limits {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: 0.75rem;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  border: 0;
+}
+.mcp-limit {
+  display: grid;
+  gap: 0.375rem;
+}
+.mcp-limit > input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  height: 2.6875rem;
+  padding: 0 0.75rem;
+  border: 1px solid var(--mcp-line);
+  border-radius: 0.5625rem;
+  background: var(--mcp-hover);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  color: var(--mcp-text);
+}
+.mcp-limit > input[aria-invalid="true"] {
+  border-color: var(--mcp-danger);
+}
+.mcp-app-limits {
+  display: grid;
+  gap: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--mcp-line);
+}

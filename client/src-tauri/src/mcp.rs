@@ -13,7 +13,7 @@ use std::{
 use tauri::{Manager, State};
 use unissh_automation::{
     core::{CoreExecutor, PromptFactory},
-    ApprovalMode, Broker, Cancel,
+    ApprovalMode, Broker, BrokerLimits, Cancel, GrantLimits,
 };
 use unissh_ffi::{AuthPromptRequest, AuthPrompter, Core};
 use unissh_mcp::{credentials::Credentials, CancellationToken, LocalServer};
@@ -59,11 +59,15 @@ pub struct Controller {
     pub broker: Arc<Broker>,
     core: Arc<Core>,
     credentials: Option<Arc<Credentials>>,
+    limits_path: PathBuf,
     running: tokio::sync::Mutex<Option<Running>>,
     error: Mutex<Option<&'static str>>,
 }
 impl Controller {
     pub fn new(core: Arc<Core>, prompts: Arc<AppPrompter>, path: PathBuf) -> Arc<Self> {
+        // Kept beside `mcp.json`, outside its versioned credential format, so
+        // that file stays readable by releases without configurable limits.
+        let limits_path = path.with_file_name("mcp-limits.json");
         let credentials = Credentials::load(path).ok().map(Arc::new);
         let error = credentials.is_none().then_some("configuration_invalid");
         let broker = Broker::new(Arc::new(CoreExecutor {
@@ -71,10 +75,16 @@ impl Controller {
             prompts: Arc::new(Prompts(prompts)),
         }));
         broker.suspend();
+        if let Some(limits) = load_limits(&limits_path) {
+            if broker.set_limits(limits).is_err() {
+                log::warn!("mcp: saved limits are out of range; using the defaults");
+            }
+        }
         Arc::new(Self {
             broker,
             core,
             credentials,
+            limits_path,
             running: tokio::sync::Mutex::new(None),
             error: Mutex::new(error),
         })
@@ -218,6 +228,29 @@ impl Controller {
     }
 }
 
+/// Saved application-wide limits, or `None` (defaults) when absent or unreadable.
+fn load_limits(path: &std::path::Path) -> Option<BrokerLimits> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            log::warn!("mcp: reading saved limits failed: {e}");
+            return None;
+        }
+    };
+    serde_json::from_slice(&bytes)
+        .inspect_err(|e| log::warn!("mcp: saved limits are invalid ({e}); using the defaults"))
+        .ok()
+}
+
+/// Writes the limits next to the file they replace and renames over it, so a
+/// crash leaves either the old or the new limits, never a torn file.
+fn save_limits(path: &std::path::Path, limits: &BrokerLimits) -> std::io::Result<()> {
+    let temp = path.with_extension("json.tmp");
+    std::fs::write(&temp, serde_json::to_vec(limits)?)?;
+    std::fs::rename(&temp, path)
+}
+
 pub fn revoke(app: &tauri::AppHandle) {
     if let Some(controller) = app.try_state::<Arc<Controller>>() {
         controller.revoke();
@@ -329,7 +362,12 @@ pub async fn mcp_grant(
     ticket: String,
     approval_mode: Option<ApprovalMode>,
     max_timeout_ms: Option<u32>,
+    limits: Option<GrantLimits>,
 ) -> ApiResult<()> {
+    let limits = limits.unwrap_or_default();
+    if !limits.is_valid() {
+        return Err(ApiError::other("MCP access limits are out of range."));
+    }
     let serial = state.running.lock().await;
     if serial.is_none() {
         return Err(ApiError::other("Enable local MCP first."));
@@ -353,10 +391,35 @@ pub async fn mcp_grant(
             &ticket,
             approval_mode.unwrap_or_default(),
             max_timeout_ms.unwrap_or(600_000),
+            limits,
         )
     })
     .await?
     .map_err(|e| ApiError::other(e.message()))
+}
+#[tauri::command]
+pub fn mcp_limits(state: State<'_, Arc<Controller>>) -> BrokerLimits {
+    state.broker.limits()
+}
+#[tauri::command]
+pub async fn mcp_set_limits(
+    state: State<'_, Arc<Controller>>,
+    limits: BrokerLimits,
+) -> ApiResult<()> {
+    if !limits.is_valid() {
+        return Err(ApiError::other("MCP limits are out of range."));
+    }
+    let _serial = state.running.lock().await;
+    let broker = state.broker.clone();
+    let path = state.limits_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        save_limits(&path, &limits)
+            .map_err(|e| ApiError::other(format!("Cannot save MCP limits: {e}")))?;
+        broker
+            .set_limits(limits)
+            .map_err(|e| ApiError::other(e.message()))
+    })
+    .await?
 }
 #[tauri::command]
 pub async fn mcp_revoke(state: State<'_, Arc<Controller>>, id: Option<String>) -> ApiResult<()> {

@@ -309,6 +309,10 @@ pub fn run() {
             #[cfg(desktop)]
             mcp::mcp_revoke,
             #[cfg(desktop)]
+            mcp::mcp_limits,
+            #[cfg(desktop)]
+            mcp::mcp_set_limits,
+            #[cfg(desktop)]
             mcp::mcp_approve,
             #[cfg(desktop)]
             mcp::mcp_targets,

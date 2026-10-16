@@ -7,7 +7,12 @@ export interface McpSelection { targets: McpTarget[]; vaults: { id: string; name
 export interface McpIntegration { id: string; label: string }
 export interface McpSession { created_unix_ms?: number; connected_unix_ms?: number | null; connected_elapsed_ms?: number | null; target?: McpTarget; expires_at: number | null; idle_seconds: number; session_id: string; target_id: string; state: string; integration_id: string; error: string | null }
 export interface McpRun { command_preview?: string; created_unix_ms?: number; started_unix_ms?: number | null; elapsed_ms?: number | null; exit_code?: number | null; recording?: { vault_id: string; recording_id: string; status: "recording" | "saved" | "failed" } | null; session_id: string | null; run_id: string; state: string; integration_id: string; error: string | null; command?: string; stdin?: string | null; env?: Record<string, string>; cwd?: string | null; target?: McpTarget; timeout_ms?: number; approval_remaining_seconds?: number }
-export interface McpAccess { integration_id: string; remaining_seconds: number | null; approval_mode: McpApprovalMode; max_timeout_ms: number; targets: McpTarget[] }
+/** Per-grant resource ceilings; mirrors `unissh_automation::GrantLimits`. */
+export interface McpGrantLimits { max_connections: number; max_active_commands: number; retained_commands: number; retained_sessions: number; output_per_run_bytes: number }
+/** Application-wide ceilings; mirrors `unissh_automation::BrokerLimits`. */
+export interface McpAppLimits { max_connections: number; retained_commands: number; output_total_bytes: number }
+export const DEFAULT_GRANT_LIMITS: McpGrantLimits = { max_connections: 4, max_active_commands: 8, retained_commands: 128, retained_sessions: 32, output_per_run_bytes: 1024 * 1024 };
+export interface McpAccess { integration_id: string; remaining_seconds: number | null; approval_mode: McpApprovalMode; max_timeout_ms: number; limits?: McpGrantLimits; targets: McpTarget[] }
 export interface McpStatus {
   enabled: boolean; port: number; endpoint: string; error: string | null; integrations: McpIntegration[];
   activity: { saved_access?: McpAccess[]; grants: McpAccess[]; sessions: McpSession[]; runs: McpRun[] };
@@ -18,7 +23,9 @@ export const mcpCreate = (label: string) => invoke<{ id: string; token: string }
 export const mcpRotate = (id: string) => invoke<{ id: string; token: string }>("mcp_rotate_integration", { id });
 export const mcpDelete = (id: string) => invoke<void>("mcp_delete_integration", { id });
 export const mcpTargets = () => invoke<McpSelection>("mcp_targets");
-export const mcpGrant = (id: string, targets: McpTarget[], seconds: number | null, ticket: string, approvalMode: McpApprovalMode, maxTimeoutMs = 600000) => invoke<void>("mcp_grant", { id, targets: targets.map(({ vault_id, profile_id }) => ({ vault_id, profile_id })), seconds, ticket, approvalMode, maxTimeoutMs });
+export const mcpGrant = (id: string, targets: McpTarget[], seconds: number | null, ticket: string, approvalMode: McpApprovalMode, maxTimeoutMs = 600000, limits: McpGrantLimits = DEFAULT_GRANT_LIMITS) => invoke<void>("mcp_grant", { id, targets: targets.map(({ vault_id, profile_id }) => ({ vault_id, profile_id })), seconds, ticket, approvalMode, maxTimeoutMs, limits });
+export const mcpLimits = () => invoke<McpAppLimits>("mcp_limits");
+export const mcpSetLimits = (limits: McpAppLimits) => invoke<void>("mcp_set_limits", { limits });
 export const mcpRevoke = (id: string | null = null) => invoke<void>("mcp_revoke", { id });
 export const mcpApprove = (runId: string, allowed: boolean) => invoke<void>("mcp_approve", { runId, allowed });
 export const mcpCloseSession = (sessionId: string) => invoke<void>("mcp_close_session", { sessionId });

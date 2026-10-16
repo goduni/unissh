@@ -13,7 +13,7 @@ use std::{sync::Arc, time::Instant};
 #[cfg(feature = "core")]
 use unissh_automation::{
     core::{CoreExecutor, PromptFactory},
-    ApprovalMode, Broker, Cancel,
+    ApprovalMode, Broker, Cancel, GrantLimits,
 };
 #[cfg(feature = "core")]
 use unissh_ffi::{AuthPrompter, ConnectionProfile, Core, ProfileAuth};
@@ -75,6 +75,7 @@ fn encrypted_native_consent_restores_only_unchanged_targets_and_is_revocable() {
         &b.grant_ticket().unwrap(),
         ApprovalMode::Trusted,
         3_600_000,
+        GrantLimits::default(),
     )
     .unwrap();
     b.suspend();
