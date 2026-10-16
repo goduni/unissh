@@ -56,13 +56,6 @@ fn log_filter_from_env() -> (log::LevelFilter, Vec<(String, log::LevelFilter)>) 
 
 /// Tauri `setup`: open the instance, register the observers and controllers,
 /// manage the app state, wire token rotation and apply the per-OS window tweaks.
-#[cfg_attr(
-    desktop,
-    expect(
-        clippy::significant_drop_tightening,
-        reason = "each controller must resume before it is moved into app.manage, so its binding cannot end earlier"
-    )
-)]
 fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     // One local instance = two files in the app-data dir: the SQLCipher DB
     // and the encrypted keyset sidecar. The DB key is derived from the

@@ -257,10 +257,6 @@ pub fn revoke(app: &tauri::AppHandle) {
     }
 }
 
-#[expect(
-    clippy::significant_drop_tightening,
-    reason = "the controller handle is moved into the spawned task, so it cannot be dropped earlier"
-)]
 pub fn resume_access(app: &tauri::AppHandle) {
     if let Some(controller) = app.try_state::<Arc<Controller>>() {
         let controller = controller.inner().clone();
@@ -353,6 +349,10 @@ pub struct TargetRef {
 #[expect(
     clippy::significant_drop_tightening,
     reason = "the `running` guard keeps MCP from being disabled while the grant is recorded"
+)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one parameter per field of the native grant form; the IPC argument names are the frontend contract"
 )]
 pub async fn mcp_grant(
     state: State<'_, Arc<Controller>>,
