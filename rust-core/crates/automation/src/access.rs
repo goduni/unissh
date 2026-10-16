@@ -20,6 +20,10 @@ pub struct SavedAccess {
     expires_unix: Option<u64>,
     approval_mode: ApprovalMode,
     max_timeout_ms: u32,
+    /// Omitted while default, so consent saved without custom limits keeps the
+    /// form earlier releases read.
+    #[serde(default, skip_serializing_if = "GrantLimits::is_default")]
+    limits: GrantLimits,
 }
 fn now() -> u64 {
     SystemTime::now()
@@ -40,6 +44,7 @@ impl Broker {
         seconds: Option<u32>,
         approval_mode: ApprovalMode,
         max_timeout_ms: u32,
+        limits: GrantLimits,
         fingerprint: Vec<u8>,
     ) -> Result<()> {
         let mut saved = self.executor.load_access()?;
@@ -55,6 +60,7 @@ impl Broker {
             expires_unix: seconds.map(|s| now() + u64::from(s)),
             approval_mode,
             max_timeout_ms,
+            limits,
         });
         self.executor.save_access(&saved)
     }
@@ -141,6 +147,13 @@ impl Broker {
             {
                 continue;
             }
+            if !consent.limits.is_valid() {
+                log::warn!(
+                    "MCP saved access skipped: limits out of range, integration={}",
+                    consent.integration_id
+                );
+                continue;
+            }
             if lock(&self.state)
                 .grants
                 .contains_key(&consent.integration_id)
@@ -175,7 +188,8 @@ impl Broker {
                 Grant {
                     max_timeout_ms: consent.max_timeout_ms,
                     approval_mode: consent.approval_mode,
-                    slots: Arc::new(Semaphore::new(4)),
+                    limits: consent.limits,
+                    slots: Limiter::new(consent.limits.max_connections),
                     epoch: id(),
                     label: consent.label,
                     revision,
@@ -204,7 +218,7 @@ impl Broker {
             .map(|s| json!({
                 "integration_id":s.integration_id,"targets":s.targets,
                 "remaining_seconds":s.expires_unix.map(|until| until.saturating_sub(now())),
-                "approval_mode":s.approval_mode,"max_timeout_ms":s.max_timeout_ms
+                "approval_mode":s.approval_mode,"max_timeout_ms":s.max_timeout_ms,"limits":s.limits
             }))
             .collect::<Vec<_>>())
     }

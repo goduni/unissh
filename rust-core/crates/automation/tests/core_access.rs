@@ -13,7 +13,7 @@ use std::{sync::Arc, time::Instant};
 #[cfg(feature = "core")]
 use unissh_automation::{
     core::{CoreExecutor, PromptFactory},
-    ApprovalMode, Broker, Cancel,
+    ApprovalMode, Broker, Cancel, GrantLimits,
 };
 #[cfg(feature = "core")]
 use unissh_ffi::{AuthPrompter, ConnectionProfile, Core, ProfileAuth};
@@ -35,10 +35,6 @@ fn broker(core: Arc<Core>) -> Arc<Broker> {
 }
 #[cfg(feature = "core")]
 #[test]
-#[expect(
-    clippy::significant_drop_tightening,
-    reason = "the reopened broker is used until the final assertion"
-)]
 fn encrypted_native_consent_restores_only_unchanged_targets_and_is_revocable() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("db").to_str().unwrap().to_owned();
@@ -75,6 +71,7 @@ fn encrypted_native_consent_restores_only_unchanged_targets_and_is_revocable() {
         &b.grant_ticket().unwrap(),
         ApprovalMode::Trusted,
         3_600_000,
+        GrantLimits::default(),
     )
     .unwrap();
     b.suspend();

@@ -7,12 +7,11 @@ use std::{
     any::Any,
     collections::BTreeMap,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex, RwLock, Weak,
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use unissh_mcp::{
     contract::{RunCommand, ToolError, ToolRequest},
     Backend, BackendResult, IntegrationId,
@@ -22,8 +21,11 @@ use zeroize::Zeroizing;
 mod access;
 #[cfg(feature = "core")]
 pub mod core;
+mod limits;
 mod output;
 pub use access::SavedAccess;
+pub use limits::{BrokerLimits, GrantLimits};
+use limits::{Limiter, Slot};
 mod working_directory;
 
 /// Result of a broker operation; errors are the fixed MCP wire errors.
@@ -190,8 +192,8 @@ pub trait Executor: Send + Sync + 'static {
 
 struct LiveConnection {
     inner: Arc<dyn Connection>,
-    _slot: OwnedSemaphorePermit,
-    _owner_slot: OwnedSemaphorePermit,
+    _slot: Slot,
+    _owner_slot: Slot,
 }
 /// How commands under a grant are approved.
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -207,7 +209,8 @@ pub enum ApprovalMode {
 struct Grant {
     max_timeout_ms: u32,
     approval_mode: ApprovalMode,
-    slots: Arc<Semaphore>,
+    limits: GrantLimits,
+    slots: Arc<Limiter>,
     epoch: String,
     label: String,
     revision: [u64; 2],
@@ -254,6 +257,9 @@ struct Run {
     output: output::OutputBuffer,
     bytes: usize,
     truncated: bool,
+    /// A worker thread still has to seal this run's recording with its outcome;
+    /// until then the record must not be evicted, even once finished.
+    worker: bool,
 }
 #[derive(Default)]
 struct State {
@@ -263,12 +269,9 @@ struct State {
     retained_bytes: usize,
 }
 
-/// Limits are deliberately shared by persistent and one-shot paths.
-const OUTPUT_PER_RUN: usize = 1024 * 1024;
-const OUTPUT_TOTAL: usize = 8 * 1024 * 1024;
+/// Fixed protocol limits; resource ceilings are [`GrantLimits`] and [`BrokerLimits`],
+/// shared by persistent and one-shot paths.
 const PAGE_BYTES: usize = 64 * 1024;
-const RECORDS_PER_GRANT: usize = 128;
-const RECORDS_TOTAL: usize = 256;
 const GRANTS_TOTAL: usize = 32;
 
 /// The native authorization broker: owns grants, SSH sessions and command runs.
@@ -276,7 +279,8 @@ pub struct Broker {
     weak: Weak<Self>,
     executor: Arc<dyn Executor>,
     state: Mutex<State>,
-    slots: Arc<Semaphore>,
+    limits: Mutex<BrokerLimits>,
+    slots: Arc<Limiter>,
     admission: RwLock<()>,
     revocation_epoch: AtomicU64,
     suspended: AtomicBool,
@@ -290,7 +294,8 @@ impl Broker {
             weak: weak.clone(),
             executor,
             state: Mutex::new(State::default()),
-            slots: Arc::new(Semaphore::new(8)),
+            limits: Mutex::new(BrokerLimits::default()),
+            slots: Limiter::new(BrokerLimits::default().max_connections),
             admission: RwLock::new(()),
             revocation_epoch: AtomicU64::new(0),
             suspended: AtomicBool::new(false),
@@ -387,11 +392,13 @@ impl Broker {
             ticket,
             approval_mode,
             600_000,
+            GrantLimits::default(),
         )
     }
 
-    /// Grants with an explicit approval policy and timeout ceiling; errors when the
-    /// limits are out of range, the ticket is stale or a target cannot be resolved.
+    /// Grants with an explicit approval policy, timeout ceiling and resource limits;
+    /// errors when the limits are out of range, the ticket is stale or a target
+    /// cannot be resolved.
     #[expect(
         clippy::too_many_arguments,
         reason = "signature mirrors the native grant UI contract; a params struct would be an API change"
@@ -409,11 +416,17 @@ impl Broker {
         ticket: &str,
         approval_mode: ApprovalMode,
         max_timeout_ms: u32,
+        limits: GrantLimits,
     ) -> Result<()> {
         if !(1..=86_400_000).contains(&max_timeout_ms) {
             return Err(ToolError::TimeoutLimit);
         }
-        if owner.is_empty() || targets.is_empty() || targets.len() > 64 || seconds == Some(0) {
+        if !limits.is_valid()
+            || owner.is_empty()
+            || targets.is_empty()
+            || targets.len() > 64
+            || seconds == Some(0)
+        {
             return Err(ToolError::TargetUnavailable);
         }
         let (generation, revision): (u64, [u64; 2]) =
@@ -458,6 +471,7 @@ impl Broker {
             seconds,
             approval_mode,
             max_timeout_ms,
+            limits,
             fingerprint,
         )?;
         self.revoke_inner(Some(owner));
@@ -466,7 +480,8 @@ impl Broker {
             Grant {
                 max_timeout_ms,
                 approval_mode,
-                slots: Arc::new(Semaphore::new(4)),
+                limits,
+                slots: Limiter::new(limits.max_connections),
                 epoch: id(),
                 label,
                 revision,
@@ -474,7 +489,29 @@ impl Broker {
                 targets: resolved,
             },
         );
-        log::info!("MCP grant issued: integration={owner}, ttl_seconds={seconds:?}, approval_mode={approval_mode:?}");
+        log::info!("MCP grant issued: integration={owner}, ttl_seconds={seconds:?}, approval_mode={approval_mode:?}, limits={limits:?}");
+        Ok(())
+    }
+
+    /// Application-wide limits currently in force.
+    pub fn limits(&self) -> BrokerLimits {
+        *lock(&self.limits)
+    }
+
+    /// Native settings only. Applies new application-wide limits at once: a lower
+    /// connection ceiling refuses new connections without closing open ones, and
+    /// a lower record ceiling drops the oldest finished command records; errors
+    /// when a value is out of range.
+    pub fn set_limits(&self, limits: BrokerLimits) -> Result<()> {
+        if !limits.is_valid() {
+            return Err(ToolError::TargetUnavailable);
+        }
+        let mut current = lock(&self.limits);
+        *current = limits;
+        self.slots.set_capacity(limits.max_connections);
+        drop(current);
+        lock(&self.state).trim(&limits);
+        log::info!("MCP limits changed: limits={limits:?}");
         Ok(())
     }
 
@@ -542,10 +579,6 @@ impl Broker {
         }
     }
 
-    #[expect(
-        clippy::significant_drop_tightening,
-        reason = "connection leases must stay held until the connections are closed after the state lock is released"
-    )]
     fn sweep(&self) {
         let revision = self.executor.revision().ok();
         let now = Instant::now();
@@ -630,10 +663,6 @@ impl Broker {
         clippy::significant_drop_tightening,
         reason = "the state guard must cover the grant check and the tool's state change atomically"
     )]
-    #[expect(
-        clippy::map_err_ignore,
-        reason = "ToolError is the fixed MCP wire error set and carries no source by design"
-    )]
     fn request(self: &Arc<Self>, owner: String, request: ToolRequest) -> Result<Value> {
         self.sweep();
         if let ToolRequest::GetAccessStatus(r) = &request {
@@ -650,13 +679,14 @@ impl Broker {
                 .err()
                 .or_else(|| grant.is_none().then_some(ToolError::GrantRequired));
             let max = grant.map_or(600_000, |g| g.max_timeout_ms);
+            let limits = grant.map_or_else(GrantLimits::default, |g| g.limits);
             return Ok(
                 json!({"status": error.map_or_else(|| "ready".to_owned(), error_code),
                 "message": error.map_or("Access is ready.", ToolError::message),
                 "approval_mode": grant.map(|g| g.approval_mode),
                 "remaining_seconds": grant.and_then(|g| g.until).map(|d| d.saturating_duration_since(Instant::now()).as_secs()),
-                "limits": {"max_timeout_ms": max, "default_timeout_ms": 120_000_u32.min(max), "max_connections": 4, "max_active_commands": 8, "max_retained_commands": RECORDS_PER_GRANT, "max_session_records":32,
-                    "output_per_run_bytes":OUTPUT_PER_RUN,"output_page_bytes":PAGE_BYTES,
+                "limits": {"max_timeout_ms": max, "default_timeout_ms": 120_000_u32.min(max), "max_connections": limits.max_connections, "max_active_commands": limits.max_active_commands, "max_retained_commands": limits.retained_commands, "max_session_records": limits.retained_sessions,
+                    "output_per_run_bytes":limits.output_per_run_bytes,"output_page_bytes":PAGE_BYTES,
                     "output_retention_seconds":null, "idle_session_seconds":300, "stdin_bytes":32768, "env_bytes":16384}}),
             );
         }
@@ -721,15 +751,13 @@ impl Broker {
                         Err(ToolError::RequestConflict)
                     };
                 }
-                if state.sessions.values().filter(|s| s.owner == owner).count() >= 32 {
-                    return Err(ToolError::Busy);
-                }
+                let limits = grant.limits;
                 if state
                     .sessions
                     .values()
                     .filter(|s| s.owner == owner && matches!(s.state, "connecting" | "ready"))
                     .count()
-                    >= 4
+                    >= usize::try_from(limits.max_connections).unwrap_or(usize::MAX)
                 {
                     return Err(ToolError::Busy);
                 }
@@ -740,16 +768,11 @@ impl Broker {
                     .ok_or(ToolError::TargetUnavailable)?;
                 let deadline = grant.until;
                 let attribution = grant.label.clone();
-                let owner_slot = grant
-                    .slots
-                    .clone()
-                    .try_acquire_owned()
-                    .map_err(|_| ToolError::Busy)?;
-                let permit = self
-                    .slots
-                    .clone()
-                    .try_acquire_owned()
-                    .map_err(|_| ToolError::Busy)?;
+                let owner_slot = grant.slots.try_acquire().ok_or(ToolError::Busy)?;
+                let permit = self.slots.try_acquire().ok_or(ToolError::Busy)?;
+                if !state.admit_session(&owner, limits.retained_sessions) {
+                    return Err(ToolError::Busy);
+                }
                 let sid = id();
                 let stop = Arc::new(AtomicBool::new(false));
                 let session = Session {
@@ -894,11 +917,6 @@ impl Broker {
                         Err(ToolError::RequestConflict)
                     };
                 }
-                if state.runs.len() >= RECORDS_TOTAL
-                    || state.runs.values().filter(|r| r.owner == owner).count() >= RECORDS_PER_GRANT
-                {
-                    return Err(ToolError::Busy);
-                }
                 if !grant.targets.contains_key(&target_id) {
                     return Err(ToolError::TargetUnavailable);
                 }
@@ -919,11 +937,15 @@ impl Broker {
                     .values()
                     .filter(|r| r.owner == owner && r.finished_at.is_none())
                     .count()
-                    >= 8
+                    >= usize::try_from(grant.limits.max_active_commands).unwrap_or(usize::MAX)
                 {
                     return Err(ToolError::Busy);
                 }
                 let approval_mode = grant.approval_mode;
+                let retained = grant.limits.retained_commands;
+                if !state.admit_run(&owner, retained, self.limits().retained_commands) {
+                    return Err(ToolError::Busy);
+                }
                 let rid = id();
                 state.runs.insert(
                     rid.clone(),
@@ -956,6 +978,7 @@ impl Broker {
                         output: output::OutputBuffer::default(),
                         bytes: 0,
                         truncated: false,
+                        worker: false,
                     },
                 );
                 drop(state);
@@ -1057,6 +1080,7 @@ impl Broker {
                 "label": g.label,
                 "approval_mode": g.approval_mode,
                 "max_timeout_ms": g.max_timeout_ms,
+                "limits": g.limits,
                 "remaining_seconds": g.until.map(|until| until.saturating_duration_since(Instant::now()).as_secs()),
                 "targets": g.targets.values().map(|t| &t.info).collect::<Vec<_>>()
             })
@@ -1245,10 +1269,6 @@ impl Broker {
         clippy::significant_drop_tightening,
         reason = "connection leases and the state guard must span the authorization and the run's publication"
     )]
-    #[expect(
-        clippy::map_err_ignore,
-        reason = "ToolError is the fixed MCP wire error set and carries no source by design"
-    )]
     fn start_run(self: &Arc<Self>, run_id: &str, allowed: bool, mode: ApprovalMode) -> Result<()> {
         self.sweep();
         let mut state = lock(&self.state);
@@ -1307,15 +1327,8 @@ impl Broker {
             (
                 None,
                 Some((
-                    self.slots
-                        .clone()
-                        .try_acquire_owned()
-                        .map_err(|_| ToolError::Busy)?,
-                    grant
-                        .slots
-                        .clone()
-                        .try_acquire_owned()
-                        .map_err(|_| ToolError::Busy)?,
+                    self.slots.try_acquire().ok_or(ToolError::Busy)?,
+                    grant.slots.try_acquire().ok_or(ToolError::Busy)?,
                 )),
             )
         };
@@ -1346,6 +1359,7 @@ impl Broker {
         };
         run.started_at = Some(Instant::now());
         run.started_unix_ms = Some(unix_ms());
+        run.worker = true;
         let broker = self.clone();
         std::thread::spawn(move || {
             // Core state must never be acquired while holding broker state:
@@ -1363,6 +1377,7 @@ impl Broker {
                 Err(error) => {
                     if let Some(run) = lock(&broker.state).runs.get_mut(&rid) {
                         finish(run, "failed", Some(error));
+                        run.worker = false;
                     }
                     return;
                 }
@@ -1455,6 +1470,7 @@ impl Broker {
                     );
                 }
                 outcome = run.state;
+                run.worker = false;
                 if let Some(sid) = run.session.clone() {
                     if let Some(s) = state.sessions.get_mut(&sid) {
                         s.idle = Instant::now();
@@ -1481,10 +1497,6 @@ impl Backend for Broker {
     #[expect(
         clippy::map_err_ignore,
         reason = "ToolError is the fixed MCP wire error set and carries no source by design"
-    )]
-    #[expect(
-        clippy::significant_drop_tightening,
-        reason = "`broker` is the owning handle every poll uses until the wait ends; it is not a lock guard"
     )]
     fn call(&self, integration: IntegrationId, request: ToolRequest) -> BackendResult<'_> {
         let broker = self.weak.upgrade();
@@ -1648,15 +1660,35 @@ impl Output for RunSink {
         let Some(b) = self.broker.upgrade() else {
             return;
         };
+        let total = b.limits().output_total_bytes;
         let mut state = lock(&b.state);
-        if !state.runs.get(&self.run).is_some_and(|r| {
-            state.grants.get(&r.owner).is_some_and(|g| {
-                g.epoch == r.epoch && g.until.is_none_or(|until| Instant::now() < until)
+        let Some(wanted) = state
+            .runs
+            .get(&self.run)
+            .filter(|r| !cancelled(&r.cancel) && r.finished_at.is_none())
+            .and_then(|r| {
+                state
+                    .grants
+                    .get(&r.owner)
+                    .filter(|g| {
+                        g.epoch == r.epoch && g.until.is_none_or(|until| Instant::now() < until)
+                    })
+                    .map(|g| {
+                        usize::try_from(g.limits.output_per_run_bytes)
+                            .unwrap_or(usize::MAX)
+                            .saturating_sub(r.bytes)
+                            .min(bytes.len())
+                    })
             })
-        }) {
+        else {
             return;
-        }
-        let remaining = OUTPUT_TOTAL.saturating_sub(state.retained_bytes);
+        };
+        let owner = state
+            .runs
+            .get(&self.run)
+            .map(|r| r.owner.clone())
+            .unwrap_or_default();
+        let remaining = state.output_room(&owner, wanted, total);
         let Some(run) = state
             .runs
             .get_mut(&self.run)
@@ -1664,10 +1696,7 @@ impl Output for RunSink {
         else {
             return;
         };
-        let kept = bytes
-            .len()
-            .min(remaining)
-            .min(OUTPUT_PER_RUN.saturating_sub(run.bytes));
+        let kept = wanted.min(remaining);
         let Some(kept_bytes) = bytes.get(..kept) else {
             return;
         };
@@ -1839,6 +1868,23 @@ mod deadlines {
         );
     }
     #[test]
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the guard deliberately spans the whole eviction scenario"
+    )]
+    fn a_finished_run_stays_until_its_worker_has_sealed_the_recording() {
+        let (b, rid) = pending();
+        let mut state = lock(&b.state);
+        let run = state.runs.get_mut(&rid).unwrap();
+        finish(run, "completed", None);
+        run.worker = true;
+        assert!(!state.admit_run("a", 1, 256));
+        assert!(state.runs.contains_key(&rid));
+        state.runs.get_mut(&rid).unwrap().worker = false;
+        assert!(state.admit_run("a", 1, 256));
+        assert!(state.runs.is_empty());
+    }
+    #[test]
     fn expired_lease_drops_output_before_housekeeping_runs() {
         let (b, rid) = pending();
         lock(&b.state).grants.get_mut("a").unwrap().until =
@@ -1854,10 +1900,6 @@ mod deadlines {
         assert!(b.review()["grants"].as_array().unwrap().is_empty());
     }
     #[test]
-    #[expect(
-        clippy::significant_drop_tightening,
-        reason = "`b` is the broker under test and is used until the last assertion"
-    )]
     fn stale_expiry_work_cannot_revoke_replaced_or_currently_valid_grants() {
         let b = Broker::new(Arc::new(ExecutorFixture));
         b.grant("a", "old".into(), vec![("v".into(), "p".into())], 30)

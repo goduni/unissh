@@ -15,6 +15,7 @@ import { MONO } from "@/theme/tokens";
 import { McpAccessEditor } from "./mcp/McpAccessEditor";
 import { formatDuration } from "./mcp/duration";
 import { McpConnectionGuide } from "./mcp/McpConnectionGuide";
+import { McpAppLimitsSettings } from "./mcp/McpLimits";
 import "./mcp/mcp.css";
 
 export function ViewMcp() {
@@ -225,6 +226,7 @@ export function ViewMcp() {
               </Field>
               <p>{t("mcp.portHint")}</p>
               <p>{t("mcp.localOnly")}</p>
+              <McpAppLimitsSettings />
             </section>
           )}
           {(error || failed || status.error) && (
@@ -441,9 +443,10 @@ export function ViewMcp() {
                         initialSeconds={accessChoices?.remaining_seconds ?? null}
                         initialApprovalMode={accessChoices?.approval_mode ?? "manual"}
                         initialMaxTimeoutMs={accessChoices?.max_timeout_ms ?? 600000}
+                        initialLimits={accessChoices?.limits}
                         busy={busy}
                         onCancel={() => setEditor(null)}
-                        onSave={(targets, seconds, approvalMode, maxTimeoutMs) =>
+                        onSave={(targets, seconds, approvalMode, maxTimeoutMs, limits) =>
                           void act(async () => {
                             await api.mcpGrant(
                               integration.id,
@@ -452,6 +455,7 @@ export function ViewMcp() {
                               editor.selection.ticket,
                               approvalMode,
                               maxTimeoutMs,
+                              limits,
                             );
                             if (alive.current) setEditor(null);
                           })

@@ -38,6 +38,15 @@ starts with `0.`:
   downloading (bytes and percent), installing, restarting. A download that
   receives nothing for 30 seconds is marked as stalled and offers the release
   page instead of an indefinite "Installing…".
+- Local MCP resource limits are configurable: per integration in the access
+  editor (connections, commands in progress, command and session history,
+  output per command) and for all integrations in the local MCP server options
+  (connections, command history, total output). History no longer blocks new
+  work: past a history limit the oldest finished commands and closed sessions
+  are dropped, so an integration no longer answers `busy` forever after 128
+  commands or 32 sessions, and full output storage no longer truncates every
+  new command. `busy` now means connections or commands in progress fill a
+  limit, or the session is running another command.
 
 ## [0.6.0] — 2026-10-11
 

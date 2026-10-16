@@ -1277,6 +1277,7 @@ async fn only_native_grant_can_raise_command_timeout() {
         &ticket,
         ApprovalMode::Manual,
         3600000,
+        GrantLimits::default(),
     )
     .unwrap();
     let targets = call(&b, "a", "list_targets", json!({})).await.unwrap();
@@ -1343,6 +1344,7 @@ fn saved_access_survives_restart_and_suspend_without_replaying_work() {
         &b.grant_ticket().unwrap(),
         ApprovalMode::Trusted,
         3_600_000,
+        GrantLimits::default(),
     )
     .unwrap();
     b.suspend();
@@ -1613,4 +1615,299 @@ async fn native_search_matches_full_commands_and_host_context_without_executing_
     assert!(b.search_commands("a", "привет").unwrap().is_empty());
     fake.revision.fetch_add(1, Ordering::SeqCst);
     assert_eq!(b.search_commands("a", ""), Err(ToolError::GrantRequired));
+}
+
+async fn limited_target(
+    b: &Broker,
+    owner: &str,
+    mode: ApprovalMode,
+    limits: GrantLimits,
+) -> String {
+    b.grant_with_limits(
+        owner,
+        owner.into(),
+        vec![("v".into(), "p".into())],
+        None,
+        &b.grant_ticket().unwrap(),
+        mode,
+        600_000,
+        limits,
+    )
+    .unwrap();
+    call(b, owner, "list_targets", json!({})).await.unwrap()["targets"][0]["target_id"]
+        .as_str()
+        .unwrap()
+        .into()
+}
+async fn run(b: &Broker, owner: &str, target: &str, command: &str, key: &str) -> Result<Value> {
+    call(b, owner, "run_command", json!({"session_id":null,"target_id":target,"command":command,"request_key":key,"wait_ms":1000})).await
+}
+fn listed_keys(commands: &Value) -> Vec<String> {
+    let mut keys: Vec<_> = commands["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["request_key"].as_str().unwrap().to_owned())
+        .collect();
+    keys.sort();
+    keys
+}
+
+#[tokio::test]
+async fn finished_command_records_make_room_instead_of_refusing_work() {
+    let b = Broker::new(Arc::new(Fake::default()));
+    let limits = GrantLimits {
+        max_active_commands: 2,
+        retained_commands: 2,
+        ..GrantLimits::default()
+    };
+    let t = limited_target(&b, "a", ApprovalMode::Trusted, limits).await;
+    for key in ["1", "2", "3", "4"] {
+        assert_eq!(
+            run(&b, "a", &t, "ok", key).await.unwrap()["state"],
+            "completed"
+        );
+    }
+    let listed = call(&b, "a", "list_commands", json!({})).await.unwrap();
+    assert_eq!(listed_keys(&listed), ["3", "4"]);
+    let status = call(&b, "a", "get_access_status", json!({})).await.unwrap();
+    assert_eq!(status["limits"]["max_retained_commands"], 2);
+}
+
+#[tokio::test]
+async fn history_must_hold_the_work_that_can_be_in_flight() {
+    let b = Broker::new(Arc::new(Fake::default()));
+    let grant = |limits| {
+        b.grant_with_limits(
+            "a",
+            "a".into(),
+            vec![("v".into(), "p".into())],
+            None,
+            &b.grant_ticket().unwrap(),
+            ApprovalMode::Manual,
+            600_000,
+            limits,
+        )
+    };
+    for limits in [
+        GrantLimits {
+            retained_commands: 7,
+            ..GrantLimits::default()
+        },
+        GrantLimits {
+            retained_sessions: 3,
+            ..GrantLimits::default()
+        },
+        GrantLimits {
+            output_per_run_bytes: 1024 * 1024 + 1,
+            ..GrantLimits::default()
+        },
+    ] {
+        assert_eq!(
+            grant(limits),
+            Err(ToolError::TargetUnavailable),
+            "{limits:?}"
+        );
+    }
+    let t = limited_target(
+        &b,
+        "a",
+        ApprovalMode::Manual,
+        GrantLimits {
+            max_active_commands: 1,
+            retained_commands: 1,
+            ..GrantLimits::default()
+        },
+    )
+    .await;
+    let pending = run(&b, "a", &t, "ok", "pending").await.unwrap();
+    assert_eq!(pending["state"], "awaiting_approval");
+    assert_eq!(run(&b, "a", &t, "ok", "next").await, Err(ToolError::Busy));
+    b.approve(pending["run_id"].as_str().unwrap(), false)
+        .unwrap();
+    assert_eq!(
+        run(&b, "a", &t, "ok", "next").await.unwrap()["state"],
+        "awaiting_approval"
+    );
+    let listed = call(&b, "a", "list_commands", json!({})).await.unwrap();
+    assert_eq!(listed_keys(&listed), ["next"]);
+}
+
+#[tokio::test]
+async fn application_record_limit_prefers_the_callers_own_history_and_applies_at_once() {
+    let b = Broker::new(Arc::new(Fake::default()));
+    let a = limited_target(&b, "a", ApprovalMode::Trusted, GrantLimits::default()).await;
+    let other = limited_target(&b, "b", ApprovalMode::Trusted, GrantLimits::default()).await;
+    run(&b, "b", &other, "ok", "b0").await.unwrap();
+    for n in 0..17 {
+        run(&b, "a", &a, "ok", &format!("a{n:02}")).await.unwrap();
+    }
+    b.set_limits(BrokerLimits {
+        retained_commands: 16,
+        ..BrokerLimits::default()
+    })
+    .unwrap();
+    assert_eq!(b.limits().retained_commands, 16);
+    // Lowering the limit drops the oldest finished records of anyone: "b0" and "a00".
+    let listed = call(&b, "b", "list_commands", json!({})).await.unwrap();
+    assert!(listed_keys(&listed).is_empty());
+    let listed = call(&b, "a", "list_commands", json!({})).await.unwrap();
+    assert_eq!(listed_keys(&listed).first().unwrap(), "a01");
+    run(&b, "b", &other, "ok", "b1").await.unwrap();
+    // The caller had nothing of its own to drop, so the oldest overall went.
+    let listed = call(&b, "a", "list_commands", json!({})).await.unwrap();
+    assert_eq!(listed_keys(&listed).first().unwrap(), "a02");
+    run(&b, "b", &other, "ok", "b2").await.unwrap();
+    // Now it drops its own oldest record instead of another integration's.
+    let listed = call(&b, "b", "list_commands", json!({})).await.unwrap();
+    assert_eq!(listed_keys(&listed), ["b2"]);
+    let listed = call(&b, "a", "list_commands", json!({})).await.unwrap();
+    assert_eq!(listed_keys(&listed).first().unwrap(), "a02");
+    assert_eq!(
+        b.set_limits(BrokerLimits {
+            retained_commands: 15,
+            ..BrokerLimits::default()
+        }),
+        Err(ToolError::TargetUnavailable)
+    );
+    assert_eq!(b.limits().retained_commands, 16);
+}
+
+#[tokio::test]
+async fn retained_output_displaces_finished_output_instead_of_truncating_new_runs() {
+    let b = Broker::new(Arc::new(Fake::default()));
+    b.set_limits(BrokerLimits {
+        output_total_bytes: 3 * 1024 * 1024,
+        ..BrokerLimits::default()
+    })
+    .unwrap();
+    let limits = GrantLimits {
+        output_per_run_bytes: 2 * 1024 * 1024,
+        ..GrantLimits::default()
+    };
+    let t = limited_target(&b, "a", ApprovalMode::Trusted, limits).await;
+    let first = run(&b, "a", &t, "large", "first").await.unwrap();
+    assert_eq!(first["truncated"], false);
+    let second = run(&b, "a", &t, "large", "second").await.unwrap();
+    assert_eq!(second["truncated"], false);
+    let listed = call(&b, "a", "list_commands", json!({})).await.unwrap();
+    assert_eq!(listed_keys(&listed), ["second"]);
+}
+
+#[tokio::test]
+async fn connection_and_session_limits_follow_the_grant() {
+    let b = Broker::new(Arc::new(Fake::default()));
+    let limits = GrantLimits {
+        max_connections: 1,
+        retained_sessions: 1,
+        ..GrantLimits::default()
+    };
+    let t = limited_target(&b, "a", ApprovalMode::Trusted, limits).await;
+    let open = |key: &'static str| {
+        call(
+            &b,
+            "a",
+            "open_ssh_session",
+            json!({"target_id":t,"request_key":key,"wait_ms":1000}),
+        )
+    };
+    let first = open("1").await.unwrap();
+    assert_eq!(first["state"], "ready");
+    assert_eq!(open("2").await, Err(ToolError::Busy));
+    assert_eq!(
+        run(&b, "a", &t, "ok", "one-shot").await,
+        Err(ToolError::Busy)
+    );
+    b.close_session(first["session_id"].as_str().unwrap())
+        .unwrap();
+    // The closed session is displaced rather than holding the only record; its
+    // connection slot frees once the background close has run.
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while open("3").await.is_err() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let sessions = call(&b, "a", "list_ssh_sessions", json!({})).await.unwrap();
+    assert_eq!(sessions["sessions"].as_array().unwrap().len(), 1);
+    let status = call(&b, "a", "get_access_status", json!({})).await.unwrap();
+    assert_eq!(status["limits"]["max_connections"], 1);
+    assert_eq!(status["limits"]["max_session_records"], 1);
+}
+
+#[tokio::test]
+async fn application_connection_limit_changes_without_dropping_open_connections() {
+    let b = Broker::new(Arc::new(Fake::default()));
+    let t = limited_target(&b, "a", ApprovalMode::Trusted, GrantLimits::default()).await;
+    let open = |key: &'static str| {
+        call(
+            &b,
+            "a",
+            "open_ssh_session",
+            json!({"target_id":t,"request_key":key,"wait_ms":1000}),
+        )
+    };
+    assert_eq!(open("1").await.unwrap()["state"], "ready");
+    assert_eq!(open("2").await.unwrap()["state"], "ready");
+    b.set_limits(BrokerLimits {
+        max_connections: 1,
+        ..BrokerLimits::default()
+    })
+    .unwrap();
+    assert_eq!(open("3").await, Err(ToolError::Busy));
+    let sessions = call(&b, "a", "list_ssh_sessions", json!({})).await.unwrap();
+    let ready = sessions["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| s["state"] == "ready")
+        .count();
+    assert_eq!(ready, 2);
+    b.set_limits(BrokerLimits::default()).unwrap();
+    assert_eq!(open("3").await.unwrap()["state"], "ready");
+}
+
+#[test]
+fn saved_access_keeps_custom_limits_and_the_old_form_for_defaults() {
+    let e = Arc::new(DurableFake::default());
+    let b = Broker::new(e.clone());
+    let grant = |limits| {
+        b.grant_with_limits(
+            "a",
+            "Agent".into(),
+            vec![("v".into(), "h".into())],
+            None,
+            &b.grant_ticket().unwrap(),
+            ApprovalMode::Manual,
+            600_000,
+            limits,
+        )
+    };
+    grant(GrantLimits::default()).unwrap();
+    let saved = serde_json::to_value(&e.saved.lock().unwrap()[0]).unwrap();
+    assert!(saved.get("limits").is_none(), "{saved}");
+    let custom = GrantLimits {
+        max_connections: 2,
+        max_active_commands: 3,
+        retained_commands: 500,
+        retained_sessions: 40,
+        output_per_run_bytes: 4 * 1024 * 1024,
+    };
+    grant(custom).unwrap();
+    assert_eq!(
+        grant(GrantLimits {
+            max_connections: 0,
+            ..custom
+        }),
+        Err(ToolError::TargetUnavailable)
+    );
+    drop(b);
+    e.inner.revision.fetch_add(1, Ordering::SeqCst);
+    let restarted = Broker::new(e);
+    let review = restarted.review();
+    assert_eq!(review["grants"][0]["limits"]["retained_commands"], 500);
+    assert_eq!(review["saved_access"][0]["limits"]["max_connections"], 2);
+    let old: SavedAccess = serde_json::from_value(saved).unwrap();
+    assert!(serde_json::to_value(&old).unwrap().get("limits").is_none());
 }

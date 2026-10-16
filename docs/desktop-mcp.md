@@ -229,14 +229,32 @@ Example with input, environment and a short wait:
   defaulting to 10 minutes. The grant expiry still bounds execution. Requests
   above this ceiling return `timeout_limit`; an MCP argument cannot raise it. Review displays the exact immutable command in escaped
   JSON string notation, so newlines, terminal controls and bidi controls are visible.
-- There are at most 8 SSH connections overall and 4 simultaneous connections
-  per grant, shared by explicit and one-shot modes, 8 outstanding commands per
-  integration, 128 command records
-  per grant / 256 overall, and 32 KiB per command. Resource exhaustion returns
-  `busy`. Output retains up to 1 MiB per run / 8 MiB total, pages up to 64 KiB,
-  until application exit and never beyond the grant, without a time-based expiry.
-  At byte limits, additional output is discarded and marked truncated; existing
-  retained output is not evicted. Invalid output cursors report `output_expired`. Regranting discards previous records and IDs.
+- Resource limits are set by the user, not by MCP. Per grant, in the access
+  editor: simultaneous connections (1–64, default 4, shared by explicit and
+  one-shot modes), commands in progress (1–256, default 8), command history
+  (up to 10,000 records, default 128, at least the commands in progress),
+  session history (up to 1,000 records, default 32, at least the connections)
+  and output kept per command (1–64 MiB, default 1 MiB). Changing them
+  re-grants access, which closes the integration's sessions and discards its
+  records. For all integrations, in the local MCP server options:
+  simultaneous connections (1–256, default 8), command history (16–100,000
+  records, default 256) and output kept in total (1–1,024 MiB, default 8 MiB);
+  these apply at once, and a lower connection limit refuses new connections
+  without closing open ones. `get_access_status` reports the grant's values.
+  Commands are limited to 32 KiB and output pages to 64 KiB.
+- History rarely blocks new work: only records still in flight can fill a
+  limit. When a history limit is reached, the oldest finished command or closed
+  session is dropped, together with its output, request key and IDs; when total
+  output is full, the oldest finished commands holding output are dropped. The
+  caller's own records go first; when it has none, another integration's oldest
+  finished records go. `busy` is returned while connections or commands in
+  progress fill a limit, or while the session runs another command, so a retry
+  after current work finishes can succeed. A request key reused after its
+  record was dropped starts a new command. Past the per-command output limit,
+  or when total output is held only by commands still running, additional
+  output is discarded and marked truncated. Records last until application exit
+  and never beyond the grant, without a time-based expiry. Invalid output
+  cursors report `output_expired`. Regranting discards previous records and IDs.
 - Cancellation closes local SSH channels; it cannot prove that detached remote
   children stopped or reverse filesystem/network effects. Treat `outcome_unknown`
   as uncertain execution, not permission to retry.
