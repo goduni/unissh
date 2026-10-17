@@ -422,6 +422,7 @@ pub fn run() {
             commands::session_open,
             commands::session_open_reconnecting,
             commands::session_write,
+            commands::session_fill_password,
             commands::session_resize,
             commands::session_close,
             // local terminal (write/resize/close are the session_* ones above)

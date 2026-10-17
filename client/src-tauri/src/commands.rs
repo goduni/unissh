@@ -1633,6 +1633,30 @@ pub async fn session_resize(
     blocking(move || s.resize(cols, rows)).await
 }
 
+/// Type the session's saved login password into the password prompt the core is
+/// offering it for. Takes no item and returns nothing: the core decides which
+/// secret (the one the session logged in with) and whether a prompt is waiting,
+/// and the plaintext never reaches this process's IPC, let alone the webview.
+///
+/// Only a plain SSH session can fill. The auto-reconnecting one re-resolves its
+/// credentials per attempt and has no fill guard; a local shell has no login.
+#[tauri::command]
+pub async fn session_fill_password(id: String, state: State<'_, AppState>) -> ApiResult<()> {
+    let live = state
+        .sessions
+        .get(&id)
+        .ok_or_else(|| ApiError::not_found("session"))?
+        .value()
+        .clone();
+    let s = match live {
+        LiveSession::Plain(s) => s,
+        LiveSession::Reconnecting(_) | LiveSession::Local(_) => {
+            return Err(ApiError::other("this session cannot fill a saved password"))
+        }
+    };
+    blocking(move || s.fill_login_password()).await
+}
+
 #[tauri::command]
 pub async fn session_close(id: String, state: State<'_, AppState>) -> ApiResult<()> {
     if let Some((_, s)) = state.sessions.remove(&id) {

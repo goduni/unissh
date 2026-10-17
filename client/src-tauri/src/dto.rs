@@ -609,6 +609,46 @@ impl From<ffi::PersonalAuth> for PersonalAuth {
     }
 }
 
+/// Which recognised password prompt the core is offering the login password at.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FillPromptKind {
+    Sudo,
+    Doas,
+    Generic,
+}
+impl From<ffi::FillPromptKind> for FillPromptKind {
+    fn from(k: ffi::FillPromptKind) -> Self {
+        match k {
+            ffi::FillPromptKind::Sudo => Self::Sudo,
+            ffi::FillPromptKind::Doas => Self::Doas,
+            ffi::FillPromptKind::Generic => Self::Generic,
+        }
+    }
+}
+
+/// A change in a session's saved-password offer (core → frontend). Carries no
+/// secret and no output: the frontend only shows or hides the offer and, on
+/// `echoed`, clears the line.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum FillEvent {
+    Offered { kind: FillPromptKind },
+    Withdrawn,
+    Rejected,
+    Echoed,
+}
+impl From<ffi::FillEvent> for FillEvent {
+    fn from(e: ffi::FillEvent) -> Self {
+        match e {
+            ffi::FillEvent::Offered { kind } => Self::Offered { kind: kind.into() },
+            ffi::FillEvent::Withdrawn => Self::Withdrawn,
+            ffi::FillEvent::Rejected => Self::Rejected,
+            ffi::FillEvent::Echoed => Self::Echoed,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MultiExecTarget {
