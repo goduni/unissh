@@ -64,6 +64,9 @@ import type { TunnelType } from "@/store/app";
 import { exportPath } from "@/support/paths";
 import { authorizedKeysAppendCmd } from "@/support/authorizedKeys";
 import { indexHostGroups } from "@/support/hostGroups";
+import { AppearancePicker } from "@/components/AppearancePicker";
+import type { TagColor } from "@/components/appearance";
+import { effectiveHostColor, indexAppearance } from "@/support/hostAppearance";
 
 // ── Form atoms ─────────────────────────────────────────────────
 interface MSegOption<T extends string> {
@@ -355,6 +358,17 @@ type AuthSeg = "key" | "password" | "ask" | "personal" | "systemAgent";
  *  Group ids are `slug-timestamp`, so this can never collide with a real one. */
 const NEW_GROUP = "__new__";
 
+/** The colour a host with none of its own will show once saved under `groupId`.
+ *  Save files it under that one group and drops it from every other, so the
+ *  rendering rule runs over the groups as they will be then — not over the one
+ *  group's colour, which would disagree with the tab the moment the rule does. */
+function inheritedOnSave(groups: ServerGroup[], groupId: string): TagColor | null {
+  if (!groupId || groupId === NEW_GROUP) return null; // a new group has no colour yet
+  const self = "\0this-host";
+  const after = groups.map((g) => ({ ...g, memberIds: g.groupId === groupId ? [self] : [] }));
+  return effectiveHostColor({ profileId: self }, indexAppearance(after));
+}
+
 function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: () => void }) {
   const p = usePalette();
   const { t } = useTranslation();
@@ -515,6 +529,10 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
   const [tags, setTags] = useState<string[]>(edit?.tags ?? []);
   const [recordSessions, setRecordSessions] = useState<boolean>(edit?.recordSessions ?? false);
   const [agentForward, setAgentForward] = useState<boolean>(edit?.agentForward ?? false);
+  // Colour tag + icon ids (#134). Seeded with whatever is stored — an id this
+  // build does not know included — so an untouched picker saves it back as is.
+  const [color, setColor] = useState<string | null>(edit?.color ?? null);
+  const [icon, setIcon] = useState<string | null>(edit?.icon ?? null);
   // The explanation a "?" raises. One slot, not one flag per switch — only one
   // can be open, and Escape closes it before the host dialog because the dialog
   // stack in a11y.ts pops innermost first.
@@ -860,6 +878,8 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
       startupSnippetIds,
       recordSessions,
       agentForward,
+      color,
+      icon,
     };
 
     try {
@@ -919,16 +939,17 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
         targetGroupId = ""; // "No group"
       }
 
-      // On edit, moving to another group (or to none) must drop the host from any
-      // group it was previously in — otherwise it lingers in both.
-      if (edit) {
-        for (const g of groups) {
-          if (g.groupId !== targetGroupId && g.memberIds.includes(profileId)) {
-            await api.saveGroup(vault, {
-              ...g,
-              memberIds: g.memberIds.filter((id) => id !== profileId),
-            });
-          }
+      // Drop the host from every other group. On edit, so a move to another
+      // group (or to none) does not leave it in both. On create too: a group
+      // can still list the id of a deleted host, and a new host reusing that
+      // id would silently inherit that group's colour while this editor said
+      // otherwise.
+      for (const g of groups) {
+        if (g.groupId !== targetGroupId && g.memberIds.includes(profileId)) {
+          await api.saveGroup(vault, {
+            ...g,
+            memberIds: g.memberIds.filter((id) => id !== profileId),
+          });
         }
       }
 
@@ -1713,6 +1734,21 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
               </div>
             </Field>
           </div>
+
+          {/* appearance (#134) — after the group, because with no colour of its
+              own the host shows the group's, and the picker says which */}
+          <Field label={t("appearance.title")} w="100%" group>
+            <div style={{ fontSize: TEXT.small, color: p.txt3, marginBottom: rem(10) }}>
+              {t("appearance.hint")}
+            </div>
+            <AppearancePicker
+              color={color}
+              icon={icon}
+              onColor={setColor}
+              onIcon={setIcon}
+              inheritedColor={inheritedOnSave(groups, groupId)}
+            />
+          </Field>
 
           {/* session recording — per host, because recording production is a
               requirement and recording a homelab is noise */}

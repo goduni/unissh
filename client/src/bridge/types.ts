@@ -89,6 +89,11 @@ export interface ConnectionProfile {
   /** Serve a forwarded ssh-agent to this host. Off by default: while the
    *  session lives, anything running as you on that machine can ask to sign. */
   agentForward: boolean;
+  /** Colour tag palette id (#134) — tells production from staging in the
+   *  sidebar and on terminal tabs. Absent → inherited from containing groups. */
+  color?: string | null;
+  /** Icon id replacing the default host glyph (#134). */
+  icon?: string | null;
 }
 
 export interface ServerGroup {
@@ -96,6 +101,11 @@ export interface ServerGroup {
   label: string;
   memberIds: string[];
   parentId?: string | null;
+  /** Colour tag palette id (#134), inherited by the hosts the group contains.
+   *  An id resolved per theme in `components/appearance`, never a colour value. */
+  color?: string | null;
+  /** Icon id for the folder row (#134). Not inherited by member hosts. */
+  icon?: string | null;
 }
 
 /** Personal identity: SSH creds under one name (username + optional refs to a

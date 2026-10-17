@@ -13,7 +13,9 @@ import { HostMenu } from "@/views/sftp/hostpicker";
 import { WorkspaceButton } from "@/components/WorkspaceButton";
 import { useTranslation, tDyn } from "@/i18n";
 import type { ConnectionProfile } from "@/bridge/types";
-import { useApp, type TerminalTab } from "@/store/app";
+import { paneProfile, useApp, type TerminalTab } from "@/store/app";
+import { isKnownIcon, swatchColor } from "@/components/appearance";
+import { colorName, paneHostTag, useAppearanceIndex } from "@/components/ColorTick";
 
 /** Aggregate a tab's pane statuses into one state: online if any pane is live,
  *  else error if any errored, else muted (connecting/closed). Colour AND shape
@@ -84,6 +86,10 @@ export function TermTabStrip({
   const activeRef = useRef<HTMLDivElement>(null);
   const newTabNonce = useApp((s) => s.newTabNonce);
   const setDraggingTab = useApp((s) => s.setDraggingTab);
+  // The tab strip's `hosts` prop is the host PICKER's list; the colour tag reads
+  // the store's own, same as the hosts screen, so the two cannot disagree.
+  const storeHosts = useApp((s) => s.hosts);
+  const appearance = useAppearanceIndex();
 
   // Keep the active tab in view when it changes (e.g. keyboard tab-jump).
   useEffect(() => {
@@ -156,12 +162,23 @@ export function TermTabStrip({
           const stateLabel = tDyn(TAB_STATE_KEY[state]);
           const dotColor = state === "online" ? p.green : state === "error" ? p.red : p.txt3;
           const local = isLocalTab(tab);
+          // The colour tag (#134) of the host the tab is typing into: its focused
+          // pane, since that is where a command goes. The point of the feature is
+          // this strip — telling the production tab from staging before Enter.
+          const focused = tab.panes.find((x) => x.id === tab.activePaneId) ?? tab.panes[0];
+          const profile = focused ? paneProfile(focused) : null;
+          const { color: tag, icon: tabIcon } = profile
+            ? paneHostTag(profile, storeHosts, appearance)
+            : { color: null, icon: null };
+          const tagColor = swatchColor(tag, p);
           // The local marker belongs in the label too, not only in the icon: an
           // icon is `aria-hidden`, and "which machine is this" is exactly the
-          // thing a screen-reader user must not have to infer.
+          // thing a screen-reader user must not have to infer. Same for the tag:
+          // a colour nobody can see must still be heard.
+          const tagLabel = tag ? ` · ${t("appearance.tagged", { color: colorName(tag) })}` : "";
           const label = local
             ? `${tab.title} · ${t("terminal.localBadge")} — ${stateLabel}`
-            : `${tab.title} — ${stateLabel}`;
+            : `${tab.title}${tagLabel} — ${stateLabel}`;
           return (
             <div
               key={tab.id}
@@ -226,6 +243,11 @@ export function TermTabStrip({
                 background: on ? p.bg0 : "transparent",
                 color: on ? p.txt : p.txt3,
                 borderBottom: `2px solid ${on ? p.accent : "transparent"}`,
+                // Tag = a top line, active = the bottom one: two edges, so a
+                // tagged active tab shows both and neither hides the other. An
+                // inset shadow, not a border: it takes no layout, so the strip
+                // keeps its height and an untagged tab is drawn as before.
+                boxShadow: tagColor ? `inset 0 2px 0 ${tagColor}` : undefined,
               }}
             >
               {/* solid dot = connected; hollow ring = not — shape backs up the colour */}
@@ -243,6 +265,7 @@ export function TermTabStrip({
               {/* A local tab is marked, always. Two tabs called "zsh" and
                   "web-prod-01" must not be one glance apart. */}
               {local && <Icon name="laptop" size={13} style={{ opacity: 0.75 }} />}
+              {!local && isKnownIcon(tabIcon) && <Icon name={tabIcon} size={13} style={{ opacity: 0.75 }} />}
               {renaming === tab.id ? (
                 <input
                   autoFocus

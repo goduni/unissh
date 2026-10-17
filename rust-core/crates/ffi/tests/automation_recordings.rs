@@ -31,6 +31,8 @@ fn setup() -> (tempfile::TempDir, std::sync::Arc<Core>, String) {
             startup_snippet_ids: vec![],
             record_sessions: true,
             agent_forward: false,
+            color: None,
+            icon: None,
         },
     )
     .unwrap();
@@ -370,6 +372,8 @@ fn target_context_contains_only_matching_groups_and_tags() {
                 label: label.into(),
                 member_ids: members,
                 parent_id: parent,
+                color: None,
+                icon: None,
             },
         )
         .unwrap();

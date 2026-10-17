@@ -59,6 +59,8 @@ fn encrypted_native_consent_restores_only_unchanged_targets_and_is_revocable() {
             startup_snippet_ids: vec![],
             record_sessions: false,
             agent_forward: false,
+            color: None,
+            icon: None,
         },
     )
     .unwrap();

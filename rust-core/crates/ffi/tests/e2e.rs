@@ -515,6 +515,8 @@ fn referenced_bastion_carries_its_own_proxy() {
             startup_snippet_ids: vec![],
             record_sessions: false,
             agent_forward: false,
+            color: None,
+            icon: None,
         },
     )
     .unwrap();
@@ -583,6 +585,8 @@ fn profile_with_proxy_roundtrip_and_inline_rejection() {
         startup_snippet_ids: vec![],
         record_sessions: false,
         agent_forward: false,
+        color: None,
+        icon: None,
     };
     core.save_connection("v".to_owned(), prof).unwrap();
 
@@ -625,6 +629,8 @@ fn profile_with_proxy_roundtrip_and_inline_rejection() {
         startup_snippet_ids: vec![],
         record_sessions: false,
         agent_forward: false,
+        color: None,
+        icon: None,
     };
     let err = core.save_connection("v".to_owned(), bad).unwrap_err();
     assert!(err.to_string().contains("proxy password"), "got: {err}");
@@ -1605,6 +1611,8 @@ fn connection_profiles_crud_and_import() {
         startup_snippet_ids: vec![],
         record_sessions: false,
         agent_forward: false,
+        color: None,
+        icon: None,
     };
     core.save_connection("v".to_owned(), prof).unwrap();
 
@@ -1670,6 +1678,8 @@ fn cross_type_clobber_rejected() {
         startup_snippet_ids: vec![],
         record_sessions: false,
         agent_forward: false,
+        color: None,
+        icon: None,
     };
     assert!(matches!(
         core.save_connection("v".to_owned(), prof),
@@ -1694,6 +1704,8 @@ fn cross_type_clobber_rejected() {
         startup_snippet_ids: vec![],
         record_sessions: false,
         agent_forward: false,
+        color: None,
+        icon: None,
     };
     core.save_connection("v".to_owned(), prof2).unwrap();
     assert!(matches!(
@@ -2307,6 +2319,8 @@ fn profile_with_vault_password_and_inline_jump_rejection() {
         startup_snippet_ids: vec![],
         record_sessions: false,
         agent_forward: false,
+        color: None,
+        icon: None,
     };
     core.save_connection("v".to_owned(), prof).unwrap();
 
@@ -2346,6 +2360,8 @@ fn profile_with_vault_password_and_inline_jump_rejection() {
         startup_snippet_ids: vec![],
         record_sessions: false,
         agent_forward: false,
+        color: None,
+        icon: None,
     };
     assert!(core.save_connection("v".to_owned(), bad).is_err());
     assert!(matches!(
@@ -2709,6 +2725,8 @@ fn save_profile(core: &Core, id: &str, host: &str, port: u16, key_item: &str, ta
             startup_snippet_ids: vec![],
             record_sessions: false,
             agent_forward: false,
+            color: None,
+            icon: None,
         },
     )
     .unwrap();
@@ -2782,6 +2800,8 @@ fn select_targets_by_tags_excludes_prompt_password() {
             startup_snippet_ids: vec![],
             record_sessions: false,
             agent_forward: false,
+            color: None,
+            icon: None,
         },
     )
     .unwrap();
@@ -2833,6 +2853,8 @@ fn group(id: &str, members: &[&str], parent: Option<&str>) -> unissh_ffi::Server
         label: id.to_owned(),
         member_ids: members.iter().map(ToString::to_string).collect(),
         parent_id: parent.map(str::to_owned),
+        color: None,
+        icon: None,
     }
 }
 
@@ -2992,6 +3014,8 @@ fn dry_run_group_reports_statuses() {
             startup_snippet_ids: vec![],
             record_sessions: false,
             agent_forward: false,
+            color: None,
+            icon: None,
         },
     )
     .unwrap();
@@ -4395,6 +4419,8 @@ fn profile_carries_its_startup_snippets() {
         startup_snippet_ids: vec!["tmux-attach".to_owned(), "cd-app".to_owned()],
         record_sessions: false,
         agent_forward: false,
+        color: None,
+        icon: None,
     };
     core.save_connection("v".to_owned(), p.clone()).unwrap();
 
@@ -4688,6 +4714,8 @@ fn profile_round_trips_a_system_agent_identity() {
             startup_snippet_ids: vec![],
             record_sessions: false,
             agent_forward: false,
+            color: None,
+            icon: None,
         },
     )
     .unwrap();

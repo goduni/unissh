@@ -427,6 +427,12 @@ pub struct ConnectionProfile {
     /// Serve a forwarded ssh-agent to this host.
     #[serde(default)]
     pub agent_forward: bool,
+    /// Colour tag palette id (issue #134); `None` = inherit from groups.
+    #[serde(default)]
+    pub color: Option<String>,
+    /// Icon id replacing the default host glyph (issue #134).
+    #[serde(default)]
+    pub icon: Option<String>,
 }
 
 impl From<ConnectionProfile> for ffi::ConnectionProfile {
@@ -446,6 +452,8 @@ impl From<ConnectionProfile> for ffi::ConnectionProfile {
             startup_snippet_ids: p.startup_snippet_ids,
             record_sessions: p.record_sessions,
             agent_forward: p.agent_forward,
+            color: p.color,
+            icon: p.icon,
         }
     }
 }
@@ -466,6 +474,8 @@ impl From<ffi::ConnectionProfile> for ConnectionProfile {
             startup_snippet_ids: p.startup_snippet_ids,
             record_sessions: p.record_sessions,
             agent_forward: p.agent_forward,
+            color: p.color,
+            icon: p.icon,
         }
     }
 }
@@ -479,6 +489,12 @@ pub struct ServerGroup {
     pub member_ids: Vec<String>,
     #[serde(default)]
     pub parent_id: Option<String>,
+    /// Colour tag palette id (issue #134), inherited by member hosts.
+    #[serde(default)]
+    pub color: Option<String>,
+    /// Icon id for the folder row (issue #134).
+    #[serde(default)]
+    pub icon: Option<String>,
 }
 impl From<ServerGroup> for ffi::ServerGroup {
     fn from(g: ServerGroup) -> Self {
@@ -487,6 +503,8 @@ impl From<ServerGroup> for ffi::ServerGroup {
             label: g.label,
             member_ids: g.member_ids,
             parent_id: g.parent_id,
+            color: g.color,
+            icon: g.icon,
         }
     }
 }
@@ -497,6 +515,8 @@ impl From<ffi::ServerGroup> for ServerGroup {
             label: g.label,
             member_ids: g.member_ids,
             parent_id: g.parent_id,
+            color: g.color,
+            icon: g.icon,
         }
     }
 }

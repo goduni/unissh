@@ -23,7 +23,10 @@ import { useCtx } from "@/store/ctx";
 import { apiErrorMessage, type VaultInfo } from "@/bridge/types";
 import { serverShortLabel, vaultLoc, vaultServer } from "@/bridge/vaults";
 import { useTranslation, tDyn } from "@/i18n";
-import { effectiveHostFilter, indexHostGroups, isUngrouped } from "@/support/hostGroups";
+import { effectiveHostFilter, isUngrouped } from "@/support/hostGroups";
+import { appearanceIcon, swatchColor } from "@/components/appearance";
+import { ColorTick, useAppearanceIndex } from "@/components/ColorTick";
+import { groupColor } from "@/support/hostAppearance";
 
 // The four vault-item types share one screen (ViewSecrets, with in-screen tabs) and
 // now one nav destination. Active-state tests membership of this set, not route===,
@@ -344,6 +347,7 @@ function NavItem({
   sub,
   onClick,
   badge,
+  tag,
   onDropHosts,
 }: {
   icon?: IconName;
@@ -353,6 +357,8 @@ function NavItem({
   sub?: boolean;
   onClick?: () => void;
   badge?: string;
+  /** A group's colour tag id (#134): tints the icon and adds the named tick. */
+  tag?: string | null;
   /** Makes this item a drop target for hosts dragged off the Hosts screen.
    *  Only the group items pass it: "All hosts" is not a group, and dropping a
    *  host on it would mean un-grouping — a menu action, not this gesture. */
@@ -440,10 +446,11 @@ function NavItem({
         fontWeight: active ? 600 : 500,
       }}
     >
-      {icon && <Icon name={icon} size={15} color={active ? p.txt : p.txt3} stroke={1.7} />}
+      {icon && <Icon name={icon} size={15} color={swatchColor(tag, p) ?? (active ? p.txt : p.txt3)} stroke={1.7} />}
       <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {label}
       </span>
+      <ColorTick color={tag} height={12} />
       {badge && <span style={{ width: rem(6), height: rem(6), borderRadius: "50%", background: badge }} />}
       {count != null && (
         <span style={{ fontFamily: MONO, fontSize: TEXT.micro, color: p.txt3, fontWeight: 600 }}>
@@ -952,10 +959,11 @@ export function Sidebar({
   };
 
   // Before the early return below: a hook cannot follow it.
-  const ungroupedCount = useMemo(() => {
-    const groupIndex = indexHostGroups(groups);
-    return hosts.filter((h) => isUngrouped(groupIndex, h.profileId)).length;
-  }, [groups, hosts]);
+  const appearance = useAppearanceIndex();
+  const ungroupedCount = useMemo(
+    () => hosts.filter((h) => isUngrouped(appearance.byHost, h.profileId)).length,
+    [appearance, hosts],
+  );
 
   if (!wide || collapsed) return <SidebarRail onExpand={wide ? onToggleCollapse : undefined} />;
 
@@ -1013,7 +1021,8 @@ export function Sidebar({
           {groups.map((g) => (
             <NavItem
               key={g.groupId}
-              icon={groupIcon(g.label)}
+              icon={appearanceIcon(g.icon, groupIcon(g.label))}
+              tag={groupColor(g.groupId, appearance)}
               label={g.label}
               count={g.memberIds.filter((m) => hosts.some((h) => h.profileId === m)).length}
               sub
