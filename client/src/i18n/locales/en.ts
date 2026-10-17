@@ -2120,6 +2120,7 @@ export const en = {
       "doas": "doas asks for {{user}}'s password",
       "generic": "A program in this terminal asks for a password",
       "insert": "Insert saved password ({{credential}})",
+      "insertPlain": "Insert saved password",
       "anyMachine": "UniSSH can't tell which machine is asking — after `ssh` to another host this goes there.",
       "dismiss": "Dismiss",
       "rejected": "The password prompt came back right away — the saved password may have been rejected.",

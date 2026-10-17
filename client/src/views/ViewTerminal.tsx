@@ -2,7 +2,7 @@
 // a Tauri Channel. Tabs come from the store; each tab holds one or more panes in
 // a recursive split layout, and each pane owns its own session.
 
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Terminal as Xterm, type IDisposable, type IMarker } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
@@ -27,6 +27,7 @@ import { useIsMobile } from "@/store/responsive";
 import { splitLocalTerminal, useCtx } from "@/store/ctx";
 import { localRecordingRequest, useLocalMachine } from "@/store/localShell";
 import { createPaneEvents, passwordFillMode, type PaneEvents } from "@/views/terminal/paneSession";
+import { fillBarSide } from "@/views/terminal/fillBar";
 import { parseOsc52 } from "@/views/terminal/osc52";
 import { resetStaleAppModes } from "@/views/terminal/staleModes";
 import { newImageAddon } from "@/views/terminal/imageAddon";
@@ -341,9 +342,13 @@ function TerminalPane({
   const [fillNotice, setFillNotice] = useState<"rejected" | "echoed" | null>(null);
   // Named on the offer, so the user can tell which saved password would go.
   const [fillCredential, setFillCredential] = useState("");
-  // How much of the pane's foot the bar covers: the terminal gives that up, so
-  // the prompt the offer is about stays in sight above it.
-  const [fillBarHeight, setFillBarHeight] = useState(0);
+  // Which edge the bar is on: away from the cursor, chosen when an offer or a
+  // notice appears (not on every output, so it does not jump around).
+  const [fillSide, setFillSide] = useState<"top" | "bottom">("bottom");
+  const placeFillBar = () => {
+    const term = xtermRef.current;
+    if (term) setFillSide(fillBarSide(term.buffer.active.cursorY, term.rows));
+  };
   // The xterm key handler is installed once, so it reads the offer through refs.
   const fillOfferRef = useRef<FillOffer | null>(null);
   // The newest offer id this session has sent. Events can overtake each other
@@ -378,6 +383,7 @@ function TerminalPane({
         fillSeenRef.current = e.offerId;
         const { offerPasswordFill: on, offerPasswordFillGeneric: generic } = useApp.getState();
         if (!on || (e.kind === "generic" && !generic)) return;
+        placeFillBar();
         showFillOffer({ kind: e.kind, offerId: e.offerId, user: e.user, rejectedBefore: e.rejectedBefore });
         return;
       }
@@ -389,6 +395,7 @@ function TerminalPane({
         // Transient: the prompt itself is still there to be answered by hand.
         showFillOffer(null);
         clearFillNoticeTimer();
+        placeFillBar();
         setFillNotice("rejected");
         fillNoticeTimerRef.current = window.setTimeout(() => {
           fillNoticeTimerRef.current = null;
@@ -401,6 +408,7 @@ function TerminalPane({
         // password prompt was not.
         showFillOffer(null);
         clearFillNoticeTimer();
+        placeFillBar();
         setFillNotice("echoed");
         return;
     }
@@ -1297,10 +1305,7 @@ async function runStartupSnippets(
         dragY.current = null;
       }}
     >
-      <div
-        ref={hostRef}
-        style={{ width: "100%", height: fillBarHeight > 0 ? `calc(100% - ${fillBarHeight}px)` : "100%" }}
-      />
+      <div ref={hostRef} style={{ width: "100%", height: "100%" }} />
       {/* Split panes get an explicit ✕ on hover so closing one is discoverable
           (the right-click menu and Ctrl/Cmd+W still work too). */}
       {multi && paneHover && !searchOpen && (
@@ -1460,7 +1465,7 @@ async function runStartupSnippets(
           credential={fillCredential || paneProfile(pane)?.label || ""}
           shortcut={fillShortcut}
           touch={isMobile}
-          onHeight={setFillBarHeight}
+          side={fillSide}
           onAccept={acceptFill}
           onDismissOffer={() => {
             showFillOffer(null);
@@ -1685,22 +1690,21 @@ interface FillOffer {
   rejectedBefore: boolean;
 }
 
-/** The saved-password offer and the notices a fill leaves, at the foot of a pane.
+/** The saved-password offer and the notices a fill leaves, at an edge of a pane.
  *
  * Non-modal and never focused: the terminal keeps the keyboard, so typing on
  * simply withdraws the offer (the core sees the keystroke) and Enter can never
  * accept it by accident. Accepting is the button or the pane-only shortcut.
  * It never names a host: the core cannot tell which machine is asking — after
  * an `ssh` to another host the prompt is that host's — so neither can this.
- * It reports how much of the pane it covers, so the terminal can shrink and
- * keep the prompt in sight. */
+ * It sits on the edge away from the cursor rather than resizing the terminal. */
 function PasswordFillBar({
   offer,
   notice,
   credential,
   shortcut,
   touch,
-  onHeight,
+  side,
   onAccept,
   onDismissOffer,
   onDismissNotice,
@@ -1710,30 +1714,13 @@ function PasswordFillBar({
   credential: string;
   shortcut: string;
   touch: boolean;
-  onHeight: (px: number) => void;
+  side: "top" | "bottom";
   onAccept: () => void;
   onDismissOffer: () => void;
   onDismissNotice: () => void;
 }) {
   const p = usePalette();
   const { t } = useTranslation();
-  const barRef = useRef<HTMLDivElement | null>(null);
-  // The space from the bar's top edge to the pane's foot, or 0 when it is empty.
-  useLayoutEffect(() => {
-    const el = barRef.current;
-    if (!el) return;
-    const measure = () => {
-      const pane = el.offsetParent as HTMLElement | null;
-      onHeight(el.offsetHeight > 0 && pane ? Math.max(0, pane.clientHeight - el.offsetTop) : 0);
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => {
-      ro.disconnect();
-      onHeight(0);
-    };
-  }, [onHeight]);
   const target = touch ? rem(44) : rem(24);
   const row: CSSProperties = {
     display: "flex",
@@ -1759,7 +1746,7 @@ function PasswordFillBar({
     color: p.txt3,
     cursor: "pointer",
   };
-  const insertLabel = t("terminal.fill.insert", { credential });
+  const insertLabel = credential ? t("terminal.fill.insert", { credential }) : t("terminal.fill.insertPlain");
   const help = t("terminal.fill.anyMachine");
   const prompt = !offer
     ? ""
@@ -1768,7 +1755,6 @@ function PasswordFillBar({
       : t(`terminal.fill.${offer.kind}`, { user: offer.user ?? "" });
   return (
     <div
-      ref={barRef}
       role="status"
       aria-live="polite"
       // Clicking here must not take focus from the terminal, and a touch must not
@@ -1780,7 +1766,7 @@ function PasswordFillBar({
         position: "absolute",
         left: rem(8),
         right: rem(8),
-        bottom: rem(8),
+        ...(side === "top" ? { top: rem(8) } : { bottom: rem(8) }),
         display: "flex",
         flexDirection: "column",
         gap: rem(6),
