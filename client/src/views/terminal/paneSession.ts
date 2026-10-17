@@ -7,7 +7,7 @@
 // and having that written once is what keeps them from drifting.
 
 import type { Terminal as Xterm } from "@xterm/xterm";
-import type { TermEvent } from "@/bridge/types";
+import type { FillEvent, TermEvent } from "@/bridge/types";
 import type { TerminalPaneState } from "@/store/app";
 
 /** Whether returning from the background should re-open this pane.
@@ -125,6 +125,9 @@ export interface PaneEventOptions {
    *  exiting — the only case where reconnecting can help, and one a local shell
    *  never produces (its exit code is always ≥ 0). */
   onClosed: (exit: number, dropped: boolean) => void;
+  /** The core's saved-password offer changed. Only SSH sessions that logged in
+   *  with a vault password ever send one. */
+  onFill: (e: FillEvent) => void;
 }
 
 export interface PaneEvents {
@@ -143,6 +146,10 @@ export function createPaneEvents(opts: PaneEventOptions): PaneEvents {
         const bytes = new Uint8Array(e.bytes);
         opts.term.write(bytes);
         preview.push(bytes);
+        return;
+      }
+      if (e.type === "fill") {
+        opts.onFill(e.event);
         return;
       }
       // exit < 0 ⇒ no clean exit status (peer died / keepalive gave up) ⇒ a drop

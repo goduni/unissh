@@ -603,6 +603,11 @@ export const localShellSplitArgs = (text: string) =>
 
 export const sessionWrite = (id: string, data: number[]) =>
   invoke<void>("session_write", { id, data });
+/** Type the session's saved login password into the prompt the core is offering
+ *  it for, without Enter. No item and no secret in either direction: the core
+ *  binds the password at open and decides whether a prompt is waiting. */
+export const sessionFillPassword = (id: string) =>
+  invoke<void>("session_fill_password", { id });
 export const sessionResize = (id: string, cols: number, rows: number) =>
   invoke<void>("session_resize", { id, cols, rows });
 export const sessionClose = (id: string) => invoke<void>("session_close", { id });

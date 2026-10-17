@@ -154,6 +154,7 @@ describe("createPaneEvents", () => {
     onPreview: () => {},
     closedText: (code: number) => `[closed ${code}]`,
     onClosed: () => {},
+    onFill: () => {},
   };
 
   it("writes output straight to the terminal", () => {
@@ -193,6 +194,20 @@ describe("createPaneEvents", () => {
     createPaneEvents({ ...base, term }).onEvent({ type: "close", exit: 7 });
     const written = term.writeln.mock.calls.map((c) => String(c[0])).join("");
     expect(written).toContain("[closed 7]");
+  });
+
+  it("hands a fill event to onFill without touching the terminal or closing", () => {
+    const term = fakeTerm();
+    const onFill = vi.fn();
+    const onClosed = vi.fn();
+    createPaneEvents({ ...base, term, onFill, onClosed }).onEvent({
+      type: "fill",
+      event: { type: "offered", kind: "sudo" },
+    });
+    expect(onFill).toHaveBeenCalledWith({ type: "offered", kind: "sudo" });
+    expect(term.write).not.toHaveBeenCalled();
+    expect(term.writeln).not.toHaveBeenCalled();
+    expect(onClosed).not.toHaveBeenCalled();
   });
 
   it("ignores everything once the run is cancelled", () => {

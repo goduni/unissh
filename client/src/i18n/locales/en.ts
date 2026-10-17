@@ -1479,6 +1479,7 @@ export const en = {
       "tabPrev": "Previous terminal tab",
       "promptPrev": "Previous prompt (OSC 133)",
       "promptNext": "Next prompt (OSC 133)",
+      "fillPassword": "Insert saved password at a password prompt",
       "copySelection": "Copy selection, otherwise interrupt",
       "editorSave": "Save file",
       "sftpSwitchPane": "Switch to the other pane",
@@ -1601,6 +1602,8 @@ export const en = {
     "gpuRenderingDesc": "Draw the terminal with WebGL instead of the DOM. Smoother on long, fast output. Some graphics drivers render nothing at all with it — if the terminal goes blank, turn this back off. Takes effect on newly opened panes.",
     "terminalImagesTitle": "Inline images",
     "terminalImagesDesc": "Show pictures that programs draw in the terminal (sixel, iTerm2 protocol). Turn off so a remote host cannot paint your screen. Takes effect on newly opened panes.",
+    "passwordFillTitle": "Offer saved password at password prompts",
+    "passwordFillDesc": "When a host you logged into with a saved password asks for it again — sudo, doas, a bare “Password:” — offer to type it. Nothing is typed until you accept, and Enter stays yours.",
     "termFontTitle": "Terminal font size",
     "termFontDesc": "Zoom the terminal text. Also ⌘/Ctrl +, −, 0 while a terminal is open.",
     "termFontSmaller": "Smaller",
@@ -2109,6 +2112,16 @@ export const en = {
       "connecting": "connecting…",
       "closed": "closed",
       "error": "connection error"
+    },
+    "fill": {
+      "sudo": "sudo asks for a password",
+      "doas": "doas asks for a password",
+      "generic": "Password prompt",
+      "insert": "Insert saved password",
+      "insertLabel": "Insert saved password “{{credential}}” for {{host}}",
+      "dismiss": "Dismiss",
+      "rejected": "Saved password was rejected — type it yourself",
+      "echoed": "That prompt echoed the password, so UniSSH hid it and cleared the line. It probably wasn't a password prompt."
     },
     "noSessions": "No active sessions",
     "openHost": "Open a host →",

@@ -439,7 +439,19 @@ export interface InstanceStatus {
 }
 
 // ── streaming channel payloads ─────────────────────────────────
-export type TermEvent = { type: "data"; bytes: number[] } | { type: "close"; exit: number };
+/** Which recognised password prompt the core is offering the login password at. */
+export type FillPromptKind = "sudo" | "doas" | "generic";
+/** A change in a session's saved-password offer. Carries no secret and no
+ *  output — the core decides what is a prompt and types the password itself. */
+export type FillEvent =
+  | { type: "offered"; kind: FillPromptKind }
+  | { type: "withdrawn" }
+  | { type: "rejected" }
+  | { type: "echoed" };
+export type TermEvent =
+  | { type: "data"; bytes: number[] }
+  | { type: "close"; exit: number }
+  | { type: "fill"; event: FillEvent };
 export type ExecEvent =
   | { type: "stdout"; bytes: number[] }
   | { type: "stderr"; bytes: number[] }
