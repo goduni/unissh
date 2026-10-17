@@ -7,3 +7,10 @@
 export function fillBarSide(cursorY: number, rows: number): "top" | "bottom" {
   return rows > 0 && cursorY >= rows / 2 ? "top" : "bottom";
 }
+
+/** What the bar names as the saved password: the item's id when the user chose
+ *  it, the host's label when the id is one the new-host form made up
+ *  (`<slug>-pw-<timestamp>`, which reads as noise). */
+export function fillItemLabel(passwordItemId: string, hostLabel: string): string {
+  return /-pw-\d+$/.test(passwordItemId) ? hostLabel : passwordItemId;
+}

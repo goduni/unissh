@@ -27,7 +27,7 @@ import { useIsMobile } from "@/store/responsive";
 import { splitLocalTerminal, useCtx } from "@/store/ctx";
 import { localRecordingRequest, useLocalMachine } from "@/store/localShell";
 import { createPaneEvents, passwordFillMode, type PaneEvents } from "@/views/terminal/paneSession";
-import { fillBarSide } from "@/views/terminal/fillBar";
+import { fillBarSide, fillItemLabel } from "@/views/terminal/fillBar";
 import { parseOsc52 } from "@/views/terminal/osc52";
 import { resetStaleAppModes } from "@/views/terminal/staleModes";
 import { newImageAddon } from "@/views/terminal/imageAddon";
@@ -375,6 +375,7 @@ function TerminalPane({
     fillSeenRef.current = 0;
     clearFillNoticeTimer();
     setFillNotice(null);
+    setFillCredential("");
   };
   const onFill = (e: FillEvent) => {
     switch (e.type) {
@@ -1670,7 +1671,7 @@ function Divider({ tabId, split, lineColor }: { tabId: string; split: SplitRect;
  *  secrets; the host's label stands in when neither can be found. */
 async function fillCredentialLabel(profile: ConnectionProfile, auth: AuthMethod): Promise<string> {
   if (auth.type !== "vaultPassword") return profile.label;
-  if (profile.auth.type !== "personal") return auth.passwordItemId;
+  if (profile.auth.type !== "personal") return fillItemLabel(auth.passwordItemId, profile.label);
   try {
     const identities = await api.listIdentities(auth.vaultId);
     return identities.find((i) => i.passwordItemId === auth.passwordItemId)?.label || profile.label;
