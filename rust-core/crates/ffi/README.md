@@ -62,7 +62,10 @@ ssh_exec_multi(targets[], command, max_concurrency, timeout_secs)
 open_session(host, port, user, vault_id, auth, jumps[], term, cols, rows, observer)
     -> SshSession            // interactive PTY; output to observer (callback). cols,rows > 0
 SshSession::{write(data), resize(cols, rows), close()}  // resize is best-effort (no server ack)
-SessionObserver::{on_data(bytes), on_close(exit)}   // implemented by the UI
+SshSession::fill_login_password()  // VaultPassword logins only: types the login password into the
+    // prompt the core is offering it for (no Enter); no item argument, plaintext never crosses the FFI
+SessionObserver::{on_data(bytes), on_close(exit), on_fill(FillEvent)}   // implemented by the UI
+    // FillEvent: Offered{kind: Sudo|Doas|Generic} | Withdrawn | Rejected | Echoed
 
 // host groups (type-5 items; only references to profiles/nested groups)
 // ServerGroup{group_id, label, member_ids[], parent_id?} — parent_id for the folder tree in the UI

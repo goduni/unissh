@@ -61,12 +61,15 @@ mod approvals;
 pub mod automation;
 pub mod automation_recording;
 mod key_rotation;
+mod password_fill;
 mod ssh_include;
 mod system_agent;
 mod terminal_workspace;
 
 use approvals::{Approvals, Asker, Connection};
 pub use key_rotation::KeyRotationLink;
+use password_fill::FillGuard;
+pub use password_fill::{FillEvent, FillPromptKind};
 pub use system_agent::{SharedAgentKey, SystemAgent};
 pub use unissh_ssh_transport::AgentCaller;
 
@@ -3760,6 +3763,23 @@ impl Core {
         check_term_size(cols, rows)?;
         let host_for_record = host.clone();
         let user_for_record = user.clone();
+        // Bound here, once, to the item this session logs in with and to nothing
+        // else — see `SshSession::fill_login_password`. Every other kind of login
+        // has no saved password of the session's own to offer.
+        let fill = match &auth {
+            AuthMethod::VaultPassword {
+                vault_id,
+                password_item_id,
+            } => Some(Arc::new(FillGuard::new(
+                vault_id.clone(),
+                password_item_id.clone(),
+                user.clone(),
+                observer.clone(),
+            ))),
+            AuthMethod::Agent { .. }
+            | AuthMethod::Password { .. }
+            | AuthMethod::SystemAgent { .. } => None,
+        };
         let client = self.connect_session_forwarding(
             &auth,
             &jumps,
@@ -3793,6 +3813,13 @@ impl Core {
                 })
             }
         };
+        let sink: Arc<dyn OutputSink> = match &fill {
+            Some(guard) => Arc::new(FillSink {
+                guard: guard.clone(),
+                inner: sink,
+            }),
+            None => sink,
+        };
         let shell = self
             .rt
             .block_on(client.open_shell(&term, cols, rows, sink))
@@ -3802,6 +3829,8 @@ impl Core {
             _client: Mutex::new(client),
             shell,
             rt: self.rt.clone(),
+            fill,
+            state: self.state.clone(),
         }))
     }
 
@@ -9358,6 +9387,10 @@ pub trait SessionObserver: Send + Sync {
     fn on_data(&self, data: Vec<u8>);
     /// The session is closed; the exit code (or -1).
     fn on_close(&self, exit_status: i32);
+    /// The saved-password offer changed (see [`SshSession::fill_login_password`]).
+    /// Only a session that logged in with a vault password item ever reports one;
+    /// the event carries no secret and no output.
+    fn on_fill(&self, event: FillEvent);
 }
 
 /// Wall-clock seconds since the epoch, for stamping a recording.
@@ -9646,6 +9679,28 @@ impl OutputSink for ObserverSink {
     }
 }
 
+/// Outermost link of a vault-password session's sink chain: runs the output
+/// through the session's [`FillGuard`] before anything else sees it.
+///
+/// Outermost so the echo mask applies before the recorder: a password that a
+/// mis-detected prompt echoed must not survive in the recording any more than on
+/// screen.
+struct FillSink {
+    guard: Arc<FillGuard>,
+    inner: Arc<dyn OutputSink>,
+}
+
+impl OutputSink for FillSink {
+    fn on_data(&self, data: Vec<u8>) {
+        let inner = &self.inner;
+        self.guard
+            .on_output(data, std::time::Instant::now(), |out| inner.on_data(out));
+    }
+    fn on_close(&self, exit_status: Option<u32>) {
+        self.inner.on_close(exit_status);
+    }
+}
+
 /// Feeds a local pty's output into the ordinary session sink chain.
 ///
 /// The chain (observer, optionally wrapped by the recorder) is typed on the SSH
@@ -9728,12 +9783,22 @@ pub struct SshSession {
     _client: Mutex<SshClient>,
     shell: ShellHandle,
     rt: Arc<tokio::runtime::Runtime>,
+    /// Present only when the session logged in with a vault password item:
+    /// that item is the one secret [`Self::fill_login_password`] can type.
+    fill: Option<Arc<FillGuard>>,
+    /// The core state, for re-reading that item at fill time.
+    state: Arc<Mutex<Option<CoreState>>>,
 }
 
 #[uniffi::export]
 impl SshSession {
     /// Sends input (keystrokes) to the session.
     pub fn write(&self, data: Vec<u8>) -> Result<(), FfiError> {
+        // Any keystroke withdraws a pending offer, before it reaches the remote:
+        // a password the user started typing must not get the saved one appended.
+        if let Some(fill) = &self.fill {
+            fill.note_input();
+        }
         self.rt
             .block_on(self.shell.write(&data))
             .map_err(FfiError::ssh)
@@ -9754,6 +9819,51 @@ impl SshSession {
     /// Closes the session.
     pub fn close(&self) -> Result<(), FfiError> {
         self.rt.block_on(self.shell.close()).map_err(FfiError::ssh)
+    }
+
+    /// Types the session's saved login password into the prompt the core is
+    /// currently offering it for — without Enter: the user submits it.
+    ///
+    /// The invariant: a session can type exactly one secret — the vault password
+    /// item it authenticated with — into exactly this session, only while the
+    /// core itself sees a recognised password prompt at the end of the output,
+    /// at most once per prompt, never followed by Enter. The plaintext never
+    /// crosses the FFI/IPC boundary and never reaches the UI, the clipboard, the
+    /// scrollback or a recording. Hence no arguments: the item was bound at
+    /// `open_session`, and the prompt is the core's call, not the caller's.
+    ///
+    /// The item is re-read at fill time, so an edited password is the current
+    /// one. Refusals: [`FfiError::Locked`] (the core is locked), an
+    /// [`FfiError::Other`] when this session did not log in with a saved password
+    /// or no offer is live (none yet, already filled, the user typed, or the
+    /// prompt came back after a fill — a rejected password is not retried).
+    pub fn fill_login_password(&self) -> Result<(), FfiError> {
+        let Some(fill) = self.fill.as_ref() else {
+            return Err(FfiError::other(
+                "this session has no saved password to fill",
+            ));
+        };
+        // Cheap refusal first: no decryption for a fill that cannot happen.
+        fill.check_offer()?;
+        // The core lock is held for the read only, not across the write.
+        let secret = read_password_item(
+            lock_recover(&self.state).as_ref().ok_or(FfiError::Locked)?,
+            &fill.vault_id,
+            &fill.item_id,
+        )?;
+        if secret.is_empty() {
+            return Err(FfiError::other("the saved password is empty"));
+        }
+        // Claim the offer and arm the echo mask before writing: the echo of a
+        // mis-detected prompt can arrive before the write returns.
+        fill.claim(&secret, std::time::Instant::now())?;
+        // No newline, ever. The transport copies the bytes into its own buffer
+        // (as it does for the login itself); that copy is not ours to wipe.
+        if let Err(e) = self.rt.block_on(self.shell.write(secret.as_bytes())) {
+            fill.abort_fill();
+            return Err(FfiError::ssh(e));
+        }
+        Ok(())
     }
 }
 
