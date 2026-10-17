@@ -222,22 +222,8 @@ export const importKnownHosts = (text: string) =>
   invoke<KnownHostsImport>("import_known_hosts", { text });
 
 // ── connection profiles (hosts) ────────────────────────────────
-/** The id shape the core accepts for a colour or icon (#134); it refuses the
- *  whole save otherwise. Shape only, not palette membership: a newer client's
- *  "lime" passes and is kept. */
-const APPEARANCE_ID = /^[a-z][a-z0-9-]{0,31}$/;
-
-/** `item` with a colour/icon the core would refuse dropped to null, so a value
- *  some other writer stored cannot make every later rename or move of that host
- *  or group fail. */
-function storableAppearance<T extends { color?: string | null; icon?: string | null }>(item: T): T {
-  const ok = (id: string | null | undefined) => !id || APPEARANCE_ID.test(id);
-  if (ok(item.color) && ok(item.icon)) return item;
-  return { ...item, color: ok(item.color) ? item.color : null, icon: ok(item.icon) ? item.icon : null };
-}
-
 export const saveConnection = (vaultId: string, profile: ConnectionProfile) =>
-  afterMut(vaultId, invoke<void>("save_connection", { vaultId, profile: storableAppearance(profile) }));
+  afterMut(vaultId, invoke<void>("save_connection", { vaultId, profile }));
 export const listConnections = (vaultId: string) =>
   invoke<ConnectionProfile[]>("list_connections", { vaultId });
 export const getConnection = (vaultId: string, profileId: string) =>
@@ -457,7 +443,7 @@ export const deleteSnippet = (vaultId: string, snippetId: string) =>
   afterMut(vaultId, invoke<void>("delete_snippet", { vaultId, snippetId }));
 
 export const saveGroup = (vaultId: string, group: ServerGroup) =>
-  afterMut(vaultId, invoke<void>("save_group", { vaultId, group: storableAppearance(group) }));
+  afterMut(vaultId, invoke<void>("save_group", { vaultId, group }));
 export const listGroups = (vaultId: string) => invoke<ServerGroup[]>("list_groups", { vaultId });
 export const getGroup = (vaultId: string, groupId: string) =>
   invoke<ServerGroup>("get_group", { vaultId, groupId });

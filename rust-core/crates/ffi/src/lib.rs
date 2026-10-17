@@ -6646,7 +6646,11 @@ impl Core {
                     .flatten()
                     .and_then(|it| serde_json::from_slice::<StoredProfile>(&it.content).ok());
                 let (existing_uid, color, icon) = match existing {
-                    Some(sp) => (sp.uid.filter(|u| !u.is_empty()), sp.color, sp.icon),
+                    Some(sp) => (
+                        sp.uid.filter(|u| !u.is_empty()),
+                        stored_appearance_id(sp.color),
+                        stored_appearance_id(sp.icon),
+                    ),
                     None => (None, None, None),
                 };
                 let s = cfg.resolve(alias);
@@ -8466,8 +8470,8 @@ fn group_to_public(group_id: String, s: StoredGroup) -> ServerGroup {
         label: s.label,
         member_ids: s.member_ids,
         parent_id: s.parent_id,
-        color: s.color,
-        icon: s.icon,
+        color: stored_appearance_id(s.color),
+        icon: stored_appearance_id(s.icon),
     }
 }
 
@@ -8492,6 +8496,13 @@ fn appearance_id(id: Option<String>) -> Result<Option<String>, FfiError> {
         ));
     }
     Ok(Some(id))
+}
+
+/// A stored colour/icon id as the read path hands it out: one that fails the
+/// [`appearance_id`] shape (written by something that skipped the save check)
+/// reads as unset, so no client has to repeat the rule.
+fn stored_appearance_id(id: Option<String>) -> Option<String> {
+    appearance_id(id).ok().flatten()
 }
 
 /// Mints a new immutable profile uid: 16 cryptographically random bytes in hex.
@@ -8603,8 +8614,8 @@ fn stored_to_profile(vault_id: &str, profile_id: String, s: StoredProfile) -> Co
         startup_snippet_ids: s.startup_snippet_ids,
         record_sessions: s.record_sessions,
         agent_forward: s.agent_forward,
-        color: s.color,
-        icon: s.icon,
+        color: stored_appearance_id(s.color),
+        icon: stored_appearance_id(s.icon),
     }
 }
 
@@ -12732,6 +12743,26 @@ mod tests {
         };
         assert!(core.save_group("v".into(), group).is_err());
         assert!(core.get_group("v".into(), "g".into()).is_err());
+    }
+
+    /// #134: a malformed id already in the vault (not written through the save
+    /// check) reads as unset; a well-formed unknown id is handed out as is.
+    #[test]
+    fn stored_appearance_ids_are_normalized_on_read() {
+        let sp: StoredProfile = serde_json::from_str(
+            r##"{"label":"L","host":"h","port":22,"user":"u","color":"#ff0000","icon":"rocket"}"##,
+        )
+        .unwrap();
+        let prof = stored_to_profile("v", "p".to_owned(), sp);
+        assert_eq!(prof.color, None);
+        assert_eq!(prof.icon.as_deref(), Some("rocket"));
+        let sg: StoredGroup = serde_json::from_str(
+            r#"{"label":"G","member_ids":[],"parent_id":null,"color":"teal","icon":"Bad Icon"}"#,
+        )
+        .unwrap();
+        let group = group_to_public("g".to_owned(), sg);
+        assert_eq!(group.color.as_deref(), Some("teal"));
+        assert_eq!(group.icon, None);
     }
 
     /// #134: like a profile, a group edited by a client that does not know a
