@@ -115,11 +115,12 @@ jobs:
           command: check advisories bans sources licenses
       # The shipped desktop/mobile client is its OWN workspace (excluded from the
       # root), so the root gate above never sees its lockfile — gate it too, since
-      # it is the binary users install. advisories+sources only (default policy).
+      # it is the binary users install. bans here only scopes `zip` to the
+      # updater (see client/src-tauri/deny.toml); duplicates stay allowed.
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           manifest-path: client/src-tauri/Cargo.toml
-          command: check advisories sources
+          command: check advisories bans sources
       # The admin-panel wasm crypto (keyset unlock / challenge signing / registration)
       # is also a standalone workspace and runs in users' browsers — gate it too.
       - uses: EmbarkStudios/cargo-deny-action@v2
