@@ -3,7 +3,7 @@
 # governs the Tauri desktop tree, which drags in a GUI toolkit stack the core
 # never touches. cargo-deny auto-discovers this file next to Cargo.toml.
 #
-# CI gates this workspace with `check advisories sources` (see .github/workflows/
+# CI gates this workspace with `check advisories bans sources` (see .github/workflows/
 # ci.yml) — the binary users install, so advisories still matter here.
 
 [advisories]
@@ -58,17 +58,27 @@ ignore = [
     # --- zip extraction advisories (fix is out of the pinned semver range) -------
     # RUSTSEC-2026-0367/0368/0369: `ZipArchive::extract` keeps SUID/SGID bits,
     # follows attacker-chosen symlink targets and applies permissions through
-    # symlinks. Patched only in zip >= 9; tauri-plugin-updater (2.13 and the
-    # current 2.14) pins zip ^4, Windows-only. The one call site extracts the
-    # update package AFTER the updater has verified its minisign signature
-    # against our pinned updater key (`Update::download` → `verify_signature`,
-    # then `install` → `extract_zip`), so a hostile archive needs our signing
-    # key — and that key already decides what runs. Revisit when the updater
-    # moves to zip >= 9.
+    # symlinks. Patched only in zip >= 9. Reviewed against tauri-plugin-updater
+    # 2.13.1 (our lockfile; 2.14.0 on crates.io still declares zip ^4): zip is an
+    # optional, Windows-only dependency there, and its one call site
+    # (`Install::extract` → `extract_zip`) runs only for a legacy `.zip` updater
+    # bundle — with `createUpdaterArtifacts: true` (not `v1Compatible`) ours
+    # ship as raw .exe/.msi, so the path is normally never reached. Even then it
+    # runs on bytes `Update::download` has already checked against our pinned
+    # minisign updater key, and the JS `install` only accepts that resource. The
+    # Unix permission/SUID parts have no meaning on Windows. `[bans]` below keeps
+    # zip reachable only through the updater, so these ignores cannot silently
+    # cover a new consumer. Re-review on any updater bump; drop when it moves
+    # to zip >= 9.
     "RUSTSEC-2026-0367",
     "RUSTSEC-2026-0368",
     "RUSTSEC-2026-0369",
 ]
+
+# zip is allowed only as the updater's dependency — see the zip advisories above.
+[bans]
+multiple-versions = "allow"
+deny = [{ crate = "zip", wrappers = ["tauri-plugin-updater"] }]
 
 # Match the root policy: only the public crates.io registry, no unknown git/registry.
 [sources]
