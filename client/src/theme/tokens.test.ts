@@ -101,6 +101,16 @@ describe("palette contrast (WCAG AA)", () => {
       expect(contrastRatio(p[role], p.bg0)).toBeGreaterThanOrEqual(AA_LARGE);
     });
 
+    // Host/group colour tags (#134) are marks beside a label — WCAG 1.4.11's 3:1
+    // for graphical objects — on every tier a tagged row, card or tab can sit on.
+    it("every colour tag is a visible mark on every surface tier", () => {
+      for (const [id, c] of Object.entries(p.tags)) {
+        for (const surface of ["bg0", "bg1", "bg2", "bg3", "bg4"] as const) {
+          expect(contrastRatio(c, p[surface]), `${id} on ${surface}`).toBeGreaterThanOrEqual(AA_LARGE);
+        }
+      }
+    });
+
     // `accentText` is the AA-safe text-weight variant of the brand accent. Plain
     // `accent` is a FILL/tick colour and is not required to clear body contrast —
     // that distinction is exactly what this token exists to keep honest.

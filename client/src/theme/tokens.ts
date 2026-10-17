@@ -275,13 +275,59 @@ export interface Palette {
   /** Modal / overlay backdrop scrim for this palette (light/dark-aware). Consumers
    *  fall back to a neutral rgba when absent. */
   scrim?: string;
+  /** The user-assignable host/group colour tags (#134), resolved for this palette.
+   *  Derived, never authored; see tagColorsFor. */
+  tags: Record<TagColor, string>;
 }
 
-/** A palette as authored. `accentText` is DERIVED from the authored colours rather
- *  than hand-picked, so retuning an accent or a surface can't silently drop it out
- *  of AA. buildPalette / resolveAppPalette — the only ways the app obtains a
- *  palette — add it; nothing else should construct a Palette by hand. */
-export type AuthoredPalette = Omit<Palette, "accentText">;
+/** A palette as authored. `accentText` and `tags` are DERIVED from the authored
+ *  colours rather than hand-picked, so retuning an accent or a surface can't
+ *  silently drop them out of AA. buildPalette / resolveAppPalette — the only ways
+ *  the app obtains a palette — add them; nothing else should construct a Palette
+ *  by hand. */
+export type AuthoredPalette = Omit<Palette, "accentText" | "tags">;
+
+// ── Colour tags (#134) ─────────────────────────────────────────
+// What a user paints a host or a group with, so production reads differently
+// from staging in the sidebar and — the point of the feature — on the terminal
+// tab about to receive a destructive command. Stored as these ids, never as a
+// colour value: a hex picked against one theme is unreadable in the next, and
+// the ids let every theme draw its own swatch at its own contrast.
+//
+// Deliberately a different set from the semantic `green`/`amber`/`red`: those
+// say "online / warning / error" and are tuned for text; a tag says whatever the
+// user decided it says, and only has to be seen.
+export const TAG_COLORS = ["red", "orange", "amber", "green", "teal", "blue", "violet", "pink", "gray"] as const;
+export type TagColor = (typeof TAG_COLORS)[number];
+
+/** Seed swatches per mode. Light seeds are mid-dark, dark seeds pastel; each is
+ *  then walked until it clears 3:1 (WCAG 1.4.11, non-text) on every surface tier
+ *  of the palette at hand — the pale-pink barbie ladder needs several steps that
+ *  white never does. Adjust a seed here, never a derived value. */
+const TAG_SEEDS: Record<EffMode, Record<TagColor, string>> = {
+  light: {
+    red: "#d92d3a",
+    orange: "#e0601a",
+    amber: "#c78a00",
+    green: "#1f9d55",
+    teal: "#0e9a8f",
+    blue: "#2f6be6",
+    violet: "#7a4fe0",
+    pink: "#d6338a",
+    gray: "#757a86",
+  },
+  dark: {
+    red: "#ff6b73",
+    orange: "#ff9550",
+    amber: "#f5c044",
+    green: "#4cd38a",
+    teal: "#3ccfc3",
+    blue: "#6c9dff",
+    violet: "#ac8cff",
+    pink: "#ff78bd",
+    gray: "#9ba1b0",
+  },
+};
 
 // ── App palettes ───────────────────────────────────────────────
 export const DARK: AuthoredPalette = {
@@ -632,6 +678,22 @@ function accentTextFor(accent: string, surfaces: string[], mode: EffMode): strin
 /** The surface tiers accent-coloured text/glyphs can sit on. */
 const surfacesOf = (p: AuthoredPalette): string[] => [p.bg0, p.bg1, p.bg2, p.bg3, p.bg4];
 
+/** Every tag swatch for one palette, each walked (same moves as accentTextFor:
+ *  darken in light, lighten in dark, hue kept) until it reaches 3:1 on every
+ *  surface tier a tagged row, card or tab can sit on — selected and hover ones
+ *  included. A graphical mark next to a label, so 1.4.11's 3:1, not body text's
+ *  4.5. */
+function tagColorsFor(surfaces: string[], mode: EffMode): Record<TagColor, string> {
+  const ok = (c: string) => surfaces.every((s) => contrastRatio(c, s) >= 3);
+  const out = {} as Record<TagColor, string>;
+  for (const id of TAG_COLORS) {
+    let c = TAG_SEEDS[mode][id];
+    for (let i = 0; i < 30 && !ok(c); i++) c = mode === "dark" ? lighten(c, 0.04) : darken(c, 0.04);
+    out[id] = c;
+  }
+  return out;
+}
+
 export function buildPalette(mode: EffMode, accentKey: AccentKey = "blue"): Palette {
   const base = mode === "dark" ? DARK : LIGHT;
   const a = (mode === "dark" ? ACCENTS : ACCENTS_LIGHT)[accentKey] || ACCENTS.blue;
@@ -642,6 +704,7 @@ export function buildPalette(mode: EffMode, accentKey: AccentKey = "blue"): Pale
     ...base,
     accent: a.accent,
     accentText: accentTextFor(a.accent, surfacesOf(base), mode),
+    tags: tagColorsFor(surfacesOf(base), mode),
     accent2: a.accent2,
     purple: a.purple,
     accentSoft: rgba(a.accent, softA),
@@ -679,7 +742,11 @@ export function resolveAppPalette(
   const themed = family !== "nebula" ? APP_THEMES[family] : undefined;
   if (!themed) return buildPalette(mode, accentKey);
   const base = themed[mode];
-  return { ...base, accentText: accentTextFor(base.accent, surfacesOf(base), mode) };
+  return {
+    ...base,
+    accentText: accentTextFor(base.accent, surfacesOf(base), mode),
+    tags: tagColorsFor(surfacesOf(base), mode),
+  };
 }
 
 // Default terminal theme per (family, effective mode) — the linked default that a

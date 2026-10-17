@@ -94,6 +94,9 @@ export const ICONS = {
   home: '<path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v9.5h13V10"/>',
   cl: '<polyline points="15 6 9 12 15 18"/>',
   folderOpen: '<path d="M4 6.5a2 2 0 0 1 2-2h3.7l2 2H18a2 2 0 0 1 2 2v.5H4z"/><path d="M3.4 10.5h17.2l-1.8 8a1.5 1.5 0 0 1-1.5 1.2H6.7a1.5 1.5 0 0 1-1.5-1.2z"/>',
+  // A container / package — the host kind the server/drive/database glyphs had
+  // no answer for (#134 host icons).
+  box: '<path d="M20.5 7.8a1.8 1.8 0 0 0-.9-1.5l-6.7-3.8a1.8 1.8 0 0 0-1.8 0L4.4 6.3a1.8 1.8 0 0 0-.9 1.5v8.4a1.8 1.8 0 0 0 .9 1.5l6.7 3.8a1.8 1.8 0 0 0 1.8 0l6.7-3.8a1.8 1.8 0 0 0 .9-1.5z"/><polyline points="3.8 7 12 11.7 20.2 7"/><line x1="12" y1="21.4" x2="12" y2="11.7"/>',
   drive: '<rect x="2.5" y="13" width="19" height="6.5" rx="2"/><path d="M5.5 13 8 4.5h8L18.5 13"/><circle cx="7" cy="16.2" r="0.7" fill="currentColor" stroke="none"/>',
   arrows: '<polyline points="7 4 3 8 7 12"/><line x1="3" y1="8" x2="17" y2="8"/><polyline points="17 12 21 16 17 20"/><line x1="21" y1="16" x2="7" y2="16"/>',
   star: '<polygon points="12 3 14.6 8.6 20.5 9.3 16 13.3 17.3 19.2 12 16 6.7 19.2 8 13.3 3.5 9.3 9.4 8.6 12 3"/>',
