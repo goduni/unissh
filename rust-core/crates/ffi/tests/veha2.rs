@@ -1151,6 +1151,8 @@ fn local_vault_moves_to_server_with_every_item_and_reference() {
             startup_snippet_ids: snippets,
             record_sessions: false,
             agent_forward: false,
+            color: None,
+            icon: None,
         }
     };
     core.save_connection(
@@ -1198,6 +1200,8 @@ fn local_vault_moves_to_server_with_every_item_and_reference() {
             label: s("Prod"),
             member_ids: vec![s("web"), s("edge")],
             parent_id: None,
+            color: None,
+            icon: None,
         },
     )
     .unwrap();
@@ -1208,6 +1212,8 @@ fn local_vault_moves_to_server_with_every_item_and_reference() {
             label: s("Edge"),
             member_ids: vec![s("bastion")],
             parent_id: Some(s("prod")),
+            color: None,
+            icon: None,
         },
     )
     .unwrap();
@@ -1473,6 +1479,8 @@ fn solo_vault_with_its_own_binding(core: &Core) -> String {
         startup_snippet_ids: vec![],
         record_sessions: false,
         agent_forward: false,
+        color: None,
+        icon: None,
     };
     core.save_connection(
         s(SOLO),

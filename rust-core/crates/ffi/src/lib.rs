@@ -466,6 +466,18 @@ pub struct ConnectionProfile {
     /// the key this connection used is offered, and every signature is
     /// confirmed.
     pub agent_forward: bool,
+    /// Colour tag shown on the host in the sidebar and on its terminal tabs
+    /// (issue #134), so production reads differently from staging at a glance.
+    ///
+    /// A palette *id* (`red`, `teal`, ...), never a colour value: the UI resolves
+    /// it per theme so every swatch keeps its contrast in light, dark and the
+    /// opt-in themes. A UI hint, not a secret and not access control. `None` =
+    /// inherit from the groups that contain the host.
+    pub color: Option<String>,
+    /// Icon id replacing the default host glyph (issue #134). An id from the
+    /// UI's icon set, not image data; an id this client does not know renders
+    /// as the default glyph.
+    pub icon: Option<String>,
 }
 
 /// A personal identity: SSH credentials under a single name (username + optional references to
@@ -807,6 +819,12 @@ struct StoredProfile {
     /// handle, not a secret.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     system_agent_public_key: Option<String>,
+    /// UI colour/icon ids (issue #134). Omitted when absent so existing signed
+    /// items keep their exact bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    icon: Option<String>,
     /// Forward compatibility: unknown fields (added by a future version)
     /// are preserved on round-trip rather than dropped. Otherwise an OLDER client would
     /// read the profile without the new field (e.g. `personal`), and on re-
@@ -1257,6 +1275,11 @@ pub struct ServerGroup {
     pub member_ids: Vec<String>,
     /// Parent group for the folder tree in the UI (`None` = root).
     pub parent_id: Option<String>,
+    /// Colour tag of the folder, inherited by the hosts it contains (issue #134).
+    /// A palette id, not a colour value (see [`ConnectionProfile::color`]).
+    pub color: Option<String>,
+    /// Icon id for the folder row (issue #134). Not inherited by member hosts.
+    pub icon: Option<String>,
 }
 
 /// Serializable group body. References only, no credentials. `color` is a public
@@ -1268,8 +1291,17 @@ struct StoredGroup {
     member_ids: Vec<String>,
     #[serde(default)]
     parent_id: Option<String>,
+    /// Always serialized, `null` included: every group written so far carries
+    /// `"color":null`, and skipping it now would change their bytes on re-save.
     #[serde(default)]
     color: Option<String>,
+    /// Omitted when absent so existing signed items keep their exact bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    icon: Option<String>,
+    /// Forward compatibility (see [`StoredProfile::extra`]): a field from a
+    /// newer client survives this one's re-save. Empty → serializes to nothing.
+    #[serde(flatten)]
+    extra: BTreeMap<String, serde_json::Value>,
 }
 
 /// Resolution status of a group member (for dry-run and diagnostics).
@@ -4534,6 +4566,8 @@ impl Core {
         if group.parent_id.as_deref() == Some(group.group_id.as_str()) {
             return Err(FfiError::other("a group cannot be its own parent"));
         }
+        let color = appearance_id(group.color)?;
+        let icon = appearance_id(group.icon)?;
         self.with_state_mut(|state| {
             ensure_item_type(
                 &state.storage,
@@ -4541,19 +4575,27 @@ impl Core {
                 group.group_id.as_bytes(),
                 ITEM_TYPE_GROUP,
             )?;
-            let stored = StoredGroup {
-                label: group.label,
-                member_ids: group.member_ids,
-                parent_id: group.parent_id,
-                color: None,
-            };
-            let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
             let vault = Vault::open(
                 &state.storage,
                 &state.keyset,
                 &resolve_vid(&state.storage, &vault_id),
             )
             .map_err(FfiError::other)?;
+            let stored = StoredGroup {
+                label: group.label,
+                member_ids: group.member_ids,
+                parent_id: group.parent_id,
+                color,
+                icon,
+                // Forward-compat: carry over the unknown fields of the existing group.
+                extra: preserved_extra::<StoredGroup>(
+                    &vault,
+                    group.group_id.as_bytes(),
+                    ITEM_TYPE_GROUP,
+                    |sg| sg.extra,
+                ),
+            };
+            let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
             vault
                 .put_item(group.group_id.as_bytes(), ITEM_TYPE_GROUP, &json)
                 .map_err(FfiError::other)?;
@@ -4944,10 +4986,14 @@ impl Core {
                 startup_snippet_ids,
                 record_sessions,
                 agent_forward,
+                color,
+                icon,
             } = profile;
             if profile_id.is_empty() {
                 return Err(FfiError::other("profile_id must not be empty"));
             }
+            let color = appearance_id(color)?;
+            let icon = appearance_id(icon)?;
             // Empty uid = creating a new profile → mint an immutable id. A non-empty one
             // (an edit: the UI returned the uid from get_connection) is kept as-is — the uid does not
             // change when host/label change.
@@ -4985,6 +5031,8 @@ impl Core {
                 record_sessions,
                 agent_forward,
                 system_agent_public_key,
+                color,
+                icon,
                 extra: BTreeMap::new(),
             };
             ensure_item_type(
@@ -5804,6 +5852,8 @@ impl Core {
                     record_sessions: false,
                     agent_forward: false,
                     system_agent_public_key: None,
+                    color: None,
+                    icon: None,
                     extra: BTreeMap::new(),
                 };
                 let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
@@ -6613,6 +6663,8 @@ impl Core {
                     record_sessions: false,
                     agent_forward: false,
                     system_agent_public_key: None,
+                    color: None,
+                    icon: None,
                     extra: BTreeMap::new(),
                 };
                 let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
@@ -8410,7 +8462,32 @@ fn group_to_public(group_id: String, s: StoredGroup) -> ServerGroup {
         label: s.label,
         member_ids: s.member_ids,
         parent_id: s.parent_id,
+        color: s.color,
+        icon: s.icon,
     }
+}
+
+/// Normalizes a colour/icon id of a host or group (issue #134): empty → `None`,
+/// otherwise it must look like an id (`^[a-z][a-z0-9-]{0,31}$`).
+///
+/// Shape only, not membership: the palette and icon set live in the UI and
+/// grow over time, and an id a newer client wrote must survive an older one.
+/// The shape check keeps the field what it claims to be — a short token, not
+/// a colour value, markup or a smuggled blob in every synced item.
+fn appearance_id(id: Option<String>) -> Result<Option<String>, FfiError> {
+    let Some(id) = id.filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    let mut chars = id.chars();
+    let well_formed = id.len() <= 32
+        && chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if !well_formed {
+        return Err(FfiError::other(
+            "colour/icon must be a lowercase id ([a-z][a-z0-9-], at most 32 chars)",
+        ));
+    }
+    Ok(Some(id))
 }
 
 /// Mints a new immutable profile uid: 16 cryptographically random bytes in hex.
@@ -8522,6 +8599,8 @@ fn stored_to_profile(vault_id: &str, profile_id: String, s: StoredProfile) -> Co
         startup_snippet_ids: s.startup_snippet_ids,
         record_sessions: s.record_sessions,
         agent_forward: s.agent_forward,
+        color: s.color,
+        icon: s.icon,
     }
 }
 
@@ -12111,6 +12190,8 @@ mod tests {
             startup_snippet_ids: Vec::new(),
             record_sessions: false,
             agent_forward: false,
+            color: None,
+            icon: None,
         };
         let (key_item_id, password_item_id) = match prof.auth.clone() {
             ProfileAuth::Key { key_item_id } => (Some(key_item_id), None),
@@ -12141,6 +12222,8 @@ mod tests {
             record_sessions: false,
             agent_forward: false,
             system_agent_public_key: None,
+            color: None,
+            icon: None,
             extra: BTreeMap::new(),
         };
         let json = serde_json::to_string(&stored).unwrap();
@@ -12234,6 +12317,8 @@ mod tests {
             record_sessions: false,
             agent_forward: false,
             system_agent_public_key: None,
+            color: None,
+            icon: None,
             extra: BTreeMap::new(),
         };
         let prof = stored_to_profile("va", "p".into(), sp);
@@ -12273,6 +12358,8 @@ mod tests {
                 startup_snippet_ids: Vec::new(),
                 record_sessions: false,
                 agent_forward: false,
+                color: None,
+                icon: None,
             },
         )
         .unwrap();
@@ -12477,6 +12564,8 @@ mod tests {
                 startup_snippet_ids: Vec::new(),
                 record_sessions: false,
                 agent_forward: false,
+                color: None,
+                icon: None,
             },
         )
         .unwrap();
@@ -12512,6 +12601,134 @@ mod tests {
         core.save_connection("v".into(), p).unwrap();
         // The field survived the edit.
         assert_eq!(read_future(), Some("keep".to_owned()));
+    }
+
+    /// #134: a host's and a group's colour/icon ids survive save → load.
+    #[test]
+    fn appearance_survives_save_and_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = Core::new(
+            dir.path().join("i.db").to_string_lossy().to_string(),
+            dir.path().join("i.keyset").to_string_lossy().to_string(),
+        );
+        core.create_account(None).unwrap();
+        core.create_vault("v".into(), "V".into()).unwrap();
+        core.save_connection(
+            "v".into(),
+            ConnectionProfile {
+                profile_id: "p".into(),
+                uid: String::new(),
+                label: "L".into(),
+                host: "h".into(),
+                port: 22,
+                user: "x".into(),
+                auth: ProfileAuth::PromptPassword,
+                username_template: None,
+                jumps: vec![],
+                proxy: None,
+                tags: vec![],
+                startup_snippet_ids: Vec::new(),
+                record_sessions: false,
+                agent_forward: false,
+                color: Some("red".into()),
+                icon: Some("database".into()),
+            },
+        )
+        .unwrap();
+        core.save_group(
+            "v".into(),
+            ServerGroup {
+                group_id: "g".into(),
+                label: "G".into(),
+                member_ids: vec!["p".into()],
+                parent_id: None,
+                color: Some("teal".into()),
+                icon: Some("cloud".into()),
+            },
+        )
+        .unwrap();
+        let p = core.get_connection("v".into(), "p".into()).unwrap();
+        assert_eq!(
+            (p.color.as_deref(), p.icon.as_deref()),
+            (Some("red"), Some("database"))
+        );
+        let g = core.get_group("v".into(), "g".into()).unwrap();
+        assert_eq!(
+            (g.color.as_deref(), g.icon.as_deref()),
+            (Some("teal"), Some("cloud"))
+        );
+    }
+
+    /// #134: bodies written before colour/icon existed re-serialize to the
+    /// exact same bytes — a profile without the fields, and a group with the
+    /// `"color":null` every group has carried so far.
+    #[test]
+    fn bodies_without_appearance_keep_their_bytes() {
+        let profile = r#"{"uid":"u","label":"L","host":"h","port":22,"user":"x","key_item_id":null,"password_item_id":null,"personal":false,"username_template":null,"jumps":[],"tags":[]}"#;
+        let sp: StoredProfile = serde_json::from_str(profile).unwrap();
+        assert_eq!(serde_json::to_string(&sp).unwrap(), profile);
+        let group = r#"{"label":"G","member_ids":["p"],"parent_id":null,"color":null}"#;
+        let sg: StoredGroup = serde_json::from_str(group).unwrap();
+        assert_eq!(serde_json::to_string(&sg).unwrap(), group);
+    }
+
+    /// #134: a colour/icon id is normalized (empty → none) and must have the
+    /// shape of an id — a colour value or anything longer is refused.
+    #[test]
+    fn appearance_id_shape_is_enforced() {
+        assert_eq!(appearance_id(Some(String::new())).unwrap(), None);
+        assert_eq!(
+            appearance_id(Some("blue-2".into())).unwrap().as_deref(),
+            Some("blue-2")
+        );
+        let too_long = "a".repeat(33);
+        for bad in [
+            "#ff0000",
+            "Red",
+            "2red",
+            "-red",
+            "red green",
+            too_long.as_str(),
+        ] {
+            assert!(appearance_id(Some(bad.to_owned())).is_err(), "{bad}");
+        }
+    }
+
+    /// #134: like a profile, a group edited by a client that does not know a
+    /// newer field keeps that field (merge-on-save) instead of stripping it.
+    #[test]
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the test inspects state borrowed from the guard while it holds it"
+    )]
+    fn save_group_preserves_future_fields_on_edit() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = Core::new(
+            dir.path().join("i.db").to_string_lossy().to_string(),
+            dir.path().join("i.keyset").to_string_lossy().to_string(),
+        );
+        core.create_account(None).unwrap();
+        core.create_vault("v".into(), "V".into()).unwrap();
+        {
+            let mut guard = core.locked_state();
+            let st = guard.as_mut().unwrap();
+            let vid = resolve_vid(&st.storage, "v");
+            let vault = Vault::open(&st.storage, &st.keyset, &vid).unwrap();
+            let json =
+                br#"{"label":"G","member_ids":[],"parent_id":null,"color":null,"future":"keep"}"#;
+            vault.put_item(b"g", ITEM_TYPE_GROUP, json).unwrap();
+        }
+        let mut g = core.get_group("v".into(), "g".into()).unwrap();
+        g.label = "renamed".into();
+        core.save_group("v".into(), g).unwrap();
+        let mut guard = core.locked_state();
+        let st = guard.as_mut().unwrap();
+        let vid = resolve_vid(&st.storage, "v");
+        let vault = Vault::open(&st.storage, &st.keyset, &vid).unwrap();
+        let item = vault.get_item(b"g").unwrap().unwrap();
+        let sg: StoredGroup = serde_json::from_slice(&item.content).unwrap();
+        assert_eq!(sg.label, "renamed");
+        assert_eq!(sg.extra.get("future"), Some(&serde_json::json!("keep")));
     }
 
     /// B3.1/B3.2: binding CRUD against a live Core + first-bind guard (a silent
@@ -12912,6 +13129,8 @@ mod tests {
             startup_snippet_ids: Vec::new(),
             record_sessions: false,
             agent_forward: false,
+            color: None,
+            icon: None,
         };
         core.save_connection("v".into(), mk("personal-host", "gw", ProfileAuth::Personal))
             .unwrap();
@@ -12940,6 +13159,8 @@ mod tests {
                 label: "G".into(),
                 member_ids: vec!["personal-host".into(), "key-host".into()],
                 parent_id: None,
+                color: None,
+                icon: None,
             },
         )
         .unwrap();
@@ -12993,6 +13214,8 @@ mod tests {
             startup_snippet_ids: Vec::new(),
             record_sessions: false,
             agent_forward: false,
+            color: None,
+            icon: None,
         };
         core.save_connection("v".into(), mk("personal-host", "gw", ProfileAuth::Personal))
             .unwrap();
@@ -13049,6 +13272,8 @@ mod tests {
                 label: "G".into(),
                 member_ids: vec!["personal-host".into(), "key-host".into()],
                 parent_id: None,
+                color: None,
+                icon: None,
             },
         )
         .unwrap();

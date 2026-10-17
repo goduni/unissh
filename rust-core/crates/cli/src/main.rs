@@ -696,6 +696,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                     label,
                     member_ids: members,
                     parent_id: parent,
+                    color: None,
+                    icon: None,
                 },
             )?;
             println!("ok");
