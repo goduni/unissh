@@ -1,11 +1,12 @@
 ---
 title: Connecting to hosts
-description: Two-factor logins, hardware keys through the system ssh-agent, agent forwarding, snippets, session recording, algorithm policy, and what each one costs you.
+description: Two-factor logins, the saved password at sudo prompts, hardware keys through the system ssh-agent, agent forwarding, snippets, session recording, algorithm policy, and what each one costs you.
 ---
 
-Everything on this page is per host and off unless you turn it on, with one
-exception: post-quantum key exchange, which is on for every connection and has
-been since the first release.
+Everything on this page is per host and off unless you turn it on, with two
+exceptions: post-quantum key exchange, which is on for every connection and has
+been since the first release, and the offer to insert a saved password at a
+password prompt, which only ever offers.
 
 Several of these options trade something real for what they give you. Where that
 is the case, this page says what the trade is rather than only what the feature
@@ -24,6 +25,32 @@ which is where a TOTP code or a Duo push lives, is put to you.
 The field is masked when the server says the answer is secret and shown when it
 says otherwise, because that flag is the server telling you whether you are
 typing a login name or a code.
+
+## The saved password at `sudo` and other prompts
+
+On a host you logged into with a saved password, a later prompt for that same
+password — `[sudo] password for you:`, `doas (you@host) password:`, a bare
+`Password:` — brings up an offer at the foot of the pane: **Insert saved
+password**, naming the password and the host. Click it, or press **Ctrl+Shift+P**
+(**⇧⌘P** on macOS) while the offer is shown. The password is typed, not
+submitted: Enter is still yours.
+
+What it will not do, on purpose:
+
+- **Offer it anywhere else.** The prompt is recognised by the app's core, not
+  guessed at by the window, and a prompt for someone else's password is not
+  offered: `sudo` asking for another user, a nested `ssh` asking for
+  `user@other-host's password`, a key passphrase, a `git` credential, a database
+  client's `Enter password:`.
+- **Retry a wrong password.** Start typing and the offer goes away. If the same
+  prompt comes straight back after a fill, the saved password was refused; you
+  are told so and it is not offered again, because typing a wrong password
+  repeatedly is how accounts get locked.
+- **Show it.** The password never reaches the window or the clipboard. If a
+  prompt turns out to echo what it reads, the password is masked on screen and
+  in the session recording, the line is cleared, and you are warned.
+
+Settings → Terminal turns the offers off.
 
 ## Hardware keys, via the system ssh-agent
 

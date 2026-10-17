@@ -32,6 +32,18 @@ starts with `0.`:
 
 ## [Unreleased]
 
+### Added
+
+- Saved password at password prompts (#135): on a host logged into with a saved
+  password, a `sudo`, `doas` or bare `Password:` prompt for the login account
+  shows an offer at the foot of the pane to insert that password (button or
+  Ctrl+Shift+P / ⇧⌘P while the offer is shown). It is typed without Enter, never
+  through the clipboard, and never reaches the UI. Typing withdraws the offer; a
+  prompt that comes straight back after a fill is reported as a rejected
+  password and not offered again; a prompt that echoes the password has it
+  masked on screen and in the recording, and the line is cleared. Settings →
+  Terminal can turn the offers off.
+
 ## [0.6.1] — 2026-10-16
 
 ### Changed

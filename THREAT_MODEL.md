@@ -252,6 +252,51 @@ code-execution surface, so it is stated plainly rather than left implicit.
 Not protected, and not claimed to be: the local terminal does not sandbox,
 restrict or audit what you type into your own shell. It is your machine.
 
+## Saved password at interactive prompts
+
+When a host was logged into with a saved vault password, the terminal offers
+to type that password at a later prompt for it — `sudo`, `doas`, a bare
+`Password:`. A password typed into the wrong place is a disclosure, so the
+feature is built around one invariant:
+
+> A session can type exactly one secret — the vault password item it
+> authenticated with — into exactly that session, only while the core itself
+> sees a recognised password prompt at the end of the output, at most once per
+> prompt, never followed by Enter. The plaintext never crosses the FFI/IPC
+> boundary and never reaches the UI, the clipboard, the scrollback or a
+> recording.
+
+- **The UI cannot choose the secret or the moment.** The fill call takes no
+  item and returns nothing; the item is bound when the session opens, and the
+  core re-reads it from the vault at fill time (a locked core refuses). The
+  webview only learns that an offer exists, and of which kind. Other logins
+  (keys, inline passwords, the OS agent), local shells, auto-reconnecting
+  sessions, broadcast and MCP have no fill at all.
+- **Only prompts that ask for this account's password.** The core classifies
+  the last line of output against an allow-list. `[sudo] … for USER:` and
+  `doas (USER@…)` count only when USER is the login user; a nested
+  `user@other-host's password:`, key passphrases, `git`/HTTPS credentials,
+  `Enter password:` (database and archive tools) and `New password:` are never
+  offered. A bare `Password:` is offered — it is also what `su` and a nested
+  `login` print, which is why the offer names the host and the credential and
+  never fills by itself.
+- **Once per prompt, never retried.** Any keystroke withdraws the offer, and a
+  fill consumes it. If a prompt of the same kind comes back within 15 seconds
+  of a fill, the saved password was refused: the UI says so and that prompt —
+  and any further one in the window — is not offered again, so a wrong saved
+  password cannot walk an account into PAM faillock or fail2ban. This is
+  language-agnostic; it does not parse "Sorry, try again".
+- **A mis-detected prompt that echoes is contained.** For 5 seconds after a
+  fill, the password is masked out of the output (one `*` per character, also
+  across chunk boundaries) before the recorder or the UI sees it; the UI then
+  sends Ctrl-U so the line is not run on Enter, and warns. Recordings capture
+  output only, so the typed password is not in them either way.
+
+Not protected, and not claimed to be: a remote host you are logged into can
+print a prompt that looks like one the core accepts. What that wins is the
+password the user already gave that same host to log in with — and only after
+the user accepts an offer that names the host.
+
 ## Biometric unlock (desktop: Touch ID, Windows Hello)
 
 Opt-in, per device, macOS and Windows only. On macOS, Touch ID unlock works
