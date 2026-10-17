@@ -30,10 +30,11 @@ typing a login name or a code.
 
 On a host you logged into with a saved password, a later prompt for that same
 password — `[sudo] password for you:`, `doas (you@host) password:` — brings up
-an offer at the foot of the pane: **Insert saved password**, naming the saved
+an offer in the pane: **Insert saved password**, naming the saved
 password. Click it, or press **Ctrl+Shift+P** (**⇧⌘P** on macOS) while the offer
 is shown. The password is typed, not submitted: Enter is still yours. The
-terminal shrinks while the offer is shown, so the prompt stays in sight.
+offer sits at the edge of the pane away from the cursor, so the prompt stays in
+sight.
 
 Bare `Password:` prompts (`su`, `login`) are offered only if you also turn on
 **Also offer at bare “Password:” prompts** in Settings → Terminal. A bare
@@ -53,11 +54,14 @@ What it will not do, on purpose:
   offered: `sudo` asking for another user, a nested `ssh` asking for
   `user@other-host's password`, a key passphrase, a `git` credential, a database
   client's `Enter password:`.
-- **Retry a wrong password.** Start typing and the offer goes away. If the same
-  prompt comes straight back after a fill, the saved password was probably
-  refused; you are told so, and it is not typed again in that session until
-  you change it in the vault, because typing a wrong password repeatedly is how
-  accounts get locked.
+- **Retry a wrong password by itself.** Start typing and the offer goes away.
+  If the same prompt comes straight back after a fill — `sudo` asking again —
+  the saved password was probably refused; you are told so, and it is not typed
+  again in that session until you change it in the vault, because typing a
+  wrong password repeatedly is how accounts get locked. A program that simply
+  exits on a wrong password (`doas`, `su`), or a prompt that comes back much
+  later, is not recognised as a refusal: you get the offer again, and each
+  attempt still takes your click.
 - **Show it.** The password never reaches the window or the clipboard. If a
   prompt turns out to echo what it reads, the password is masked on screen and
   in the session recording, the line is cleared, and you are warned.

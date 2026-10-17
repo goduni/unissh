@@ -35,8 +35,8 @@ starts with `0.`:
 ### Added
 
 - Saved password at password prompts (#135): on a host logged into with a saved
-  password, a `sudo` or `doas` prompt for the login account shows an offer at
-  the foot of the pane to insert that password (button or Ctrl+Shift+P / ⇧⌘P
+  password, a `sudo` or `doas` prompt for the login account shows an offer in
+  the pane, on the edge away from the cursor, to insert that password (button or Ctrl+Shift+P / ⇧⌘P
   while the offer is shown); bare `Password:` prompts (`su`, `login`) only with
   a second setting. It is typed without Enter, never through the clipboard, and
   never reaches the UI. The offer cannot tell which machine is asking and says
@@ -51,6 +51,8 @@ starts with `0.`:
 - Bindings: `SessionObserver::on_fill` is a new required method for
   implementors of the observer, and `Core::open_session` gained a trailing
   `password_fill: PasswordFillMode` parameter (pass `Off` for no fill).
+  Observer callbacks (`on_fill`, and to be safe `on_data`) must not call back
+  into the session synchronously from the calling thread.
 
 ## [0.6.1] — 2026-10-16
 

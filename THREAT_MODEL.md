@@ -292,9 +292,15 @@ place is a disclosure, so the feature is built around one invariant:
   15 seconds of a fill with nothing but Enter typed in between, the saved
   password was refused: the UI says so, and the core remembers it (by a keyed
   digest, never the password) and refuses to type it again on that session
-  until it has been changed in the vault — so a wrong saved password cannot
-  walk an account into PAM faillock or fail2ban. This is language-agnostic; it
-  does not parse "Sorry, try again".
+  until it has been changed in the vault. This is language-agnostic; it does
+  not parse "Sorry, try again". It catches a program that asks again by itself
+  within the window — `sudo`'s retry. It does not catch one that exits on a
+  wrong password (`doas`, `su`, `sudo` with `passwd_tries=1`), nor a re-prompt
+  more than 15 seconds later: those are new prompts, offered again. Against PAM
+  faillock or fail2ban the remaining guard is that every attempt is an
+  explicit click; nothing is ever retried by itself. A rejected password that
+  was then edited in the vault is typed again even if the edit restored the
+  same password — the digest only remembers what was rejected on this session.
 - **A mis-detected prompt that echoes is contained.** After a fill — for 30
   seconds, cut to 3 seconds after the next keystroke — the password is masked
   out of the output (one `*` per character, in place) before the recorder or
