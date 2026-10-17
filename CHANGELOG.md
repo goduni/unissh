@@ -32,6 +32,29 @@ starts with `0.`:
 
 ## [Unreleased]
 
+### Added
+
+- Hosts and groups take a colour tag and an icon (#134), set under Appearance
+  in the host editor and in Host groups. The colour shows beside the host in the
+  hosts list, on its folder in the sidebar, on the terminal tab (a line along the
+  top) and in the pane status bar, so a production session reads differently
+  from staging before a command goes in. A host without a colour of its own
+  takes the one its groups agree on, through parent groups; groups that
+  disagree give it none. Colours are a fixed palette drawn per theme at 3:1
+  against every surface, and each is named for screen readers.
+
+### Compatibility
+
+**Vault format and server protocol are unchanged.** Colour and icon are new
+optional fields inside the existing encrypted host and group bodies, stored as
+ids rather than colour values; hosts without them serialize byte-for-byte as
+before, and so do groups. Groups now also keep fields a newer client adds, as
+hosts already did.
+
+**Mixed-version caveat.** An older client keeps a host's colour and icon when it
+edits the host, but editing a *group* in an older client clears that group's
+colour and icon: older builds rewrote every group field they did not know.
+
 ## [0.6.1] — 2026-10-16
 
 ### Changed
