@@ -54,6 +54,20 @@ ignore = [
     # Tauri stack moves to quick-xml 0.41.
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
+
+    # --- zip extraction advisories (fix is out of the pinned semver range) -------
+    # RUSTSEC-2026-0367/0368/0369: `ZipArchive::extract` keeps SUID/SGID bits,
+    # follows attacker-chosen symlink targets and applies permissions through
+    # symlinks. Patched only in zip >= 9; tauri-plugin-updater (2.13 and the
+    # current 2.14) pins zip ^4, Windows-only. The one call site extracts the
+    # update package AFTER the updater has verified its minisign signature
+    # against our pinned updater key (`Update::download` → `verify_signature`,
+    # then `install` → `extract_zip`), so a hostile archive needs our signing
+    # key — and that key already decides what runs. Revisit when the updater
+    # moves to zip >= 9.
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
 ]
 
 # Match the root policy: only the public crates.io registry, no unknown git/registry.
