@@ -3842,6 +3842,7 @@ impl Core {
             Some(guard) => {
                 let inner = sink.clone();
                 guard.set_forward(Box::new(move |out| inner.on_data(out)));
+                guard.set_idle_flush(idle_flush(self.rt.handle().clone(), Arc::downgrade(guard)));
                 Arc::new(FillSink {
                     guard: guard.clone(),
                     inner: sink,
@@ -9743,6 +9744,26 @@ fn line_kill(
     })
 }
 
+/// Comes back [`password_fill::HOLD_IDLE`] after an output chunk that left bytes
+/// held back as a possible echo, and shows them if no chunk came since.
+///
+/// Called from the reader task, so it only spawns the timer. Holds the guard
+/// weakly: the guard owns this closure.
+fn idle_flush(
+    rt: tokio::runtime::Handle,
+    guard: std::sync::Weak<FillGuard>,
+) -> password_fill::IdleFlush {
+    Box::new(move |generation| {
+        let guard = guard.clone();
+        rt.spawn(async move {
+            tokio::time::sleep(password_fill::HOLD_IDLE).await;
+            if let Some(guard) = guard.upgrade() {
+                guard.flush_idle(generation, std::time::Instant::now());
+            }
+        });
+    })
+}
+
 /// Outermost link of a vault-password session's sink chain: runs the output
 /// through the session's [`FillGuard`] before anything else sees it.
 ///
@@ -9761,6 +9782,9 @@ impl OutputSink for FillSink {
             .on_output(data, std::time::Instant::now(), |out| inner.on_data(out));
     }
     fn on_close(&self, exit_status: Option<u32>) {
+        // Output the mask held back as a possible echo is output all the same.
+        let inner = &self.inner;
+        self.guard.close(|out| inner.on_data(out));
         self.inner.on_close(exit_status);
     }
 }

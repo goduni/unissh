@@ -68,6 +68,12 @@ const ECHO_AFTER_INPUT: Duration = Duration::from_secs(3);
 /// flushed unmasked rather than stalling the terminal.
 const HOLD_MAX: usize = 4096;
 
+/// How long output held back as a possible start of an echo may wait for the
+/// next chunk before it is shown anyway. An echo arrives as one burst; a held
+/// byte that nothing follows is just output, and holding it longer would make
+/// the terminal lag behind a user typing one character at a time.
+pub(crate) const HOLD_IDLE: Duration = Duration::from_millis(150);
+
 /// How much of the output the classifier keeps to look back over. A prompt is
 /// one short line; this only has to outlast the longest accepted one plus the
 /// escape sequences a program may wrap it in.
@@ -142,8 +148,9 @@ pub enum FillEvent {
     /// The prompt came back right after a fill: the saved password was rejected,
     /// and will not be typed again on this session.
     Rejected,
-    /// The remote echoed the filled password; it was masked in output/recording
-    /// and the line was killed (Ctrl-U).
+    /// The remote echoed the filled password before the user typed anything
+    /// more; it was masked in output/recording and the line was killed (Ctrl-U).
+    /// The password turning up later is masked too, without this event.
     Echoed,
 }
 
@@ -327,6 +334,13 @@ enum Attempt {
 /// Reads `secret` out of `data` starting at `start`, letting line breaks and
 /// CSI/OSC sequences sit between its bytes (never before the first).
 fn attempt(data: &[u8], start: usize, secret: &[u8]) -> Attempt {
+    // Every output byte is a possible start: decide the common case, a first
+    // byte that does not match, before allocating anything.
+    match (data.get(start), secret.first()) {
+        (None, _) => return Attempt::Partial,
+        (Some(b), Some(want)) if b != want => return Attempt::Miss,
+        (Some(_), _) => {}
+    }
     let mut positions = Vec::with_capacity(secret.len());
     let mut j = start;
     for &want in secret {
@@ -358,18 +372,28 @@ fn attempt(data: &[u8], start: usize, secret: &[u8]) -> Attempt {
 /// the remote put between the characters (line wraps, colour, cursor moves) is
 /// kept, so the screen keeps its shape. An occurrence can straddle two chunks,
 /// so a possible start at the end of a chunk is held back (at most
-/// [`HOLD_MAX`] bytes) until the next chunk shows whether it was.
+/// [`HOLD_MAX`] bytes) until the next chunk shows whether it was, or for
+/// [`HOLD_IDLE`] when no next chunk comes.
 ///
-/// Known limits. Held bytes wait for the next chunk, however long it takes;
-/// that is bounded by the window only in the sense that after it, the next
-/// chunk flushes them. An echo the remote *transforms* (readline's `\303\244`
-/// for a non-ASCII byte in the C locale, `^X` or `M-x` for control and meta
-/// characters) is not the password's bytes and is not found.
+/// Only an occurrence that completes before the user's first keystroke after
+/// the fill counts as the fill echoing: the echo of our own write comes back
+/// before the user's Enter does. One later on — a short or common password
+/// turning up in a command's output — is still masked, which keeps screens and
+/// recordings clean, but reports nothing: the line it is on is not the one the
+/// fill typed, and a Ctrl-U there would go into whatever program now runs. An
+/// echo slower than the user's Enter has already been submitted, and a Ctrl-U
+/// after it kills nothing.
+///
+/// Known limits. An echo the remote *transforms* (readline's `\303\244` for a
+/// non-ASCII byte in the C locale, `^X` or `M-x` for control and meta
+/// characters) is not the password's bytes and is not found; one the remote
+/// spreads over a pause longer than [`HOLD_IDLE`] is shown up to the pause.
 pub(crate) struct EchoMask {
     secret: Zeroizing<Vec<u8>>,
     deadline: Instant,
-    /// The window has already been cut short by a keystroke.
-    shortened: bool,
+    /// The user has typed since the fill: the window is cut short, and an
+    /// occurrence from now on is not the fill's echo.
+    input_seen: bool,
     /// The end of the last chunk that might be the start of the secret.
     held: Zeroizing<Vec<u8>>,
 }
@@ -377,7 +401,8 @@ pub(crate) struct EchoMask {
 /// One chunk through the mask.
 struct Masked {
     out: Vec<u8>,
-    /// The secret was found (and masked) in this chunk.
+    /// The fill's echo was found (and masked) in this chunk: an occurrence that
+    /// completed before the user typed anything after the fill.
     echoed: bool,
     /// The window is over: nothing is held, and the mask can go.
     expired: bool,
@@ -393,37 +418,52 @@ impl EchoMask {
         Some(Self {
             secret: Zeroizing::new(secret.as_bytes().to_vec()),
             deadline: now.checked_add(ECHO_WINDOW).unwrap_or(now),
-            shortened: false,
+            input_seen: false,
             held: Zeroizing::new(Vec::new()),
         })
     }
 
     /// Ends the mask, handing back what it held so it can be forwarded.
     fn into_held(mut self) -> Vec<u8> {
+        self.take_held()
+    }
+
+    /// Lets go of what the mask held, keeping the window open.
+    fn take_held(&mut self) -> Vec<u8> {
         std::mem::take(&mut *self.held)
+    }
+
+    /// Something is held back, waiting for the next chunk.
+    fn holds(&self) -> bool {
+        !self.held.is_empty()
     }
 
     /// The first keystroke after the fill closes the window soon after it.
     fn note_input(&mut self, now: Instant) {
-        if !self.shortened {
-            self.shortened = true;
+        if !self.input_seen {
+            self.input_seen = true;
             let cut = now.checked_add(ECHO_AFTER_INPUT).unwrap_or(now);
             self.deadline = self.deadline.min(cut);
         }
     }
 
     fn feed(&mut self, chunk: &[u8], now: Instant) -> Masked {
-        let mut data = Zeroizing::new(Vec::with_capacity(self.held.len() + chunk.len()));
-        data.extend_from_slice(&self.held);
-        data.extend_from_slice(chunk);
-        self.held.zeroize();
+        // Copied only when something was held; the joined copy is wiped too.
+        let joined;
+        let data: &[u8] = if self.held.is_empty() {
+            chunk
+        } else {
+            joined = Zeroizing::new([self.held.as_slice(), chunk].concat());
+            self.held.zeroize();
+            &joined
+        };
         let expired = now >= self.deadline;
 
         let mut out = Vec::with_capacity(data.len());
         let mut echoed = false;
         let mut i = 0;
         while let Some(&b) = data.get(i) {
-            match attempt(&data, i, &self.secret) {
+            match attempt(data, i, &self.secret) {
                 Attempt::Full(positions) => {
                     let mut stars = positions.iter().zip(self.secret.iter()).peekable();
                     let last = positions.last().copied().unwrap_or(i);
@@ -436,7 +476,7 @@ impl EchoMask {
                             None => out.push(byte),
                         }
                     }
-                    echoed = true;
+                    echoed |= !self.input_seen;
                     i = last.saturating_add(1);
                 }
                 Attempt::Partial if !expired && data.len().saturating_sub(i) <= HOLD_MAX => {
@@ -520,6 +560,9 @@ struct GuardState {
     next_id: u64,
     /// Digests of the passwords the remote rejected on this session.
     rejected: Vec<[u8; 32]>,
+    /// Counts output chunks, so a timer set to flush what one chunk left held
+    /// back can tell that another chunk came since and it has nothing to do.
+    hold_gen: u64,
 }
 
 impl GuardState {
@@ -531,6 +574,7 @@ impl GuardState {
             echo: None,
             next_id: 1,
             rejected: Vec::new(),
+            hold_gen: 0,
         }
     }
 
@@ -541,6 +585,7 @@ impl GuardState {
         now: Instant,
         events: &mut Vec<FillEvent>,
     ) -> Vec<u8> {
+        self.hold_gen = self.hold_gen.wrapping_add(1);
         let out = match self.echo.as_mut() {
             None => data,
             Some(mask) => {
@@ -556,7 +601,27 @@ impl GuardState {
                 masked.out
             }
         };
-        self.push_tail(&out);
+        self.observe(&out, cfg, now, events);
+        out
+    }
+
+    /// The chunk that left bytes held back was the last for a while: they are
+    /// output after all, and the mask stays armed for what comes next.
+    fn flush_held(&mut self, cfg: &Config, now: Instant, events: &mut Vec<FillEvent>) -> Vec<u8> {
+        let held = self
+            .echo
+            .as_mut()
+            .map(EchoMask::take_held)
+            .unwrap_or_default();
+        if !held.is_empty() {
+            self.observe(&held, cfg, now, events);
+        }
+        held
+    }
+
+    /// Runs output that is about to be shown past the classifier.
+    fn observe(&mut self, out: &[u8], cfg: &Config, now: Instant, events: &mut Vec<FillEvent>) {
+        self.push_tail(out);
         let next = classify_tail(&self.tail, &cfg.login_user, cfg.allow_generic);
         // A newline in the chunk means the line the old prompt was on has been
         // left, even when the chunk ends on the same kind of prompt again
@@ -566,7 +631,6 @@ impl GuardState {
             self.transition(None, cfg, now, events);
         }
         self.transition(next, cfg, now, events);
-        out
     }
 
     fn push_tail(&mut self, out: &[u8]) {
@@ -727,6 +791,10 @@ pub(crate) type Forward = Box<dyn Fn(Vec<u8>) + Send + Sync>;
 /// Sends Ctrl-U into the session without blocking: called from the reader task.
 pub(crate) type LineKill = Box<dyn Fn() + Send + Sync>;
 
+/// Arranges for [`FillGuard::flush_idle`] to run with the given generation
+/// [`HOLD_IDLE`] from now, without blocking: called from the reader task.
+pub(crate) type IdleFlush = Box<dyn Fn(u64) + Send + Sync>;
+
 /// The password-fill state of one SSH session that logged in with a vault
 /// password item.
 ///
@@ -757,6 +825,8 @@ pub(crate) struct FillGuard {
     /// Where output held back by a mask goes when the mask ends outside the
     /// output path (a new fill, a failed write). Set with the sink chain.
     forward: OnceLock<Forward>,
+    /// Shows held-back output that no next chunk followed. Set with the sink chain.
+    idle_flush: OnceLock<IdleFlush>,
 }
 
 /// Exactly the bytes a terminal sends on its own when it gains or loses focus
@@ -790,6 +860,7 @@ impl FillGuard {
             emit_order: Mutex::new(()),
             line_kill: OnceLock::new(),
             forward: OnceLock::new(),
+            idle_flush: OnceLock::new(),
         }
     }
 
@@ -803,6 +874,13 @@ impl FillGuard {
     /// Where held-back output goes when a mask ends off the output path.
     pub(crate) fn set_forward(&self, forward: Forward) {
         if self.forward.set(forward).is_err() {
+            // Set once per session, with the sink chain.
+        }
+    }
+
+    /// How to come back for held-back output that nothing followed. Must not block.
+    pub(crate) fn set_idle_flush(&self, flush: IdleFlush) {
+        if self.idle_flush.set(flush).is_err() {
             // Set once per session, with the sink chain.
         }
     }
@@ -854,7 +932,33 @@ impl FillGuard {
         let mut events = Vec::new();
         let mut st = lock_recover(&self.state);
         let out = st.on_output(data, &self.cfg, now, &mut events);
+        if st.echo.as_ref().is_some_and(EchoMask::holds) {
+            if let Some(flush) = self.idle_flush.get() {
+                // Only arranges the timer; it takes the state lock when it fires.
+                flush(st.hold_gen);
+            }
+        }
         self.release(st, out, forward, events);
+    }
+
+    /// [`HOLD_IDLE`] after the output chunk `generation`: if no chunk came since,
+    /// what it left held back is shown (and classified) now. The mask stays.
+    pub(crate) fn flush_idle(&self, generation: u64, now: Instant) {
+        let mut events = Vec::new();
+        let mut st = lock_recover(&self.state);
+        if st.hold_gen != generation {
+            return;
+        }
+        let out = st.flush_held(&self.cfg, now, &mut events);
+        self.release(st, out, |out| self.forward_stored(out), events);
+    }
+
+    /// The session's output ended: what the mask held back is output too, and
+    /// goes to `forward` before the close does.
+    pub(crate) fn close(&self, forward: impl FnOnce(Vec<u8>)) {
+        let mut st = lock_recover(&self.state);
+        let held = st.echo.take().map(EchoMask::into_held).unwrap_or_default();
+        self.release(st, held, forward, Vec::new());
     }
 
     /// The user typed `data` into the session: whatever offer was live is gone.
@@ -1344,15 +1448,77 @@ mod tests {
         assert_eq!(feed(&g, b"s3cret", after), b"s3cret");
     }
 
-    #[test]
-    fn an_echo_kills_the_line() {
-        let (g, _ev, t0) = filled("s3cret");
+    /// Counts the line kills `g` sends.
+    fn count_kills(g: &FillGuard) -> Arc<AtomicUsize> {
         let kills = Arc::new(AtomicUsize::new(0));
         let k = kills.clone();
         g.set_line_kill(Box::new(move || {
             k.fetch_add(1, Ordering::SeqCst);
         }));
+        kills
+    }
+
+    #[test]
+    fn an_echo_before_any_input_is_reported_and_kills_the_line() {
+        let (g, ev, t0) = filled("s3cret");
+        let kills = count_kills(&g);
         feed(&g, b"s3cret", t0);
+        assert_eq!(ev.take(), vec![FillEvent::Echoed]);
         assert_eq!(kills.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn the_password_in_output_after_the_user_typed_is_masked_silently() {
+        let (g, ev, t0) = filled("ok12");
+        let kills = count_kills(&g);
+        g.note_input(b"\r", t0);
+        assert_eq!(feed(&g, b"\r\nid=ok12\r\n", t0), b"\r\nid=****\r\n");
+        assert_eq!(ev.take(), vec![]);
+        assert_eq!(kills.load(Ordering::SeqCst), 0);
+    }
+
+    type Recorded<T> = Arc<Mutex<Vec<T>>>;
+
+    /// Records the generations `g` asks to be flushed after, and what it forwards.
+    fn record_flushes(g: &FillGuard) -> (Recorded<u64>, Recorded<u8>) {
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let a = asked.clone();
+        g.set_idle_flush(Box::new(move |generation| {
+            a.lock().unwrap().push(generation);
+        }));
+        let forwarded = Arc::new(Mutex::new(Vec::new()));
+        let f = forwarded.clone();
+        g.set_forward(Box::new(move |d| f.lock().unwrap().extend(d)));
+        (asked, forwarded)
+    }
+
+    #[test]
+    fn held_bytes_nothing_follows_are_shown_after_a_pause() {
+        let (g, _ev, t0) = filled("s3cret");
+        let (asked, forwarded) = record_flushes(&g);
+        assert_eq!(feed(&g, b"ls s3", t0), b"ls ");
+        let generation = *asked.lock().unwrap().last().unwrap();
+        g.flush_idle(generation, t0 + HOLD_IDLE);
+        assert_eq!(*forwarded.lock().unwrap(), b"s3");
+    }
+
+    #[test]
+    fn a_flush_timer_from_before_the_last_chunk_does_nothing() {
+        let (g, _ev, t0) = filled("s3cret");
+        let (asked, forwarded) = record_flushes(&g);
+        feed(&g, b"s", t0);
+        let stale = *asked.lock().unwrap().last().unwrap();
+        assert_eq!(feed(&g, b"3c", t0), b"");
+        g.flush_idle(stale, t0 + HOLD_IDLE);
+        assert_eq!(*forwarded.lock().unwrap(), b"");
+    }
+
+    #[test]
+    fn closing_forwards_what_the_mask_held_back() {
+        let (g, _ev, t0) = filled("s3cret");
+        assert_eq!(feed(&g, b"ls s3", t0), b"ls ");
+        let mut out = Vec::new();
+        g.close(|d| out = d);
+        assert_eq!(out, b"s3");
     }
 }
