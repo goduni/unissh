@@ -55,7 +55,31 @@ function GroupsModalBody() {
   } | null>(null);
   const appearance = useAppearanceIndex();
 
-  const close = () => setGroupsModal(false);
+  // The open draft's group, and whether the draft differs from it — what
+  // saving would write. A dirty draft is not thrown away by opening another
+  // group's panel or closing the dialog without asking first.
+  const draftGroup = styling ? groups.find((g) => g.groupId === styling.groupId) : undefined;
+  const draftDirty =
+    !!styling &&
+    !!draftGroup &&
+    ((styling.label.trim() || draftGroup.label) !== draftGroup.label ||
+      (draftGroup.color ?? null) !== styling.color ||
+      (draftGroup.icon ?? null) !== styling.icon);
+  const leaveDraft = (then: () => void) => {
+    if (!draftDirty || !draftGroup) return then();
+    setConfirm({
+      title: t("groups.discardTitle"),
+      body: t("groups.discardBody", { label: draftGroup.label }),
+      danger: true,
+      confirmLabel: t("groups.discard"),
+      onConfirm: () => {
+        setStyling(null);
+        then();
+      },
+    });
+  };
+
+  const close = () => leaveDraft(() => setGroupsModal(false));
   useDialogKeys(close);
   const cardRef = useDialogFocus<HTMLDivElement>();
 
@@ -118,7 +142,7 @@ function GroupsModalBody() {
     const ok = await guard(async () => {
       await api.saveGroup(vaultId, { ...g, label, color, icon });
       await reload();
-      toast(t(restyled ? "appearance.saved" : "groups.renamed"), "ok");
+      toast(t(!restyled ? "groups.renamed" : label !== g.label ? "groups.saved" : "appearance.saved"), "ok");
     });
     if (ok) setStyling(null);
   };
@@ -372,11 +396,14 @@ function GroupsModalBody() {
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      setStyling(
-                        styling?.groupId === g.groupId
-                          ? null
-                          : { groupId: g.groupId, label: g.label, color: g.color ?? null, icon: g.icon ?? null },
-                      );
+                      // Toggling the open panel shut is the explicit "put it
+                      // away"; opening another group's panel would drop the
+                      // draft silently, so that one asks.
+                      if (styling?.groupId === g.groupId) setStyling(null);
+                      else
+                        leaveDraft(() =>
+                          setStyling({ groupId: g.groupId, label: g.label, color: g.color ?? null, icon: g.icon ?? null }),
+                        );
                     }}
                     title={isMobile ? t("groups.edit") : t("appearance.edit")}
                     aria-label={isMobile ? t("groups.edit") : t("appearance.edit")}
