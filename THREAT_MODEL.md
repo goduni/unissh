@@ -254,10 +254,10 @@ restrict or audit what you type into your own shell. It is your machine.
 
 ## Saved password at interactive prompts
 
-When a host was logged into with a saved vault password, the terminal offers
-to type that password at a later prompt for it — `sudo`, `doas`, a bare
-`Password:`. A password typed into the wrong place is a disclosure, so the
-feature is built around one invariant:
+When a host was logged into with a saved vault password, the terminal can offer
+to type that password at a later prompt for it — `sudo` and `doas` by default,
+a bare `Password:` only with a second opt-in. A password typed into the wrong
+place is a disclosure, so the feature is built around one invariant:
 
 > A session can type exactly one secret — the vault password item it
 > authenticated with — into exactly that session, only while the core itself
@@ -266,36 +266,63 @@ feature is built around one invariant:
 > boundary and never reaches the UI, the clipboard, the scrollback or a
 > recording.
 
-- **The UI cannot choose the secret or the moment.** The fill call takes no
-  item and returns nothing; the item is bound when the session opens, and the
-  core re-reads it from the vault at fill time (a locked core refuses). The
-  webview only learns that an offer exists, and of which kind. Other logins
-  (keys, inline passwords, the OS agent), local shells, auto-reconnecting
-  sessions, broadcast and MCP have no fill at all.
+- **The UI cannot choose the secret.** The fill call takes no item and returns
+  nothing; the item is bound when the session opens, and the core re-reads it
+  from the vault at fill time (a locked core refuses). The webview only learns
+  that an offer exists, its kind and its id. Other logins (keys, inline
+  passwords, the OS agent), local shells, auto-reconnecting sessions, broadcast
+  and MCP have no fill at all, and neither has a session opened with fill off.
+  The client opens with fill off when the setting is off and for any host with
+  a username template: that password authenticates to a gateway, and the
+  prompts the session shows belong to the machines behind it. An SSH-terminating
+  proxy has the same property and must be opened with fill off too.
+- **Consent is to one prompt.** Each offer has an id, and the fill must name
+  the live one; a fill for an offer that has since been replaced — the `sudo`
+  timed out and a different prompt took its place — is refused.
 - **Only prompts that ask for this account's password.** The core classifies
   the last line of output against an allow-list. `[sudo] … for USER:` and
   `doas (USER@…)` count only when USER is the login user; a nested
   `user@other-host's password:`, key passphrases, `git`/HTTPS credentials,
   `Enter password:` (database and archive tools) and `New password:` are never
-  offered. A bare `Password:` is offered — it is also what `su` and a nested
-  `login` print, which is why the offer names the host and the credential and
-  never fills by itself.
-- **Once per prompt, never retried.** Any keystroke withdraws the offer, and a
-  fill consumes it. If a prompt of the same kind comes back within 15 seconds
-  of a fill, the saved password was refused: the UI says so and that prompt —
-  and any further one in the window — is not offered again, so a wrong saved
-  password cannot walk an account into PAM faillock or fail2ban. This is
-  language-agnostic; it does not parse "Sorry, try again".
-- **A mis-detected prompt that echoes is contained.** For 5 seconds after a
-  fill, the password is masked out of the output (one `*` per character, also
-  across chunk boundaries) before the recorder or the UI sees it; the UI then
-  sends Ctrl-U so the line is not run on Enter, and warns. Recordings capture
-  output only, so the typed password is not in them either way.
+  offered. A line where a carriage return draws the prompt over other text
+  (`(bob@evil) \rPassword: `) is not a prompt. Bare `Password:` prompts are off
+  unless the user turns them on.
+- **A rejected password is not typed again.** Any keystroke withdraws the
+  offer, and a fill consumes it. If a prompt of the same kind comes back within
+  15 seconds of a fill with nothing but Enter typed in between, the saved
+  password was refused: the UI says so, and the core remembers it (by a keyed
+  digest, never the password) and refuses to type it again on that session
+  until it has been changed in the vault — so a wrong saved password cannot
+  walk an account into PAM faillock or fail2ban. This is language-agnostic; it
+  does not parse "Sorry, try again".
+- **A mis-detected prompt that echoes is contained.** After a fill — for 30
+  seconds, cut to 3 seconds after the next keystroke — the password is masked
+  out of the output (one `*` per character, in place) before the recorder or
+  the UI sees it, also when it is split across reads, wrapped at the margin or
+  interleaved with colour and cursor sequences. The core then sends Ctrl-U so
+  the line is not run on Enter, and the UI warns. Recordings capture output
+  only, so the typed password is not in them either way.
 
-Not protected, and not claimed to be: a remote host you are logged into can
-print a prompt that looks like one the core accepts. What that wins is the
-password the user already gave that same host to log in with — and only after
-the user accepts an offer that names the host.
+Not protected, and not claimed to be:
+
+- **Which machine is asking.** Anything printing into this session — a nested
+  `ssh` (including another server's keyboard-interactive prompt), `telnet`,
+  `ftp`, `su` on another host — can draw an offer, and a nested host can print
+  `[sudo] password for USER:` with the same login name. The core sees bytes, not
+  machines: it cannot tell which machine or program prints the prompt, and an
+  accepted offer sends the outer host's password there. The offer says so and
+  never names a host.
+- **A transformed echo.** A program that echoes the password changed — readline
+  showing a non-ASCII byte as `\303\244` in the C locale, `^X` or `M-x` for
+  control and meta characters — is not masked. Ctrl-U is readline's and zle's
+  kill-line: the text stays in their kill ring, and a program reading the
+  terminal raw may take it as just another byte.
+- **Copies the core does not own.** The password is handed to the SSH
+  library in a buffer the core wipes; the library's own packet buffers are not
+  ours to wipe.
+- **A compromised webview.** The defence is against accidents and a buggy UI.
+  A webview running hostile code already has the ungated password-reveal call
+  and does not need this one.
 
 ## Biometric unlock (desktop: Touch ID, Windows Hello)
 

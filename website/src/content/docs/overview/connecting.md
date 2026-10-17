@@ -29,11 +29,22 @@ typing a login name or a code.
 ## The saved password at `sudo` and other prompts
 
 On a host you logged into with a saved password, a later prompt for that same
-password — `[sudo] password for you:`, `doas (you@host) password:`, a bare
-`Password:` — brings up an offer at the foot of the pane: **Insert saved
-password**, naming the password and the host. Click it, or press **Ctrl+Shift+P**
-(**⇧⌘P** on macOS) while the offer is shown. The password is typed, not
-submitted: Enter is still yours.
+password — `[sudo] password for you:`, `doas (you@host) password:` — brings up
+an offer at the foot of the pane: **Insert saved password**, naming the saved
+password. Click it, or press **Ctrl+Shift+P** (**⇧⌘P** on macOS) while the offer
+is shown. The password is typed, not submitted: Enter is still yours. The
+terminal shrinks while the offer is shown, so the prompt stays in sight.
+
+Bare `Password:` prompts (`su`, `login`) are offered only if you also turn on
+**Also offer at bare “Password:” prompts** in Settings → Terminal. A bare
+prompt names no one, and it could be any program on any machine.
+
+What it cannot do: **tell which machine is asking.** The app sees what is
+printed in the terminal, not where it comes from. After you `ssh`, `telnet` or
+`ftp` from that host to another one, a prompt there can bring up the same offer,
+and accepting it sends this host's password there. That is why the offer never
+names a host, and why it is never offered for a host with a username template:
+that password is the gateway's, and the prompts are the machines behind it.
 
 What it will not do, on purpose:
 
@@ -43,9 +54,10 @@ What it will not do, on purpose:
   `user@other-host's password`, a key passphrase, a `git` credential, a database
   client's `Enter password:`.
 - **Retry a wrong password.** Start typing and the offer goes away. If the same
-  prompt comes straight back after a fill, the saved password was refused; you
-  are told so and it is not offered again, because typing a wrong password
-  repeatedly is how accounts get locked.
+  prompt comes straight back after a fill, the saved password was probably
+  refused; you are told so, and it is not typed again in that session until
+  you change it in the vault, because typing a wrong password repeatedly is how
+  accounts get locked.
 - **Show it.** The password never reaches the window or the clipboard. If a
   prompt turns out to echo what it reads, the password is masked on screen and
   in the session recording, the line is cleared, and you are warned.

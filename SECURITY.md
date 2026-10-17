@@ -392,9 +392,13 @@ share, or any key material at all is a bug. What it does *not* defend against
 So does **password fill at terminal prompts**
 (`rust-core/crates/ffi/src/password_fill.rs`): typing a secret other than the
 session's own login password, into another session, at a prompt the core did
-not classify, more than once per prompt, followed by Enter, or letting the
-plaintext reach the UI, IPC or a recording is a bug. The invariant and its
-limits are in
+not classify, for an offer the user did not accept, more than once per prompt,
+after the remote rejected it, followed by Enter, or letting the plaintext reach
+the UI, IPC or a recording is a bug. What it cannot do is tell which machine
+prints a prompt: after a nested `ssh`, `telnet` or `ftp`, an accepted offer
+sends the outer host's password to whatever is asking, and that is documented,
+not a bug. Nor does it defend against a compromised webview, which already has
+the ungated password-reveal call. The invariant and its limits are in
 [`THREAT_MODEL.md`](THREAT_MODEL.md#saved-password-at-interactive-prompts).
 
 Out of scope: the unsigned-build OS warnings above, and the documented
