@@ -1,63 +1,15 @@
 // AppearancePicker — the colour tag + icon pickers of the host and group editors
-// (#134), and ColorTick, the one mark that draws a tag wherever a host or group
-// is listed. Both radio groups follow the ARIA radio pattern: one tab stop,
-// arrows move AND select, Home/End jump — the same keys as UnderlineTabs.
+// (#134). Both radio groups follow the ARIA radio pattern: one tab stop, arrows
+// move AND select, Home/End jump — the same keys as UnderlineTabs.
 
 import React, { useId, useRef } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
 import { RADIUS, rem, SIZE, TEXT } from "@/theme/tokens";
 import { BTN_RESET, Icon, type IconName } from "@/components/primitives";
 import { useIsMobile } from "@/store/responsive";
-import { useApp } from "@/store/app";
 import { useTranslation, tDyn } from "@/i18n";
-import {
-  APPEARANCE_ICONS,
-  TAG_COLORS,
-  isKnownColor,
-  isKnownIcon,
-  liveHostColor,
-  swatchColor,
-  type TagColor,
-} from "@/components/appearance";
-
-/** The localized name of a colour tag ("Red"), for labels and screen readers. */
-export const colorName = (id: TagColor): string => tDyn(`appearance.colors.${id}`);
-
-/** A thin rounded bar in the tag colour, beside a host or group label. A bar,
- *  not a dot, on purpose: the round dot next to a host already means "a live
- *  session", and two dots one glance apart would make colour the only thing
- *  telling them apart. Named for assistive tech, so the tag is never sight-only.
- *  Renders nothing for no colour / an id this build does not know. */
-export function ColorTick({ color, height = 14 }: { color: string | null | undefined; height?: number }) {
-  const p = usePalette();
-  const { t } = useTranslation();
-  const c = swatchColor(color, p);
-  if (!c || !isKnownColor(color)) return null;
-  return (
-    <span
-      role="img"
-      aria-label={t("appearance.tagged", { color: colorName(color) })}
-      title={colorName(color)}
-      style={{
-        display: "inline-block",
-        width: rem(3),
-        height: rem(height),
-        borderRadius: RADIUS.tick,
-        background: c,
-        flexShrink: 0,
-      }}
-    />
-  );
-}
-
-/** The current colour tag of the host behind an open pane (see liveHostColor). */
-export function useLiveHostColor(
-  profile: { uid: string; profileId: string; color?: string | null } | null,
-): TagColor | null {
-  const hosts = useApp((s) => s.hosts);
-  const groups = useApp((s) => s.groups);
-  return profile ? liveHostColor(profile, hosts, groups) : null;
-}
+import { APPEARANCE_ICONS, TAG_COLORS, isKnownColor, isKnownIcon, type TagColor } from "@/components/appearance";
+import { ColorTick, colorName } from "@/components/ColorTick";
 
 /** Roving-tabindex radio keys over the `[role="radio"]` children of `ref`. */
 function useRadioKeys<T>(options: readonly T[], value: T, onChange: (v: T) => void) {
@@ -194,7 +146,7 @@ export function AppearancePicker({
             }}
           >
             <ColorTick color={inheritedColor} height={12} />
-            {t("appearance.inherit")}: {colorName(inheritedColor)}
+            {t("appearance.inheritFrom", { color: colorName(inheritedColor) })}
           </div>
         )}
       </div>

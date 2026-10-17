@@ -23,9 +23,10 @@ import { useCtx } from "@/store/ctx";
 import { apiErrorMessage, type VaultInfo } from "@/bridge/types";
 import { serverShortLabel, vaultLoc, vaultServer } from "@/bridge/vaults";
 import { useTranslation, tDyn } from "@/i18n";
-import { effectiveHostFilter, indexHostGroups, isUngrouped } from "@/support/hostGroups";
-import { appearanceIcon, groupColor, swatchColor } from "@/components/appearance";
-import { ColorTick } from "@/components/AppearancePicker";
+import { effectiveHostFilter, isUngrouped } from "@/support/hostGroups";
+import { appearanceIcon, swatchColor } from "@/components/appearance";
+import { ColorTick, useAppearanceIndex } from "@/components/ColorTick";
+import { groupColor } from "@/support/hostAppearance";
 
 // The four vault-item types share one screen (ViewSecrets, with in-screen tabs) and
 // now one nav destination. Active-state tests membership of this set, not route===,
@@ -958,14 +959,13 @@ export function Sidebar({
   };
 
   // Before the early return below: a hook cannot follow it.
-  const ungroupedCount = useMemo(() => {
-    const groupIndex = indexHostGroups(groups);
-    return hosts.filter((h) => isUngrouped(groupIndex, h.profileId)).length;
-  }, [groups, hosts]);
+  const appearance = useAppearanceIndex();
+  const ungroupedCount = useMemo(
+    () => hosts.filter((h) => isUngrouped(appearance.byHost, h.profileId)).length,
+    [appearance, hosts],
+  );
 
   if (!wide || collapsed) return <SidebarRail onExpand={wide ? onToggleCollapse : undefined} />;
-
-  const groupsById = new Map(groups.map((g) => [g.groupId, g]));
 
   const onHosts = route === "hosts";
   const hostCount = hosts.length;
@@ -1022,7 +1022,7 @@ export function Sidebar({
             <NavItem
               key={g.groupId}
               icon={appearanceIcon(g.icon, groupIcon(g.label))}
-              tag={groupColor(g.groupId, groupsById)}
+              tag={groupColor(g.groupId, appearance)}
               label={g.label}
               count={g.memberIds.filter((m) => hosts.some((h) => h.profileId === m)).length}
               sub

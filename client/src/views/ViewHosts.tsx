@@ -23,8 +23,9 @@ import { nextRow } from "@/support/listNav";
 import { filterHosts, searchKeyAction } from "@/support/hostsSearch";
 import { HOST_DRAG_MIME, draggedHostIds, hostDrag } from "@/support/hostDrag";
 import { compareByGroup, effectiveHostFilter, indexHostGroups, isUngrouped } from "@/support/hostGroups";
-import { appearanceIcon, effectiveHostColor, groupColor, isKnownIcon, swatchColor, type TagColor } from "@/components/appearance";
-import { ColorTick } from "@/components/AppearancePicker";
+import { appearanceIcon, isKnownIcon, swatchColor, type TagColor } from "@/components/appearance";
+import { ColorTick, useAppearanceIndex } from "@/components/ColorTick";
+import { effectiveHostColor, groupColor } from "@/support/hostAppearance";
 
 /** The host's chosen icon, beside its name — nothing when it has none: a host
  *  has no default glyph to replace, and a generic server icon on every card
@@ -32,6 +33,16 @@ import { ColorTick } from "@/components/AppearancePicker";
 function HostGlyph({ h, size }: { h: ConnectionProfile; size: number }) {
   const p = usePalette();
   return isKnownIcon(h.icon) ? <Icon name={h.icon} size={size} color={p.txt2} stroke={1.7} /> : null;
+}
+
+/** The colour tick in a fixed slot, so tagged and untagged hosts keep their
+ *  names on one line. */
+function TagSlot({ tag, height }: { tag: TagColor | null; height?: number }) {
+  return (
+    <span style={{ width: rem(3), flexShrink: 0, display: "inline-flex" }}>
+      <ColorTick color={tag} height={height} />
+    </span>
+  );
 }
 
 /** The address as the list shows it — and, since dragging a card no longer lets
@@ -198,7 +209,7 @@ function HostCard({
       {/* L1 — colour tick, 7px status dot, icon + name (reference: dot keys off a
           live session) */}
       <div style={{ display: "flex", alignItems: "center", gap: rem(8), minWidth: 0 }}>
-        <ColorTick color={tag} />
+        <TagSlot tag={tag} />
         <span
           style={{
             width: rem(7),
@@ -480,10 +491,7 @@ function HostRow({
         aria-label={t("hosts.selectHostLabel", { label: h.label })}
         style={{ opacity: show || selected ? 1 : 0.25 }}
       />
-      {/* A fixed slot, so tagged and untagged rows keep their columns aligned. */}
-      <span style={{ width: rem(3), flexShrink: 0, display: "inline-flex" }}>
-        <ColorTick color={tag} height={16} />
-      </span>
+      <TagSlot tag={tag} height={16} />
       <StatusDot
         status={session ? "online" : "unknown"}
         size={8}
@@ -686,7 +694,8 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
     () => indexHostGroups(groups).get(h.profileId) ?? NO_GROUPS,
     [groups, h.profileId],
   );
-  const tag = useMemo(() => effectiveHostColor(h, groups), [h, groups]);
+  const appearance = useAppearanceIndex();
+  const tag = useMemo(() => effectiveHostColor(h, appearance), [h, appearance]);
 
   const onDelete = () => {
     if (!vault) return;
@@ -1406,10 +1415,10 @@ export function ViewHosts() {
   // profileId → groups, built once and shared by the "Ungrouped" filter, the group
   // sort and the list's Group column.
   const groupIndex = useMemo(() => indexHostGroups(groups), [groups]);
-  const groupsById = useMemo(() => new Map(groups.map((g) => [g.groupId, g])), [groups]);
+  const appearance = useAppearanceIndex();
   const hostTags = useMemo(
-    () => new Map(hosts.map((x) => [x.profileId, effectiveHostColor(x, groups)])),
-    [hosts, groups],
+    () => new Map(hosts.map((x) => [x.profileId, effectiveHostColor(x, appearance)])),
+    [hosts, appearance],
   );
 
   const [sort, setSort] = useState<SortKey>(loadHostSort);
@@ -2225,6 +2234,7 @@ export function ViewHosts() {
           {touch &&
             groups.map((g) => {
               const on = hostFilter === g.groupId;
+              const tag = groupColor(g.groupId, appearance);
               return (
                 <button
                   key={g.groupId}
@@ -2251,10 +2261,10 @@ export function ViewHosts() {
                   <Icon
                     name={appearanceIcon(g.icon, "folder")}
                     size={13}
-                    color={swatchColor(groupColor(g.groupId, groupsById), p) ?? (on ? p.txt2 : p.txt3)}
+                    color={swatchColor(tag, p) ?? (on ? p.txt2 : p.txt3)}
                   />
                   {g.label}
-                  <ColorTick color={groupColor(g.groupId, groupsById)} height={12} />
+                  <ColorTick color={tag} height={12} />
                 </button>
               );
             })}

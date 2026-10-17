@@ -16,9 +16,11 @@ import { guard } from "@/store/action";
 import type { ServerGroup } from "@/bridge/types";
 import * as api from "@/bridge/api";
 import { useTranslation } from "@/i18n";
-import { indexHostGroups, isUngrouped } from "@/support/hostGroups";
-import { AppearancePicker, ColorTick } from "@/components/AppearancePicker";
-import { appearanceIcon, groupColor, swatchColor } from "@/components/appearance";
+import { isUngrouped } from "@/support/hostGroups";
+import { groupColor } from "@/support/hostAppearance";
+import { AppearancePicker } from "@/components/AppearancePicker";
+import { ColorTick, useAppearanceIndex } from "@/components/ColorTick";
+import { appearanceIcon, isKnownColor, swatchColor } from "@/components/appearance";
 
 // Gate: mount the body (and its dialog hooks) only while open, so Escape/focus
 // register per-open per the useDialogKeys contract rather than for App's lifetime.
@@ -47,7 +49,7 @@ function GroupsModalBody() {
   const [styling, setStyling] = useState<{ groupId: string; color: string | null; icon: string | null } | null>(
     null,
   );
-  const byId = new Map(groups.map((g) => [g.groupId, g]));
+  const appearance = useAppearanceIndex();
 
   const close = () => setGroupsModal(false);
   useDialogKeys(close);
@@ -60,8 +62,7 @@ function GroupsModalBody() {
     g.memberIds.filter((id) => hosts.some((h) => h.profileId === id)).length;
 
   // hosts that belong to no group
-  const groupIndex = indexHostGroups(groups);
-  const ungrouped = hosts.filter((h) => isUngrouped(groupIndex, h.profileId));
+  const ungrouped = hosts.filter((h) => isUngrouped(appearance.byHost, h.profileId));
 
   const startEdit = (g: ServerGroup) => {
     setEditing(g.groupId);
@@ -250,170 +251,174 @@ function GroupsModalBody() {
         </div>
 
         <div style={{ flex: 1, overflowY: "auto", padding: `${rem(10)} ${rem(22)} ${rem(16)}` }} className="uh-stagger">
-          {groups.map((g, i) => (
-            <React.Fragment key={g.groupId}>
-              <div
-                onClick={() => selHost && assignTo(g)}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: rem(12),
-                  padding: `${rem(12)} 0`,
-                  borderTop: i === 0 ? undefined : `1px solid ${p.line}`,
-                  background: selHost ? p.bg2 : "transparent",
-                  animationDelay: i * 40 + "ms",
-                  cursor: selHost ? "copy" : "default",
-                }}
-              >
-                <span
-                  style={{
-                    width: rem(36),
-                    height: rem(36),
-                    borderRadius: 10,
-                    background: p.bg3,
-                    border: `1px solid ${p.line}`,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    flexShrink: 0,
-                  }}
-                >
-                  <Icon
-                    name={appearanceIcon(g.icon, "folder")}
-                    size={17}
-                    color={swatchColor(groupColor(g.groupId, byId), p) ?? p.txt2}
-                  />
-                </span>
-                <ColorTick color={groupColor(g.groupId, byId)} height={18} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  {editing === g.groupId ? (
-                    <input
-                      autoFocus
-                      {...NO_AUTOCORRECT}
-                      value={draft}
-                      onChange={(e) => setDraft(e.target.value)}
-                      onBlur={() => commit(g)}
-                      onKeyDown={(e) => e.key === "Enter" && commit(g)}
-                      style={{
-                        width: "100%",
-                        background: p.bg0,
-                        border: `1px solid ${p.accentLine}`,
-                        borderRadius: 8,
-                        padding: isMobile ? `${rem(9)} ${rem(11)}` : `${rem(5)} ${rem(9)}`,
-                        color: p.txt,
-                        fontSize: TEXT.body,
-                        fontWeight: 700,
-                        fontFamily: UI,
-                        outline: "none",
-                      }}
-                    />
-                  ) : (
-                    <div style={{ fontSize: TEXT.body, fontWeight: 700, color: p.txt }}>{g.label}</div>
-                  )}
-                  <div style={{ fontSize: TEXT.small, color: p.txt3, marginTop: rem(2) }}>
-                    {t("count.hosts", { count: memberCount(g) })}
-                  </div>
-                </div>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    startEdit(g);
-                  }}
-                  title={t("groups.rename")}
-                  aria-label={t("groups.rename")}
-                  style={{
-                    width: isMobile ? rem(44) : rem(30),
-                    height: isMobile ? rem(44) : rem(30),
-                    borderRadius: 8,
-                    border: `1px solid ${p.line}`,
-                    background: p.bg1,
-                    color: p.txt3,
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    ...(isMobile ? { flexShrink: 0 } : null),
-                  }}
-                >
-                  <Icon name="pencil" size={14} />
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setStyling(
-                      styling?.groupId === g.groupId
-                        ? null
-                        : { groupId: g.groupId, color: g.color ?? null, icon: g.icon ?? null },
-                    );
-                  }}
-                  title={t("appearance.edit")}
-                  aria-label={t("appearance.edit")}
-                  aria-expanded={styling?.groupId === g.groupId}
-                  style={{
-                    width: isMobile ? rem(44) : rem(30),
-                    height: isMobile ? rem(44) : rem(30),
-                    borderRadius: 8,
-                    border: `1px solid ${p.line}`,
-                    background: styling?.groupId === g.groupId ? p.bg3 : p.bg1,
-                    color: p.txt3,
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    ...(isMobile ? { flexShrink: 0 } : null),
-                  }}
-                >
-                  <Icon name="sliders" size={14} />
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    del(g);
-                  }}
-                  title={t("common.delete")}
-                  aria-label={t("common.delete")}
-                  style={{
-                    width: isMobile ? rem(44) : rem(30),
-                    height: isMobile ? rem(44) : rem(30),
-                    borderRadius: 8,
-                    border: `1px solid ${p.line}`,
-                    background: p.bg1,
-                    color: p.txt3,
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    ...(isMobile ? { flexShrink: 0 } : null),
-                  }}
-                >
-                  <Icon name="trash" size={14} />
-                </button>
-              </div>
-              {styling?.groupId === g.groupId && (
+          {groups.map((g, i) => {
+            const tag = groupColor(g.groupId, appearance);
+            const parentTag = g.parentId ? groupColor(g.parentId, appearance) : null;
+            return (
+              <React.Fragment key={g.groupId}>
                 <div
-                  role="group"
-                  aria-label={`${t("appearance.title")} — ${g.label}`}
-                  style={{ padding: `${rem(4)} 0 ${rem(14)} ${rem(48)}` }}
+                  onClick={() => selHost && assignTo(g)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: rem(12),
+                    padding: `${rem(12)} 0`,
+                    borderTop: i === 0 ? undefined : `1px solid ${p.line}`,
+                    background: selHost ? p.bg2 : "transparent",
+                    animationDelay: i * 40 + "ms",
+                    cursor: selHost ? "copy" : "default",
+                  }}
                 >
-                  <AppearancePicker
-                    color={styling.color}
-                    icon={styling.icon}
-                    onColor={(color) => setStyling({ ...styling, color })}
-                    onIcon={(icon) => setStyling({ ...styling, icon })}
-                    inheritedColor={g.parentId ? groupColor(g.parentId, byId) : null}
-                  />
-                  <div style={{ display: "flex", gap: rem(8), marginTop: rem(12) }}>
-                    <Btn size="sm" icon="check" onClick={() => void saveAppearance(g)}>
-                      {t("common.save")}
-                    </Btn>
-                    <Btn size="sm" variant="ghost" onClick={() => setStyling(null)}>
-                      {t("common.cancel")}
-                    </Btn>
+                  <span
+                    style={{
+                      width: rem(36),
+                      height: rem(36),
+                      borderRadius: 10,
+                      background: p.bg3,
+                      border: `1px solid ${p.line}`,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flexShrink: 0,
+                    }}
+                  >
+                    <Icon
+                      name={appearanceIcon(g.icon, "folder")}
+                      size={17}
+                      color={swatchColor(tag, p) ?? p.txt2}
+                    />
+                  </span>
+                  <ColorTick color={tag} height={18} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    {editing === g.groupId ? (
+                      <input
+                        autoFocus
+                        {...NO_AUTOCORRECT}
+                        value={draft}
+                        onChange={(e) => setDraft(e.target.value)}
+                        onBlur={() => commit(g)}
+                        onKeyDown={(e) => e.key === "Enter" && commit(g)}
+                        style={{
+                          width: "100%",
+                          background: p.bg0,
+                          border: `1px solid ${p.accentLine}`,
+                          borderRadius: 8,
+                          padding: isMobile ? `${rem(9)} ${rem(11)}` : `${rem(5)} ${rem(9)}`,
+                          color: p.txt,
+                          fontSize: TEXT.body,
+                          fontWeight: 700,
+                          fontFamily: UI,
+                          outline: "none",
+                        }}
+                      />
+                    ) : (
+                      <div style={{ fontSize: TEXT.body, fontWeight: 700, color: p.txt }}>{g.label}</div>
+                    )}
+                    <div style={{ fontSize: TEXT.small, color: p.txt3, marginTop: rem(2) }}>
+                      {t("count.hosts", { count: memberCount(g) })}
+                    </div>
                   </div>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      startEdit(g);
+                    }}
+                    title={t("groups.rename")}
+                    aria-label={t("groups.rename")}
+                    style={{
+                      width: isMobile ? rem(44) : rem(30),
+                      height: isMobile ? rem(44) : rem(30),
+                      borderRadius: 8,
+                      border: `1px solid ${p.line}`,
+                      background: p.bg1,
+                      color: p.txt3,
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      ...(isMobile ? { flexShrink: 0 } : null),
+                    }}
+                  >
+                    <Icon name="pencil" size={14} />
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setStyling(
+                        styling?.groupId === g.groupId
+                          ? null
+                          : { groupId: g.groupId, color: g.color ?? null, icon: g.icon ?? null },
+                      );
+                    }}
+                    title={t("appearance.edit")}
+                    aria-label={t("appearance.edit")}
+                    aria-expanded={styling?.groupId === g.groupId}
+                    style={{
+                      width: isMobile ? rem(44) : rem(30),
+                      height: isMobile ? rem(44) : rem(30),
+                      borderRadius: 8,
+                      border: `1px solid ${p.line}`,
+                      background: styling?.groupId === g.groupId ? p.bg3 : p.bg1,
+                      color: p.txt3,
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      ...(isMobile ? { flexShrink: 0 } : null),
+                    }}
+                  >
+                    <Icon name="sliders" size={14} />
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      del(g);
+                    }}
+                    title={t("common.delete")}
+                    aria-label={t("common.delete")}
+                    style={{
+                      width: isMobile ? rem(44) : rem(30),
+                      height: isMobile ? rem(44) : rem(30),
+                      borderRadius: 8,
+                      border: `1px solid ${p.line}`,
+                      background: p.bg1,
+                      color: p.txt3,
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      ...(isMobile ? { flexShrink: 0 } : null),
+                    }}
+                  >
+                    <Icon name="trash" size={14} />
+                  </button>
                 </div>
-              )}
-            </React.Fragment>
-          ))}
+                {styling?.groupId === g.groupId && (
+                  <div
+                    role="group"
+                    aria-label={`${t("appearance.title")} — ${g.label}`}
+                    style={{ padding: `${rem(4)} 0 ${rem(14)} ${rem(48)}` }}
+                  >
+                    <AppearancePicker
+                      color={styling.color}
+                      icon={styling.icon}
+                      onColor={(color) => setStyling({ ...styling, color })}
+                      onIcon={(icon) => setStyling({ ...styling, icon })}
+                      inheritedColor={isKnownColor(parentTag) ? parentTag : null}
+                    />
+                    <div style={{ display: "flex", gap: rem(8), marginTop: rem(12) }}>
+                      <Btn size="sm" icon="check" onClick={() => void saveAppearance(g)}>
+                        {t("common.save")}
+                      </Btn>
+                      <Btn size="sm" variant="ghost" onClick={() => setStyling(null)}>
+                        {t("common.cancel")}
+                      </Btn>
+                    </div>
+                  </div>
+                )}
+              </React.Fragment>
+            );
+          })}
           <button
             onClick={addGroup}
             style={{

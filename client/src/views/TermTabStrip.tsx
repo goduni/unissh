@@ -14,8 +14,9 @@ import { WorkspaceButton } from "@/components/WorkspaceButton";
 import { useTranslation, tDyn } from "@/i18n";
 import type { ConnectionProfile } from "@/bridge/types";
 import { paneProfile, useApp, type TerminalTab } from "@/store/app";
-import { isKnownIcon, liveHostColor, swatchColor } from "@/components/appearance";
-import { colorName } from "@/components/AppearancePicker";
+import { isKnownIcon, swatchColor } from "@/components/appearance";
+import { colorName, useAppearanceIndex } from "@/components/ColorTick";
+import { liveHost } from "@/support/hostAppearance";
 
 /** Aggregate a tab's pane statuses into one state: online if any pane is live,
  *  else error if any errored, else muted (connecting/closed). Colour AND shape
@@ -89,7 +90,7 @@ export function TermTabStrip({
   // The tab strip's `hosts` prop is the host PICKER's list; the colour tag reads
   // the store's own, same as the hosts screen, so the two cannot disagree.
   const storeHosts = useApp((s) => s.hosts);
-  const groups = useApp((s) => s.groups);
+  const appearance = useAppearanceIndex();
 
   // Keep the active tab in view when it changes (e.g. keyboard tab-jump).
   useEffect(() => {
@@ -167,10 +168,10 @@ export function TermTabStrip({
           // this strip — telling the production tab from staging before Enter.
           const focused = tab.panes.find((x) => x.id === tab.activePaneId) ?? tab.panes[0];
           const profile = focused ? paneProfile(focused) : null;
-          const tag = profile ? liveHostColor(profile, storeHosts, groups) : null;
+          const { color: tag, icon: tabIcon } = profile
+            ? liveHost(profile, storeHosts, appearance)
+            : { color: null, icon: null };
           const tagColor = swatchColor(tag, p);
-          const live = profile?.uid ? storeHosts.find((h) => h.uid === profile.uid) : undefined;
-          const tabIcon = (live ?? profile)?.icon;
           // The local marker belongs in the label too, not only in the icon: an
           // icon is `aria-hidden`, and "which machine is this" is exactly the
           // thing a screen-reader user must not have to infer. Same for the tag:

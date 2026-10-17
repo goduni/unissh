@@ -65,7 +65,8 @@ import { exportPath } from "@/support/paths";
 import { authorizedKeysAppendCmd } from "@/support/authorizedKeys";
 import { indexHostGroups } from "@/support/hostGroups";
 import { AppearancePicker } from "@/components/AppearancePicker";
-import { groupColor } from "@/components/appearance";
+import type { TagColor } from "@/components/appearance";
+import { effectiveHostColor, indexAppearance } from "@/support/hostAppearance";
 
 // ── Form atoms ─────────────────────────────────────────────────
 interface MSegOption<T extends string> {
@@ -356,6 +357,17 @@ type AuthSeg = "key" | "password" | "ask" | "personal" | "systemAgent";
 /** Sentinel `groupId` meaning "create a new group (named `newGroupName`) on save".
  *  Group ids are `slug-timestamp`, so this can never collide with a real one. */
 const NEW_GROUP = "__new__";
+
+/** The colour a host with none of its own will show once saved under `groupId`.
+ *  Save files it under that one group and drops it from every other, so the
+ *  rendering rule runs over the groups as they will be then — not over the one
+ *  group's colour, which would disagree with the tab the moment the rule does. */
+function inheritedOnSave(groups: ServerGroup[], groupId: string): TagColor | null {
+  if (!groupId || groupId === NEW_GROUP) return null; // a new group has no colour yet
+  const self = "\0this-host";
+  const after = groups.map((g) => ({ ...g, memberIds: g.groupId === groupId ? [self] : [] }));
+  return effectiveHostColor({ profileId: self }, indexAppearance(after));
+}
 
 function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: () => void }) {
   const p = usePalette();
@@ -1733,11 +1745,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
               icon={icon}
               onColor={setColor}
               onIcon={setIcon}
-              inheritedColor={
-                groupId && groupId !== NEW_GROUP
-                  ? groupColor(groupId, new Map(groups.map((g) => [g.groupId, g])))
-                  : null
-              }
+              inheritedColor={inheritedOnSave(groups, groupId)}
             />
           </Field>
 

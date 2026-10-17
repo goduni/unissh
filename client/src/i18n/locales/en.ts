@@ -829,7 +829,7 @@ export const en = {
     "color": "Color",
     "icon": "Icon",
     "none": "None",
-    "inherit": "From group",
+    "inheritFrom": "From group: {{color}}",
     "defaultIcon": "Default",
     "tagged": "{{color}} tag",
     "edit": "Appearance",

@@ -868,7 +868,7 @@ export const ru = {
     "color": "Цвет",
     "icon": "Значок",
     "none": "Нет",
-    "inherit": "Из группы",
+    "inheritFrom": "Из группы: {{color}}",
     "defaultIcon": "Обычный",
     "tagged": "Метка: {{color}}",
     "edit": "Оформление",

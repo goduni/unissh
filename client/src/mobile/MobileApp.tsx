@@ -29,8 +29,8 @@ import * as api from "@/bridge/api";
 import { ViewTerminal } from "@/views/ViewTerminal";
 import { ReconnectBanner } from "@/components/ReconnectBanner";
 import { WorkspaceButton } from "@/components/WorkspaceButton";
-import { ColorTick } from "@/components/AppearancePicker";
-import { liveHostColor } from "@/components/appearance";
+import { ColorTick, useAppearanceIndex } from "@/components/ColorTick";
+import { liveHost } from "@/support/hostAppearance";
 import { ViewHosts } from "@/views/ViewHosts";
 import { ViewRun } from "@/views/ViewRun";
 import { ViewSftp } from "@/views/sftp/ViewSftp";
@@ -310,7 +310,7 @@ function MTerminal({ onNeedHosts }: { onNeedHosts: () => void }) {
   const closeTerminal = useApp((s) => s.closeTerminal);
   const reconnectPane = useApp((s) => s.reconnectPane);
   const hosts = useApp((s) => s.hosts);
-  const groups = useApp((s) => s.groups);
+  const appearance = useAppearanceIndex();
   const active = terminals.find((t) => t.id === activeTermId) || terminals[terminals.length - 1];
   // Mobile is single-pane: act on the active tab's active (first) pane.
   const activePane = active?.panes.find((pp) => pp.id === active.activePaneId) ?? active?.panes[0];
@@ -428,7 +428,7 @@ function MTerminal({ onNeedHosts }: { onNeedHosts: () => void }) {
                 >
                   <span style={{ width: 7, height: 7, borderRadius: "50%", background: tp?.status === "online" ? p.green : tp?.status === "error" ? p.red : p.txt3 }} />
                   {/* The host's colour tag (#134) — the phone's only tab strip. */}
-                  <ColorTick color={tpProfile ? liveHostColor(tpProfile, hosts, groups) : null} />
+                  <ColorTick color={tpProfile ? liveHost(tpProfile, hosts, appearance).color : null} />
                   <span style={{ maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{trm.title}</span>
                 </button>
                 <button

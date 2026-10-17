@@ -37,7 +37,7 @@ import { isMac, isPhoneOs } from "@/bridge/platform";
 import { matchesShortcut, useShortcuts } from "@/store/shortcuts";
 import { ContextMenu } from "@/components/ContextMenu";
 import { TermTabStrip } from "@/views/TermTabStrip";
-import { ColorTick, useLiveHostColor } from "@/components/AppearancePicker";
+import { ColorTick, useLiveHost } from "@/components/ColorTick";
 import { SnippetParamsForm } from "@/overlays/SnippetParamsForm";
 import {
   builtinsFromProfile,
@@ -1532,7 +1532,7 @@ function PaneIdentity({ pane }: { pane: TerminalPaneState }) {
   const profile = paneProfile(pane);
   // Per pane, unlike the tab: in a split of prod and staging this is the one
   // place that says which of the two has focus.
-  const tag = useLiveHostColor(profile);
+  const tag = useLiveHost(profile).color;
   if (!local && !profile) return null;
 
   // Ellipsize so a long user@host token can't push the theme/settings control
