@@ -939,16 +939,17 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
         targetGroupId = ""; // "No group"
       }
 
-      // On edit, moving to another group (or to none) must drop the host from any
-      // group it was previously in — otherwise it lingers in both.
-      if (edit) {
-        for (const g of groups) {
-          if (g.groupId !== targetGroupId && g.memberIds.includes(profileId)) {
-            await api.saveGroup(vault, {
-              ...g,
-              memberIds: g.memberIds.filter((id) => id !== profileId),
-            });
-          }
+      // Drop the host from every other group. On edit, so a move to another
+      // group (or to none) does not leave it in both. On create too: a group
+      // can still list the id of a deleted host, and a new host reusing that
+      // id would silently inherit that group's colour while this editor said
+      // otherwise.
+      for (const g of groups) {
+        if (g.groupId !== targetGroupId && g.memberIds.includes(profileId)) {
+          await api.saveGroup(vault, {
+            ...g,
+            memberIds: g.memberIds.filter((id) => id !== profileId),
+          });
         }
       }
 
