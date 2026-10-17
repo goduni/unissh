@@ -12959,7 +12959,7 @@ mod tests {
     #[test]
     fn stored_appearance_ids_are_normalized_on_read() {
         let sp: StoredProfile = serde_json::from_str(
-            r##"{"label":"L","host":"h","port":22,"user":"u","color":"#ff0000","icon":"rocket"}"##,
+            r##"{"label":"L","host":"h","port":22,"user":"u","jumps":[],"color":"#ff0000","icon":"rocket"}"##,
         )
         .unwrap();
         let prof = stored_to_profile("v", "p".to_owned(), sp);
