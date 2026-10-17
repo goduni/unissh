@@ -45,6 +45,19 @@ ignore = [
     "RUSTSEC-2025-0098", # unic-ucd-version
     "RUSTSEC-2025-0100", # unic-ucd-ident
 
+    # --- zbus split crates, unmaintained since zbus 6 (2026-10-16) ---------------
+    # RUSTSEC-2026-0370/0371/0372: zvariant, zbus_names and zvariant_derive were
+    # folded into zbus 6 and are no longer released on their own. No patched
+    # version exists — the fix is "move to zbus 6". Both zbus lines here still
+    # depend on them: zbus 4 via keyring → secret-service (the Linux Secret
+    # Service keychain) and zbus 5 via tauri-plugin-opener and our own logind
+    # lock watcher. Moving only our code would not drop them. Linux D-Bus only,
+    # not reachable from the crypto/sync core. Revisit when keyring and the
+    # Tauri plugins move to zbus 6, then move ours with them.
+    "RUSTSEC-2026-0370", # zvariant
+    "RUSTSEC-2026-0371", # zbus_names
+    "RUSTSEC-2026-0372", # zvariant_derive
+
     # --- quick-xml DoS advisories (fix is out of the pinned semver range) --------
     # RUSTSEC-2026-0194/0195: quadratic / unbounded-allocation DoS parsing crafted
     # XML. Fix is quick-xml >= 0.41, but the desktop toolkit (muda/wry menu + resource
