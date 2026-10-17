@@ -242,12 +242,12 @@ export function TermTabStrip({
                 borderRight: `1px solid ${p.line}`,
                 background: on ? p.bg0 : "transparent",
                 color: on ? p.txt : p.txt3,
-                // Tag = a top line, active = the bottom one: two edges, so a
-                // tagged active tab shows both and neither hides the other.
-                // Always 2px (transparent when untagged) so tags never shift
-                // the title.
-                borderTop: `2px solid ${tagColor ?? "transparent"}`,
                 borderBottom: `2px solid ${on ? p.accent : "transparent"}`,
+                // Tag = a top line, active = the bottom one: two edges, so a
+                // tagged active tab shows both and neither hides the other. An
+                // inset shadow, not a border: it takes no layout, so the strip
+                // keeps its height and an untagged tab is drawn as before.
+                boxShadow: tagColor ? `inset 0 2px 0 ${tagColor}` : undefined,
               }}
             >
               {/* solid dot = connected; hollow ring = not — shape backs up the colour */}
