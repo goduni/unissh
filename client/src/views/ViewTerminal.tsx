@@ -37,6 +37,7 @@ import { isMac, isPhoneOs } from "@/bridge/platform";
 import { matchesShortcut, useShortcuts } from "@/store/shortcuts";
 import { ContextMenu } from "@/components/ContextMenu";
 import { TermTabStrip } from "@/views/TermTabStrip";
+import { ColorTick, useLiveHostColor } from "@/components/AppearancePicker";
 import { SnippetParamsForm } from "@/overlays/SnippetParamsForm";
 import {
   builtinsFromProfile,
@@ -1529,6 +1530,9 @@ function PaneIdentity({ pane }: { pane: TerminalPaneState }) {
   const machine = useLocalMachine();
   const local = pane.target.kind === "local";
   const profile = paneProfile(pane);
+  // Per pane, unlike the tab: in a split of prod and staging this is the one
+  // place that says which of the two has focus.
+  const tag = useLiveHostColor(profile);
   if (!local && !profile) return null;
 
   // Ellipsize so a long user@host token can't push the theme/settings control
@@ -1555,6 +1559,7 @@ function PaneIdentity({ pane }: { pane: TerminalPaneState }) {
       }}
     >
       {local && <Icon name="laptop" size={12} color={p.txt3} />}
+      {!local && <ColorTick color={tag} height={12} />}
       {text}
       {local && (
         // The word, not just the icon: an icon alone is a thing to learn, and

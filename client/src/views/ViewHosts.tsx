@@ -23,6 +23,16 @@ import { nextRow } from "@/support/listNav";
 import { filterHosts, searchKeyAction } from "@/support/hostsSearch";
 import { HOST_DRAG_MIME, draggedHostIds, hostDrag } from "@/support/hostDrag";
 import { compareByGroup, effectiveHostFilter, indexHostGroups, isUngrouped } from "@/support/hostGroups";
+import { appearanceIcon, effectiveHostColor, groupColor, isKnownIcon, swatchColor, type TagColor } from "@/components/appearance";
+import { ColorTick } from "@/components/AppearancePicker";
+
+/** The host's chosen icon, beside its name — nothing when it has none: a host
+ *  has no default glyph to replace, and a generic server icon on every card
+ *  would be the noise this feature exists to cut through. */
+function HostGlyph({ h, size }: { h: ConnectionProfile; size: number }) {
+  const p = usePalette();
+  return isKnownIcon(h.icon) ? <Icon name={h.icon} size={size} color={p.txt2} stroke={1.7} /> : null;
+}
 
 /** The address as the list shows it — and, since dragging a card no longer lets
  *  you select the text on it (a `draggable` element cannot be text-selected),
@@ -62,6 +72,7 @@ const loadHostSort = (): SortKey => {
 // ── HostCard (density: cards) ──────────────────────────────────
 function HostCard({
   h,
+  tag,
   selected,
   active,
   session,
@@ -75,6 +86,8 @@ function HostCard({
   onDragStart,
 }: {
   h: ConnectionProfile;
+  /** The host's effective colour tag (own or its groups'), see appearance.ts. */
+  tag: TagColor | null;
   selected: boolean;
   active: boolean;
   session: boolean;
@@ -182,8 +195,10 @@ function HostCard({
         }}
       />
 
-      {/* L1 — 7px status dot + name (reference: dot keys off a live session) */}
+      {/* L1 — colour tick, 7px status dot, icon + name (reference: dot keys off a
+          live session) */}
       <div style={{ display: "flex", alignItems: "center", gap: rem(8), minWidth: 0 }}>
+        <ColorTick color={tag} />
         <span
           style={{
             width: rem(7),
@@ -193,6 +208,7 @@ function HostCard({
             background: session ? p.green : p.line2,
           }}
         />
+        <HostGlyph h={h} size={15} />
         <span
           style={{
             fontSize: TEXT.lead,
@@ -372,6 +388,7 @@ function HostCard({
 const NO_GROUPS: ServerGroup[] = [];
 function HostRow({
   h,
+  tag,
   selected,
   active,
   session,
@@ -386,6 +403,8 @@ function HostRow({
   onDragStart,
 }: {
   h: ConnectionProfile;
+  /** See HostCard. */
+  tag: TagColor | null;
   selected: boolean;
   active: boolean;
   session: boolean;
@@ -461,11 +480,16 @@ function HostRow({
         aria-label={t("hosts.selectHostLabel", { label: h.label })}
         style={{ opacity: show || selected ? 1 : 0.25 }}
       />
+      {/* A fixed slot, so tagged and untagged rows keep their columns aligned. */}
+      <span style={{ width: rem(3), flexShrink: 0, display: "inline-flex" }}>
+        <ColorTick color={tag} height={16} />
+      </span>
       <StatusDot
         status={session ? "online" : "unknown"}
         size={8}
         srLabel={session ? t("hosts.session") : undefined}
       />
+      <HostGlyph h={h} size={14} />
       <span
         style={{
           width: rem(150),
@@ -662,6 +686,7 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
     () => indexHostGroups(groups).get(h.profileId) ?? NO_GROUPS,
     [groups, h.profileId],
   );
+  const tag = useMemo(() => effectiveHostColor(h, groups), [h, groups]);
 
   const onDelete = () => {
     if (!vault) return;
@@ -698,6 +723,8 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
             background: session ? p.green : p.line2,
           }}
         />
+        <ColorTick color={tag} height={18} />
+        <HostGlyph h={h} size={17} />
         <h3
           style={{
             margin: 0,
@@ -1379,6 +1406,11 @@ export function ViewHosts() {
   // profileId → groups, built once and shared by the "Ungrouped" filter, the group
   // sort and the list's Group column.
   const groupIndex = useMemo(() => indexHostGroups(groups), [groups]);
+  const groupsById = useMemo(() => new Map(groups.map((g) => [g.groupId, g])), [groups]);
+  const hostTags = useMemo(
+    () => new Map(hosts.map((x) => [x.profileId, effectiveHostColor(x, groups)])),
+    [hosts, groups],
+  );
 
   const [sort, setSort] = useState<SortKey>(loadHostSort);
   // Sorting by group needs groups. The stored choice is left alone rather than
@@ -2216,8 +2248,13 @@ export function ViewHosts() {
                     color: on ? p.txt : p.txt3,
                   }}
                 >
-                  <Icon name="folder" size={13} color={on ? p.txt2 : p.txt3} />
+                  <Icon
+                    name={appearanceIcon(g.icon, "folder")}
+                    size={13}
+                    color={swatchColor(groupColor(g.groupId, groupsById), p) ?? (on ? p.txt2 : p.txt3)}
+                  />
                   {g.label}
+                  <ColorTick color={groupColor(g.groupId, groupsById)} height={12} />
                 </button>
               );
             })}
@@ -2493,6 +2530,7 @@ export function ViewHosts() {
                 <HostCard
                   key={h.profileId}
                   h={h}
+                  tag={hostTags.get(h.profileId) ?? null}
                   selected={sel.includes(h.profileId)}
                   active={open === h.profileId}
                   cursor={searching && i === cursorIdx}
@@ -2516,6 +2554,7 @@ export function ViewHosts() {
                 <HostRow
                   key={h.profileId}
                   h={h}
+                  tag={hostTags.get(h.profileId) ?? null}
                   selected={sel.includes(h.profileId)}
                   active={open === h.profileId}
                   cursor={searching && i === cursorIdx}
