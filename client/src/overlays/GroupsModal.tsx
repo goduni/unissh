@@ -45,10 +45,14 @@ function GroupsModalBody() {
   const [selHost, setSelHost] = useState<string | null>(null);
   // The group whose Appearance panel is open, with the unsaved choice. A draft,
   // not a write per pick: the pickers select on every arrow key, and each save
-  // is a new vault item version that syncs to every device.
-  const [styling, setStyling] = useState<{ groupId: string; color: string | null; icon: string | null } | null>(
-    null,
-  );
+  // is a new vault item version that syncs to every device. On touch the panel
+  // is the group's one edit control, so it carries the name as well.
+  const [styling, setStyling] = useState<{
+    groupId: string;
+    label: string;
+    color: string | null;
+    icon: string | null;
+  } | null>(null);
   const appearance = useAppearanceIndex();
 
   const close = () => setGroupsModal(false);
@@ -103,13 +107,20 @@ function GroupsModalBody() {
     const vaultId = useApp.getState().vaultId;
     if (!styling || !vaultId) return;
     const { color, icon } = styling;
-    setStyling(null);
-    if ((g.color ?? null) === color && (g.icon ?? null) === icon) return;
-    await guard(async () => {
-      await api.saveGroup(vaultId, { ...g, color, icon });
+    const label = styling.label.trim() || g.label;
+    const restyled = (g.color ?? null) !== color || (g.icon ?? null) !== icon;
+    if (!restyled && label === g.label) {
+      setStyling(null);
+      return;
+    }
+    // The draft stays open until the write lands: a failed save must not throw
+    // the user's choice away along with the panel.
+    const ok = await guard(async () => {
+      await api.saveGroup(vaultId, { ...g, label, color, icon });
       await reload();
-      toast(t("appearance.saved"), "ok");
+      toast(t(restyled ? "appearance.saved" : "groups.renamed"), "ok");
     });
+    if (ok) setStyling(null);
   };
 
   const del = (g: ServerGroup) =>
@@ -312,46 +323,63 @@ function GroupsModalBody() {
                         }}
                       />
                     ) : (
-                      <div style={{ fontSize: TEXT.body, fontWeight: 700, color: p.txt }}>{g.label}</div>
+                      // Ellipsized: on a phone the row's buttons leave the name
+                      // little room, and a wrapped label pushes them off-row.
+                      <div
+                        style={{
+                          fontSize: TEXT.body,
+                          fontWeight: 700,
+                          color: p.txt,
+                          minWidth: 0,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {g.label}
+                      </div>
                     )}
                     <div style={{ fontSize: TEXT.small, color: p.txt3, marginTop: rem(2) }}>
                       {t("count.hosts", { count: memberCount(g) })}
                     </div>
                   </div>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      startEdit(g);
-                    }}
-                    title={t("groups.rename")}
-                    aria-label={t("groups.rename")}
-                    style={{
-                      width: isMobile ? rem(44) : rem(30),
-                      height: isMobile ? rem(44) : rem(30),
-                      borderRadius: 8,
-                      border: `1px solid ${p.line}`,
-                      background: p.bg1,
-                      color: p.txt3,
-                      cursor: "pointer",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      ...(isMobile ? { flexShrink: 0 } : null),
-                    }}
-                  >
-                    <Icon name="pencil" size={14} />
-                  </button>
+                  {/* On touch, Rename lives in the edit panel: three 44px buttons
+                      beside the name would leave a phone row almost no label. */}
+                  {!isMobile && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        startEdit(g);
+                      }}
+                      title={t("groups.rename")}
+                      aria-label={t("groups.rename")}
+                      style={{
+                        width: rem(30),
+                        height: rem(30),
+                        borderRadius: 8,
+                        border: `1px solid ${p.line}`,
+                        background: p.bg1,
+                        color: p.txt3,
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      <Icon name="pencil" size={14} />
+                    </button>
+                  )}
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
                       setStyling(
                         styling?.groupId === g.groupId
                           ? null
-                          : { groupId: g.groupId, color: g.color ?? null, icon: g.icon ?? null },
+                          : { groupId: g.groupId, label: g.label, color: g.color ?? null, icon: g.icon ?? null },
                       );
                     }}
-                    title={t("appearance.edit")}
-                    aria-label={t("appearance.edit")}
+                    title={isMobile ? t("groups.edit") : t("appearance.edit")}
+                    aria-label={isMobile ? t("groups.edit") : t("appearance.edit")}
                     aria-expanded={styling?.groupId === g.groupId}
                     style={{
                       width: isMobile ? rem(44) : rem(30),
@@ -367,7 +395,7 @@ function GroupsModalBody() {
                       ...(isMobile ? { flexShrink: 0 } : null),
                     }}
                   >
-                    <Icon name="sliders" size={14} />
+                    <Icon name={isMobile ? "pencil" : "sliders"} size={14} />
                   </button>
                   <button
                     onClick={(e) => {
@@ -397,8 +425,31 @@ function GroupsModalBody() {
                   <div
                     role="group"
                     aria-label={`${t("appearance.title")} — ${g.label}`}
-                    style={{ padding: `${rem(4)} 0 ${rem(14)} ${rem(48)}` }}
+                    style={{ padding: `${rem(4)} 0 ${rem(14)} ${isMobile ? 0 : rem(48)}` }}
                   >
+                    {isMobile && (
+                      <label style={{ display: "block", marginBottom: rem(14) }}>
+                        <div style={{ fontSize: TEXT.small, fontWeight: 600, color: p.txt2, marginBottom: rem(6) }}>
+                          {t("groups.name")}
+                        </div>
+                        <input
+                          {...NO_AUTOCORRECT}
+                          value={styling.label}
+                          onChange={(e) => setStyling({ ...styling, label: e.target.value })}
+                          style={{
+                            width: "100%",
+                            boxSizing: "border-box",
+                            background: p.bg0,
+                            border: `1px solid ${p.line2}`,
+                            borderRadius: 8,
+                            padding: `${rem(9)} ${rem(11)}`,
+                            color: p.txt,
+                            fontSize: TEXT.body,
+                            fontFamily: UI,
+                          }}
+                        />
+                      </label>
+                    )}
                     <AppearancePicker
                       color={styling.color}
                       icon={styling.icon}

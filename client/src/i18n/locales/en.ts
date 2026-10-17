@@ -812,6 +812,8 @@ export const en = {
     "newGroup": "New group",
     "newGroupName": "New group",
     "rename": "Rename",
+    "edit": "Edit group",
+    "name": "Name",
     "renamed": "Group renamed",
     "deleted": "Group deleted",
     "hostMoved": "Host moved",
