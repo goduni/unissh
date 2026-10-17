@@ -22,7 +22,7 @@ import { useTranslation, tDyn } from "@/i18n";
 import { nextRow } from "@/support/listNav";
 import { filterHosts, searchKeyAction } from "@/support/hostsSearch";
 import { HOST_DRAG_MIME, draggedHostIds, hostDrag } from "@/support/hostDrag";
-import { compareByGroup, effectiveHostFilter, indexHostGroups, isUngrouped } from "@/support/hostGroups";
+import { compareByGroup, effectiveHostFilter, isUngrouped } from "@/support/hostGroups";
 import { appearanceIcon, isKnownIcon, swatchColor, type TagColor } from "@/components/appearance";
 import { ColorTick, useAppearanceIndex } from "@/components/ColorTick";
 import { effectiveHostColor, groupColor } from "@/support/hostAppearance";
@@ -684,17 +684,13 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
   const vault = useApp((s) => s.vaultId);
   const knownHosts = useApp((s) => s.knownHosts);
   const lastConnected = useApp((s) => s.lastConnected);
-  const groups = useApp((s) => s.groups);
   const authKind = profileAuthKind(h.auth);
   const known = knownHosts.find((k) => k.host === h.host && k.port === h.port);
   const firstJump = h.jumps[0];
   const lc = lastConnected[h.profileId];
   // Label order, as the list's Group column and the group sort read it.
-  const memberOf = useMemo(
-    () => indexHostGroups(groups).get(h.profileId) ?? NO_GROUPS,
-    [groups, h.profileId],
-  );
   const appearance = useAppearanceIndex();
+  const memberOf = appearance.byHost.get(h.profileId) ?? NO_GROUPS;
   const tag = useMemo(() => effectiveHostColor(h, appearance), [h, appearance]);
 
   const onDelete = () => {
@@ -1414,8 +1410,8 @@ export function ViewHosts() {
     hostFilter === HOST_FILTER_UNGROUPED ? t("hosts.ungrouped") : activeGroup?.label;
   // profileId → groups, built once and shared by the "Ungrouped" filter, the group
   // sort and the list's Group column.
-  const groupIndex = useMemo(() => indexHostGroups(groups), [groups]);
   const appearance = useAppearanceIndex();
+  const groupIndex = appearance.byHost;
   const hostTags = useMemo(
     () => new Map(hosts.map((x) => [x.profileId, effectiveHostColor(x, appearance)])),
     [hosts, appearance],
