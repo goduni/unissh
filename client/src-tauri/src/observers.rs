@@ -53,8 +53,16 @@ fn emit_cancelled(app: &AppHandle, event: &str, id: u64) {
 #[derive(Clone, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum TermEvent {
-    Data { bytes: Vec<u8> },
-    Close { exit: i32 },
+    Data {
+        bytes: Vec<u8>,
+    },
+    Close {
+        exit: i32,
+    },
+    /// The saved-password offer changed; see `session_fill_password`.
+    Fill {
+        event: crate::dto::FillEvent,
+    },
 }
 
 pub struct ChannelSessionObserver {
@@ -66,6 +74,14 @@ impl SessionObserver for ChannelSessionObserver {
     }
     fn on_close(&self, exit_status: i32) {
         push(&self.chan, TermEvent::Close { exit: exit_status });
+    }
+    fn on_fill(&self, event: unissh_ffi::FillEvent) {
+        push(
+            &self.chan,
+            TermEvent::Fill {
+                event: event.into(),
+            },
+        );
     }
 }
 

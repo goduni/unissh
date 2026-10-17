@@ -30,8 +30,8 @@ use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 use unissh_ffi::{
-    AuthMethod, Core, JumpHost, MultiExecTarget, ProxyConfig, ProxyKind, ProxyPassword,
-    ResolveStatus, SessionObserver,
+    AuthMethod, Core, FillEvent, JumpHost, MultiExecTarget, PasswordFillMode, ProxyConfig,
+    ProxyKind, ProxyPassword, ResolveStatus, SessionObserver,
 };
 
 /// Label of a group member's dry-run resolution status: the variant name, as the
@@ -541,6 +541,9 @@ impl SessionObserver for StdoutObserver {
         self.done.store(true, std::sync::atomic::Ordering::SeqCst);
         eprintln!("\n[session closed, code {exit_status}]");
     }
+    /// The CLI types nothing on the user's behalf: password fill is a UI offer
+    /// that needs a confirmation the CLI has no surface for.
+    fn on_fill(&self, _event: FillEvent) {}
 }
 
 #[derive(clap::Args)]
@@ -815,6 +818,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 // Nor does it forward the agent: that needs an approver to confirm
                 // each signature, and there is nobody at a harness to ask.
                 false,
+                // And it offers no saved password at prompts: see `on_fill` below.
+                PasswordFillMode::Off,
             )?;
             // line-by-line input from stdin (no raw mode — this is a harness)
             for line in std::io::stdin().lock().lines() {

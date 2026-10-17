@@ -389,6 +389,18 @@ signature without an in-app approval, a signature with a key the user did not
 share, or any key material at all is a bug. What it does *not* defend against
 (a same-user process the user approves) is set out in
 [`THREAT_MODEL.md`](THREAT_MODEL.md#the-system-agent-vault-keys-for-local-programs-one-approval-at-a-time).
+So does **password fill at terminal prompts**
+(`rust-core/crates/ffi/src/password_fill.rs`): typing a secret other than the
+session's own login password, into another session, at a prompt the core did
+not classify, for an offer the user did not accept, more than once per prompt,
+after the remote visibly rejected it (re-prompted within the window), followed
+by Enter, or letting the plaintext reach
+the UI, IPC or a recording is a bug. What it cannot do is tell which machine
+prints a prompt: after a nested `ssh`, `telnet` or `ftp`, an accepted offer
+sends the outer host's password to whatever is asking, and that is documented,
+not a bug. Nor does it defend against a compromised webview, which already has
+the ungated password-reveal call. The invariant and its limits are in
+[`THREAT_MODEL.md`](THREAT_MODEL.md#saved-password-at-interactive-prompts).
 
 Out of scope: the unsigned-build OS warnings above, and the documented
 **server-trusted** (not cryptographic) limitations — revocation/live-grant expiry,

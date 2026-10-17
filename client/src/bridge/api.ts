@@ -60,6 +60,7 @@ import type {
   SyncReport,
   MovedVault,
   TermEvent,
+  PasswordFillMode,
   VaultInfo,
   VaultIntegrityReport,
 } from "./types";
@@ -552,11 +553,14 @@ export const getRecording = (vaultId: string, recordingId: string) =>
 export const deleteRecording = (vaultId: string, recordingId: string) =>
   afterMut(vaultId, invoke<void>("delete_recording", { vaultId, recordingId }));
 
+/** `passwordFill` is bound for the session's life: "off" unless the saved
+ *  password authenticates to the machine whose prompts the session shows. */
 export async function sessionOpen(
   a: OpenSessionArgs,
   onEvent: (e: TermEvent) => void,
-  recording?: RecordingRequest,
-  agentForward = false,
+  recording: RecordingRequest | undefined,
+  agentForward: boolean,
+  passwordFill: PasswordFillMode,
 ): Promise<string> {
   const ch = new Channel<TermEvent>();
   ch.onmessage = onEvent;
@@ -565,6 +569,7 @@ export async function sessionOpen(
     onEvent: ch,
     recording: recording ?? null,
     agentForward,
+    passwordFill,
   });
 }
 export async function sessionOpenReconnecting(
@@ -603,6 +608,11 @@ export const localShellSplitArgs = (text: string) =>
 
 export const sessionWrite = (id: string, data: number[]) =>
   invoke<void>("session_write", { id, data });
+/** Type the session's saved login password into the prompt the core offered it
+ *  for as `offerId`, without Enter. No item and no secret in either direction:
+ *  the core binds the password at open and refuses an offer that is gone. */
+export const sessionFillPassword = (id: string, offerId: number) =>
+  invoke<void>("session_fill_password", { id, offerId });
 export const sessionResize = (id: string, cols: number, rows: number) =>
   invoke<void>("session_resize", { id, cols, rows });
 export const sessionClose = (id: string) => invoke<void>("session_close", { id });

@@ -1,11 +1,12 @@
 ---
 title: Connecting to hosts
-description: Two-factor logins, hardware keys through the system ssh-agent, agent forwarding, snippets, session recording, algorithm policy, and what each one costs you.
+description: Two-factor logins, the saved password at sudo prompts, hardware keys through the system ssh-agent, agent forwarding, snippets, session recording, algorithm policy, and what each one costs you.
 ---
 
-Everything on this page is per host and off unless you turn it on, with one
-exception: post-quantum key exchange, which is on for every connection and has
-been since the first release.
+Everything on this page is per host and off unless you turn it on, with two
+exceptions: post-quantum key exchange, which is on for every connection and has
+been since the first release, and the offer to insert a saved password at a
+password prompt, which only ever offers.
 
 Several of these options trade something real for what they give you. Where that
 is the case, this page says what the trade is rather than only what the feature
@@ -24,6 +25,52 @@ which is where a TOTP code or a Duo push lives, is put to you.
 The field is masked when the server says the answer is secret and shown when it
 says otherwise, because that flag is the server telling you whether you are
 typing a login name or a code.
+
+## The saved password at `sudo` and other prompts
+
+On a host you logged into with a saved password, a later prompt for that same
+password — `[sudo] password for you:`, `doas (you@host) password:` — brings up
+an offer in the pane: **Insert saved password**, naming the saved
+password. Click it, or press **Ctrl+Shift+P** (**⇧⌘P** on macOS) while the offer
+is shown. The password is typed, not submitted: Enter is still yours. The
+offer sits at the edge of the pane away from the cursor, so the prompt stays in
+sight.
+
+Bare `Password:` prompts (`pkexec`, `login`) are offered only if you also turn
+on **Also offer at bare “Password:” prompts** in Settings → Terminal. A bare
+prompt names no one, and it could be any program on any machine. `su` asks for
+the other account's password, not yours, so the offer is no use there.
+
+What it cannot do: **tell which machine is asking.** The app sees what is
+printed in the terminal, not where it comes from. After you `ssh`, `telnet` or
+`ftp` from that host to another one, a prompt there can bring up the same offer,
+and accepting it sends this host's password there. That is why the offer never
+names a host, and why it is never offered for a host with a username template:
+that password is the gateway's, and the prompts are the machines behind it.
+
+What it will not do, on purpose:
+
+- **Offer it anywhere else.** The prompt is recognised by the app's core, not
+  guessed at by the window, and a prompt for someone else's password is not
+  offered: `sudo` asking for another user, a nested `ssh` asking for
+  `user@other-host's password`, a key passphrase, a `git` credential, a database
+  client's `Enter password:`.
+- **Retry a wrong password by itself.** Start typing and the offer goes away.
+  If the same prompt comes straight back after a fill — `sudo` asking again —
+  the saved password was probably refused; you are told so, and it is not typed
+  again in that session until you change it in the vault, because typing a
+  wrong password repeatedly is how accounts get locked. A program that simply
+  exits on a wrong password (`doas`, `su`), or a prompt that comes back much
+  later, is not recognised as a refusal: you get the offer again, and each
+  attempt still takes your click. The other way round, a second prompt of the
+  same kind within seconds — `sudo a; sudo -k; sudo b` — looks like a refusal:
+  type that one yourself. The saved password then stays off for the rest of the
+  session; a new session offers it again.
+- **Show it.** The password never reaches the window or the clipboard. If a
+  prompt turns out to echo what it reads, the password is masked on screen and
+  in the session recording, the line is cleared, and you are warned.
+
+Settings → Terminal turns the offers off.
 
 ## Hardware keys, via the system ssh-agent
 

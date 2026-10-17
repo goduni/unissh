@@ -2160,6 +2160,7 @@ fn recording_of_a_session_open_during_the_move_is_saved_to_the_moved_vault() {
         closed: AtomicBool,
     }
     impl unissh_ffi::SessionObserver for Obs {
+        fn on_fill(&self, _event: unissh_ffi::FillEvent) {}
         fn on_data(&self, data: Vec<u8>) {
             self.seen.lock().unwrap().extend_from_slice(&data);
         }

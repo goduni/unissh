@@ -629,6 +629,86 @@ impl From<ffi::PersonalAuth> for PersonalAuth {
     }
 }
 
+/// Which recognised password prompt the core is offering the login password at.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FillPromptKind {
+    Sudo,
+    Doas,
+    Generic,
+}
+impl From<ffi::FillPromptKind> for FillPromptKind {
+    fn from(k: ffi::FillPromptKind) -> Self {
+        match k {
+            ffi::FillPromptKind::Sudo => Self::Sudo,
+            ffi::FillPromptKind::Doas => Self::Doas,
+            ffi::FillPromptKind::Generic => Self::Generic,
+        }
+    }
+}
+
+/// A change in a session's saved-password offer (core → frontend). Carries no
+/// secret and no output: the frontend only shows or hides the offer. On
+/// `echoed` the core has already masked the echo and killed the line.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum FillEvent {
+    #[serde(rename_all = "camelCase")]
+    Offered {
+        kind: FillPromptKind,
+        /// The id `session_fill_password` must name to accept this offer.
+        offer_id: u64,
+        /// The account a sudo/doas prompt names; none for a bare prompt.
+        user: Option<String>,
+        /// A saved password was rejected on this session already.
+        rejected_before: bool,
+    },
+    #[serde(rename_all = "camelCase")]
+    Withdrawn {
+        offer_id: u64,
+    },
+    Rejected,
+    Echoed,
+}
+impl From<ffi::FillEvent> for FillEvent {
+    fn from(e: ffi::FillEvent) -> Self {
+        match e {
+            ffi::FillEvent::Offered {
+                kind,
+                offer_id,
+                user,
+                rejected_before,
+            } => Self::Offered {
+                kind: kind.into(),
+                offer_id,
+                user,
+                rejected_before,
+            },
+            ffi::FillEvent::Withdrawn { offer_id } => Self::Withdrawn { offer_id },
+            ffi::FillEvent::Rejected => Self::Rejected,
+            ffi::FillEvent::Echoed => Self::Echoed,
+        }
+    }
+}
+
+/// At which password prompts a session may offer its saved login password.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PasswordFillMode {
+    Off,
+    SudoOnly,
+    SudoAndGeneric,
+}
+impl From<PasswordFillMode> for ffi::PasswordFillMode {
+    fn from(m: PasswordFillMode) -> Self {
+        match m {
+            PasswordFillMode::Off => Self::Off,
+            PasswordFillMode::SudoOnly => Self::SudoOnly,
+            PasswordFillMode::SudoAndGeneric => Self::SudoAndGeneric,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MultiExecTarget {

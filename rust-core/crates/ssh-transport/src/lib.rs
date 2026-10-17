@@ -57,7 +57,7 @@ pub use client::{
     algorithm_policy, canonical_host_key, fingerprint_openssh, set_algorithm_policy,
     set_keepalive_secs, trust_host_key, AlgorithmPolicy, Auth, AuthPrompter, CommandOutput,
     ConnectOptions, ExecHandle, ExecSink, ForwardGuard, KeySource, KnownHosts, OutputSink,
-    PromptField, SftpSession, ShellHandle, SshClient, SystemAgentKey,
+    PromptField, SftpSession, ShellHandle, ShellInput, SshClient, SystemAgentKey,
 };
 pub use config::{
     glob_match, HostOrigin, HostSettings, IncludedFile, PendingInclude, SkipReason,

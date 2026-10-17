@@ -84,6 +84,9 @@ export const SHORTCUTS: ShortcutDefinition[] = [
   def("find", label("find"), "terminal", legacyApp("KeyF")),
   def("promptPrev", "keybindings.actions.promptPrev", "terminal", (mac) => [binding("ArrowUp", mac ? { meta: true, shift: true } : { ctrl: true, shift: true })]),
   def("promptNext", "keybindings.actions.promptNext", "terminal", (mac) => [binding("ArrowDown", mac ? { meta: true, shift: true } : { ctrl: true, shift: true })]),
+  // Live only while the core is offering the saved password at a prompt; the
+  // rest of the time the chord reaches the shell like any other.
+  def("fillPassword", "keybindings.actions.fillPassword", "terminal", (mac) => [binding("KeyP", mac ? { meta: true, shift: true } : { ctrl: true, shift: true })]),
   def("copy", label("copy"), "terminal", app("KeyC")),
   def("copySelection", "keybindings.actions.copySelection", "terminal", (mac) => mac ? [] : [binding("KeyC", { ctrl: true })]),
   def("paste", label("paste"), "terminal", (mac) => mac ? [binding("KeyV", { meta: true })] : [binding("KeyV", { ctrl: true }), binding("KeyV", { ctrl: true, shift: true })]),
