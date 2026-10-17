@@ -254,6 +254,10 @@ function SettingsAppearance() {
   const setGpuRendering = useApp((s) => s.setGpuRendering);
   const terminalImages = useApp((s) => s.terminalImages);
   const setTerminalImages = useApp((s) => s.setTerminalImages);
+  const offerPasswordFill = useApp((s) => s.offerPasswordFill);
+  const setOfferPasswordFill = useApp((s) => s.setOfferPasswordFill);
+  const offerPasswordFillGeneric = useApp((s) => s.offerPasswordFillGeneric);
+  const setOfferPasswordFillGeneric = useApp((s) => s.setOfferPasswordFillGeneric);
   const customChrome = useApp((s) => s.customChrome);
   const setCustomChrome = useApp((s) => s.setCustomChrome);
   const setWindowControlsSide = useApp((s) => s.setWindowControlsSide);
@@ -486,6 +490,14 @@ function SettingsAppearance() {
       <SettingRow title={t("settings.terminalImagesTitle")} desc={t("settings.terminalImagesDesc")}>
         <Toggle checked={terminalImages} onChange={setTerminalImages} />
       </SettingRow>
+      <SettingRow title={t("settings.passwordFillTitle")} desc={t("settings.passwordFillDesc")}>
+        <Toggle checked={offerPasswordFill} onChange={setOfferPasswordFill} />
+      </SettingRow>
+      {offerPasswordFill && (
+        <SettingRow title={t("settings.passwordFillGenericTitle")} desc={t("settings.passwordFillGenericDesc")}>
+          <Toggle checked={offerPasswordFillGeneric} onChange={setOfferPasswordFillGeneric} />
+        </SettingRow>
+      )}
       <SettingRow title={t("settings.termFontTitle")} desc={t("settings.termFontDesc")}>
         <div style={{ display: "flex", alignItems: "center", gap: rem(8) }}>
           <Btn

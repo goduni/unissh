@@ -26,15 +26,24 @@ import {
 import { useIsMobile } from "@/store/responsive";
 import { splitLocalTerminal, useCtx } from "@/store/ctx";
 import { localRecordingRequest, useLocalMachine } from "@/store/localShell";
-import { createPaneEvents, type PaneEvents } from "@/views/terminal/paneSession";
+import { createPaneEvents, passwordFillMode, type PaneEvents } from "@/views/terminal/paneSession";
+import { fillBarSide, fillItemLabel } from "@/views/terminal/fillBar";
 import { parseOsc52 } from "@/views/terminal/osc52";
 import { resetStaleAppModes } from "@/views/terminal/staleModes";
 import { newImageAddon } from "@/views/terminal/imageAddon";
 import * as api from "@/bridge/api";
-import { apiErrorMessage, isApiError, type ConnectionProfile } from "@/bridge/types";
+import {
+  apiErrorMessage,
+  isApiError,
+  type AuthMethod,
+  type ConnectionProfile,
+  type FillEvent,
+  type FillPromptKind,
+} from "@/bridge/types";
 import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
 import { isMac, isPhoneOs } from "@/bridge/platform";
-import { matchesShortcut, useShortcuts } from "@/store/shortcuts";
+import { matchesShortcut, useShortcutLabel, useShortcuts } from "@/store/shortcuts";
+import { toast } from "@/store/toast";
 import { ContextMenu } from "@/components/ContextMenu";
 import { TermTabStrip } from "@/views/TermTabStrip";
 import { SnippetParamsForm } from "@/overlays/SnippetParamsForm";
@@ -326,6 +335,107 @@ function TerminalPane({
   const [pw, setPw] = useState<string | null>(null);
   // Hover state so a split pane can offer an obvious close (✕) affordance.
   const [paneHover, setPaneHover] = useState(false);
+  // The core's saved-password offer for this pane's session (#135): which prompt
+  // it is waiting at, and the notice the last fill left behind. Every decision
+  // is the core's — this only shows them, and the password never comes here.
+  const [fillOffer, setFillOffer] = useState<FillOffer | null>(null);
+  const [fillNotice, setFillNotice] = useState<"rejected" | "echoed" | null>(null);
+  // Named on the offer, so the user can tell which saved password would go.
+  const [fillCredential, setFillCredential] = useState("");
+  // Which edge the bar is on: away from the cursor, chosen when an offer or a
+  // notice appears (not on every output, so it does not jump around).
+  const [fillSide, setFillSide] = useState<"top" | "bottom">("bottom");
+  const placeFillBar = () => {
+    const term = xtermRef.current;
+    if (term) setFillSide(fillBarSide(term.buffer.active.cursorY, term.rows));
+  };
+  // The xterm key handler is installed once, so it reads the offer through refs.
+  const fillOfferRef = useRef<FillOffer | null>(null);
+  // The newest offer id this session has sent. Events can overtake each other
+  // on the way here; an offer older than one already seen is stale.
+  const fillSeenRef = useRef(0);
+  const acceptFillRef = useRef<() => void>(() => {});
+  const fillNoticeTimerRef = useRef<number | null>(null);
+  const fillShortcut = useShortcutLabel("fillPassword");
+  const offerPasswordFill = useApp((s) => s.offerPasswordFill);
+  const offerPasswordFillGeneric = useApp((s) => s.offerPasswordFillGeneric);
+  const showFillOffer = (offer: FillOffer | null) => {
+    fillOfferRef.current = offer;
+    setFillOffer(offer);
+  };
+  const clearFillNoticeTimer = () => {
+    if (fillNoticeTimerRef.current != null) {
+      window.clearTimeout(fillNoticeTimerRef.current);
+      fillNoticeTimerRef.current = null;
+    }
+  };
+  // A new or closed session starts with no offer and no leftover notice.
+  const resetFill = () => {
+    showFillOffer(null);
+    fillSeenRef.current = 0;
+    clearFillNoticeTimer();
+    setFillNotice(null);
+    setFillCredential("");
+  };
+  const onFill = (e: FillEvent) => {
+    switch (e.type) {
+      case "offered": {
+        if (e.offerId <= fillSeenRef.current) return;
+        fillSeenRef.current = e.offerId;
+        const { offerPasswordFill: on, offerPasswordFillGeneric: generic } = useApp.getState();
+        if (!on || (e.kind === "generic" && !generic)) return;
+        placeFillBar();
+        showFillOffer({ kind: e.kind, offerId: e.offerId, user: e.user, rejectedBefore: e.rejectedBefore });
+        return;
+      }
+      case "withdrawn":
+        fillSeenRef.current = Math.max(fillSeenRef.current, e.offerId);
+        if (fillOfferRef.current?.offerId === e.offerId) showFillOffer(null);
+        return;
+      case "rejected":
+        // Transient: the prompt itself is still there to be answered by hand.
+        showFillOffer(null);
+        clearFillNoticeTimer();
+        placeFillBar();
+        setFillNotice("rejected");
+        fillNoticeTimerRef.current = window.setTimeout(() => {
+          fillNoticeTimerRef.current = null;
+          setFillNotice((n) => (n === "rejected" ? null : n));
+        }, 6000);
+        return;
+      case "echoed":
+        // The core has masked the echo and killed the line (Ctrl-U) already.
+        // The warning stays until dismissed: something that looked like a
+        // password prompt was not.
+        showFillOffer(null);
+        clearFillNoticeTimer();
+        placeFillBar();
+        setFillNotice("echoed");
+        return;
+    }
+  };
+  // Turning offers (or bare-prompt offers) off hides one already on screen.
+  useEffect(() => {
+    const shown = fillOfferRef.current;
+    if (shown && (!offerPasswordFill || (shown.kind === "generic" && !offerPasswordFillGeneric))) {
+      fillOfferRef.current = null;
+      setFillOffer(null);
+    }
+  }, [offerPasswordFill, offerPasswordFillGeneric]);
+  // Accept = the button or the shortcut, never Enter. The core types the
+  // password without a newline; the terminal keeps focus so Enter is the user's.
+  const acceptFill = () => {
+    const id = sessionIdRef.current;
+    const offer = fillOfferRef.current;
+    if (!id || !offer) return;
+    showFillOffer(null);
+    // Focus first, and only when it is elsewhere, so the user's Enter lands in
+    // the terminal the password was typed into.
+    const term = xtermRef.current;
+    if (term && !hostRef.current?.contains(document.activeElement)) term.focus();
+    void api.sessionFillPassword(id, offer.offerId).catch(() => toast(t("terminal.fill.failed"), "err"));
+  };
+  acceptFillRef.current = acceptFill;
   // The parameter form for the startup snippet being asked about, if any. The
   // startup loop awaits the promise whose resolver sits in the ref: the
   // answers, or null when cancelled — or when the session it was for closed or
@@ -599,6 +709,13 @@ async function runStartupSnippets(
     term.attachCustomKeyEventHandler((ev) => {
       if (ev.type !== "keydown") return true;
       if (ev.defaultPrevented || useShortcuts.getState().recording) return false;
+      // Only while an offer is shown: the rest of the time the chord is the
+      // shell's, like any key this pane has no use for.
+      if (fillOfferRef.current && matchesShortcut(ev, "fillPassword")) {
+        ev.preventDefault();
+        acceptFillRef.current();
+        return false;
+      }
       if (matchesShortcut(ev, "find")) {
         ev.preventDefault();
         setSearchOpen(true);
@@ -785,6 +902,7 @@ async function runStartupSnippets(
       return;
     }
     openedGenRef.current = pane.gen;
+    resetFill();
     // If this run is superseded (another gen bump) or the pane is torn down while a
     // connect is in flight, `cancelled` tells the resolving promise to abandon and
     // close its session so it never leaks or double-opens.
@@ -833,7 +951,9 @@ async function runStartupSnippets(
       cancelled: () => cancelled,
       onPreview: (lines) => updatePane(tabId, pane.id, { preview: lines }),
       closedText: (code) => t("terminal.sessionClosed", { code }),
+      onFill,
       onClosed: (_exit, dropped) => {
+        resetFill();
         const old = sessionIdRef.current;
         sessionIdRef.current = null;
         // Evict the now-dead session from the core's map so reconnects don't leak it.
@@ -864,8 +984,12 @@ async function runStartupSnippets(
           // ProfileAuth.
           api
             .resolveConnectAuth(target.profile, vaultId, pw ?? undefined)
-            .then(({ user, auth }) =>
-              api.sessionOpen(
+            .then(({ user, auth }) => {
+              void fillCredentialLabel(target.profile, auth).then((label) => {
+                if (!cancelled) setFillCredential(label);
+              });
+              const fill = useApp.getState();
+              return api.sessionOpen(
                 {
                   host: target.profile.host,
                   port: target.profile.port,
@@ -889,8 +1013,10 @@ async function runStartupSnippets(
                     }
                   : undefined,
                 target.profile.agentForward,
-              ),
-            );
+                // Fixed for the session's life: the core binds it at open.
+                passwordFillMode(target.profile, fill.offerPasswordFill, fill.offerPasswordFillGeneric),
+              );
+            });
 
     void opened
       .then((id) => {
@@ -995,6 +1121,7 @@ async function runStartupSnippets(
   useEffect(
     () => () => {
       if (autoTimerRef.current != null) clearTimeout(autoTimerRef.current);
+      if (fillNoticeTimerRef.current != null) clearTimeout(fillNoticeTimerRef.current);
     },
     [],
   );
@@ -1330,6 +1457,28 @@ async function runStartupSnippets(
           }}
         />
       )}
+      {/* Mounted for the whole online session, empty when idle, so the live
+          region already exists when an offer appears and is announced. */}
+      {pane.status === "online" && (
+        <PasswordFillBar
+          offer={fillOffer}
+          notice={fillNotice}
+          credential={fillCredential || paneProfile(pane)?.label || ""}
+          shortcut={fillShortcut}
+          touch={isMobile}
+          side={fillSide}
+          onAccept={acceptFill}
+          onDismissOffer={() => {
+            showFillOffer(null);
+            xtermRef.current?.focus();
+          }}
+          onDismissNotice={() => {
+            clearFillNoticeTimer();
+            setFillNotice(null);
+            xtermRef.current?.focus();
+          }}
+        />
+      )}
       {/* Desktop reconnect bar for a dropped/failed session. The mobile shell renders
           the same banner (strip variant) in MTerminal, so this is desktop-only. */}
       {!isMobile && (pane.status === "restored" || pane.status === "closed" || pane.status === "error") && !pane.mismatch && (
@@ -1513,6 +1662,169 @@ function Divider({ tabId, split, lineColor }: { tabId: string; split: SplitRect;
             : { position: "absolute", top: 2.5, left: 0, right: 0, height: 1, background: lineColor }
         }
       />
+    </div>
+  );
+}
+
+/** What the saved-password offer names as the credential (#135): the password
+ *  item, or for a personal host the identity whose password it is. Labels, not
+ *  secrets; the host's label stands in when neither can be found. */
+async function fillCredentialLabel(profile: ConnectionProfile, auth: AuthMethod): Promise<string> {
+  if (auth.type !== "vaultPassword") return profile.label;
+  if (profile.auth.type !== "personal") return fillItemLabel(auth.passwordItemId, profile.label);
+  try {
+    const identities = await api.listIdentities(auth.vaultId);
+    return identities.find((i) => i.passwordItemId === auth.passwordItemId)?.label || profile.label;
+  } catch {
+    return profile.label;
+  }
+}
+
+/** The saved-password offer the pane is showing (#135). */
+interface FillOffer {
+  kind: FillPromptKind;
+  offerId: number;
+  /** The account a sudo/doas prompt names; null for a bare prompt. */
+  user: string | null;
+  /** A saved password was rejected on this session already: the core types it
+   *  again only if it has been changed in the vault since. */
+  rejectedBefore: boolean;
+}
+
+/** The saved-password offer and the notices a fill leaves, at an edge of a pane.
+ *
+ * Non-modal and never focused: the terminal keeps the keyboard, so typing on
+ * simply withdraws the offer (the core sees the keystroke) and Enter can never
+ * accept it by accident. Accepting is the button or the pane-only shortcut.
+ * It never names a host: the core cannot tell which machine is asking — after
+ * an `ssh` to another host the prompt is that host's — so neither can this.
+ * It sits on the edge away from the cursor rather than resizing the terminal. */
+function PasswordFillBar({
+  offer,
+  notice,
+  credential,
+  shortcut,
+  touch,
+  side,
+  onAccept,
+  onDismissOffer,
+  onDismissNotice,
+}: {
+  offer: FillOffer | null;
+  notice: "rejected" | "echoed" | null;
+  credential: string;
+  shortcut: string;
+  touch: boolean;
+  side: "top" | "bottom";
+  onAccept: () => void;
+  onDismissOffer: () => void;
+  onDismissNotice: () => void;
+}) {
+  const p = usePalette();
+  const { t } = useTranslation();
+  const target = touch ? rem(44) : rem(24);
+  const row: CSSProperties = {
+    display: "flex",
+    alignItems: "center",
+    gap: rem(10),
+    padding: `${rem(8)} ${rem(12)}`,
+    borderRadius: 10,
+    background: p.bg3,
+    boxShadow: p.shadow,
+    fontSize: TEXT.base,
+    color: p.txt2,
+  };
+  const dismissStyle: CSSProperties = {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+    width: target,
+    height: target,
+    background: "transparent",
+    border: "none",
+    borderRadius: 6,
+    color: p.txt3,
+    cursor: "pointer",
+  };
+  const insertLabel = credential ? t("terminal.fill.insert", { credential }) : t("terminal.fill.insertPlain");
+  const help = t("terminal.fill.anyMachine");
+  const prompt = !offer
+    ? ""
+    : offer.kind === "generic"
+      ? t("terminal.fill.generic")
+      : t(`terminal.fill.${offer.kind}`, { user: offer.user ?? "" });
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      // Clicking here must not take focus from the terminal, and a touch must not
+      // start the pane's long-press menu or drag its scrollback.
+      onMouseDown={(e) => e.preventDefault()}
+      onTouchStart={(e) => e.stopPropagation()}
+      onTouchMove={(e) => e.stopPropagation()}
+      style={{
+        position: "absolute",
+        left: rem(8),
+        right: rem(8),
+        ...(side === "top" ? { top: rem(8) } : { bottom: rem(8) }),
+        display: "flex",
+        flexDirection: "column",
+        gap: rem(6),
+        zIndex: 6,
+      }}
+    >
+      {notice && (
+        <div style={{ ...row, border: `1px solid ${notice === "echoed" ? p.amber : p.line2}` }}>
+          <Icon name="alert" size={16} color={notice === "echoed" ? p.amber : p.txt2} />
+          <span style={{ flex: 1, minWidth: 0 }}>{t(`terminal.fill.${notice}`)}</span>
+          <button
+            type="button"
+            onClick={onDismissNotice}
+            title={t("terminal.fill.dismiss")}
+            aria-label={t("terminal.fill.dismiss")}
+            style={dismissStyle}
+          >
+            <Icon name="x" size={13} />
+          </button>
+        </div>
+      )}
+      {offer && (
+        <div style={{ ...row, border: `1px solid ${offer.rejectedBefore ? p.amber : p.line2}` }}>
+          <Icon name="key" size={16} color={p.txt2} />
+          <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: rem(2) }}>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{prompt}</span>
+            <span style={{ fontSize: TEXT.small, color: p.txt3 }}>{help}</span>
+            {offer.rejectedBefore && (
+              <span style={{ fontSize: TEXT.small, color: p.txt2 }}>{t("terminal.fill.rejectedBefore")}</span>
+            )}
+          </span>
+          {shortcut && !touch && (
+            <span style={{ flexShrink: 0, fontFamily: MONO, fontSize: TEXT.small, color: p.txt3 }}>
+              {shortcut}
+            </span>
+          )}
+          <Btn
+            size="sm"
+            icon="key"
+            onClick={onAccept}
+            title={shortcut ? `${insertLabel} (${shortcut})` : insertLabel}
+            aria-label={`${insertLabel}. ${help}`}
+            style={touch ? { minHeight: target } : undefined}
+          >
+            {insertLabel}
+          </Btn>
+          <button
+            type="button"
+            onClick={onDismissOffer}
+            title={t("terminal.fill.dismiss")}
+            aria-label={t("terminal.fill.dismiss")}
+            style={dismissStyle}
+          >
+            <Icon name="x" size={13} />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

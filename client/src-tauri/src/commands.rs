@@ -1473,6 +1473,7 @@ pub async fn session_open(
     on_event: Channel<TermEvent>,
     recording: Option<dto::RecordingRequest>,
     agent_forward: bool,
+    password_fill: dto::PasswordFillMode,
     state: State<'_, AppState>,
 ) -> ApiResult<String> {
     let core = state.core.clone();
@@ -1495,6 +1496,7 @@ pub async fn session_open(
             obs,
             rec,
             agent_forward,
+            password_fill.into(),
         )
     })
     .await?;
@@ -1631,6 +1633,35 @@ pub async fn session_resize(
         .clone();
     // Same blocking-thread offload as session_write (core resize uses block_on too).
     blocking(move || s.resize(cols, rows)).await
+}
+
+/// Type the session's saved login password into the password prompt the core
+/// offered it for as `offer_id`. Takes no item and returns nothing: the core
+/// decides which secret (the one the session logged in with) and whether that
+/// offer is still the live one, and the plaintext never reaches this process's
+/// IPC, let alone the webview.
+///
+/// Only a plain SSH session can fill. The auto-reconnecting one re-resolves its
+/// credentials per attempt and has no fill guard; a local shell has no login.
+#[tauri::command]
+pub async fn session_fill_password(
+    id: String,
+    offer_id: u64,
+    state: State<'_, AppState>,
+) -> ApiResult<()> {
+    let live = state
+        .sessions
+        .get(&id)
+        .ok_or_else(|| ApiError::not_found("session"))?
+        .value()
+        .clone();
+    let s = match live {
+        LiveSession::Plain(s) => s,
+        LiveSession::Reconnecting(_) | LiveSession::Local(_) => {
+            return Err(ApiError::other("this session cannot fill a saved password"))
+        }
+    };
+    blocking(move || s.fill_login_password(offer_id)).await
 }
 
 #[tauri::command]
