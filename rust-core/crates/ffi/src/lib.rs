@@ -3794,7 +3794,7 @@ impl Core {
                 password_item_id.clone(),
                 user.clone(),
                 allow_generic,
-                unissh_crypto::random_bytes::<32>(),
+                Zeroizing::new(unissh_crypto::random_bytes::<32>()),
                 observer.clone(),
             ))),
             (
@@ -3839,10 +3839,14 @@ impl Core {
             }
         };
         let sink: Arc<dyn OutputSink> = match &fill {
-            Some(guard) => Arc::new(FillSink {
-                guard: guard.clone(),
-                inner: sink,
-            }),
+            Some(guard) => {
+                let inner = sink.clone();
+                guard.set_forward(Box::new(move |out| inner.on_data(out)));
+                Arc::new(FillSink {
+                    guard: guard.clone(),
+                    inner: sink,
+                })
+            }
             None => sink,
         };
         let shell = self
@@ -9409,6 +9413,13 @@ impl unissh_ssh_transport::AuthPrompter for PrompterBridge {
 }
 
 /// Observer of an interactive session (implemented by the UI; a UniFFI callback interface).
+///
+/// Callbacks must return promptly and must not call back into the session
+/// (`write`, `fill_login_password`, …) synchronously from the calling thread:
+/// `on_fill` is delivered under the session's event-order lock, and the session
+/// would wait on itself. Hand the work to another thread or queue instead. The
+/// same is advised for `on_data`, which may be delivered from the thread of a
+/// `fill_login_password` call as well as from the session's reader.
 #[uniffi::export(with_foreign)]
 pub trait SessionObserver: Send + Sync {
     /// Data from the session (terminal output).

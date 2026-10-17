@@ -1044,11 +1044,12 @@ impl ShellHandle {
 
     /// Sends a secret (a saved password typed at a prompt) into the session.
     ///
-    /// Takes the bytes in `Zeroizing`, so the only copy left in this process
-    /// once it returns is the one russh owns: its packet buffers, and the
-    /// encryption that consumes them, are not ours to wipe.
-    pub async fn write_secret(&self, data: Zeroizing<Vec<u8>>) -> Result<(), TransportError> {
-        self.write.data_bytes(data.to_vec()).await?;
+    /// Takes the bytes in `Zeroizing` and moves that buffer into russh, so no
+    /// unwiped copy is made here; from then on it is russh's (its packet
+    /// buffers, and the encryption that consumes them), not ours to wipe.
+    pub async fn write_secret(&self, mut data: Zeroizing<Vec<u8>>) -> Result<(), TransportError> {
+        // The buffer itself moves into russh — no second copy is made here.
+        self.write.data_bytes(std::mem::take(&mut *data)).await?;
         Ok(())
     }
 

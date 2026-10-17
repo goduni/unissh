@@ -398,6 +398,11 @@ impl EchoMask {
         })
     }
 
+    /// Ends the mask, handing back what it held so it can be forwarded.
+    fn into_held(mut self) -> Vec<u8> {
+        std::mem::take(&mut *self.held)
+    }
+
     /// The first keystroke after the fill closes the window soon after it.
     fn note_input(&mut self, now: Instant) {
         if !self.shortened {
@@ -673,6 +678,7 @@ impl GuardState {
         digest: [u8; 32],
         now: Instant,
         events: &mut Vec<FillEvent>,
+        flushed: &mut Vec<u8>,
     ) -> Result<FillPromptKind, FfiError> {
         let offer = self.live(offer_id).ok_or_else(no_offer)?;
         // Not consumed: the user may still answer this prompt by hand.
@@ -684,6 +690,13 @@ impl GuardState {
         if let Some(p) = self.current.as_mut() {
             p.consumed = true;
         }
+        // A mask still running from an earlier fill goes, but what it held
+        // back is output like any other.
+        *flushed = self
+            .echo
+            .take()
+            .map(EchoMask::into_held)
+            .unwrap_or_default();
         self.echo = EchoMask::new(secret, now);
         self.last_fill = Some(LastFill {
             at: now,
@@ -705,8 +718,11 @@ fn no_offer() -> FfiError {
 struct Config {
     login_user: String,
     allow_generic: bool,
-    digest_key: [u8; 32],
+    digest_key: Zeroizing<[u8; 32]>,
 }
+
+/// Hands output on down the session's sink chain.
+pub(crate) type Forward = Box<dyn Fn(Vec<u8>) + Send + Sync>;
 
 /// Sends Ctrl-U into the session without blocking: called from the reader task.
 pub(crate) type LineKill = Box<dyn Fn() + Send + Sync>;
@@ -718,11 +734,14 @@ pub(crate) type LineKill = Box<dyn Fn() + Send + Sync>;
 /// no call takes an item, so nothing the UI sends can point a fill at another
 /// secret.
 ///
-/// Events go to the session's own observer outside the state lock, but in the
-/// order the state changed: whoever changes the state takes `emit_order` before
-/// letting go of the state lock, and holds it while delivering. So an observer
-/// must not call back into the session from `on_fill` or `on_data` on the same
-/// thread — it would wait on itself.
+/// Output and events leave outside the state lock, in the order the state
+/// changed: whoever changes the state takes the next order lock before letting
+/// go of the previous one (state, then `out_order` while output is forwarded,
+/// then `emit_order` while events are delivered). Keystrokes produce no output
+/// and go from the state lock straight to `emit_order`, so a withdrawal can
+/// overtake the offer it withdraws; the UI drops offers older than the newest
+/// id it has seen. An observer must not call back into the session from
+/// `on_fill` on the same thread — it would wait on itself.
 pub(crate) struct FillGuard {
     /// The vault holding the login password item.
     pub(crate) vault_id: String,
@@ -731,30 +750,19 @@ pub(crate) struct FillGuard {
     cfg: Config,
     observer: Arc<dyn SessionObserver>,
     state: Mutex<GuardState>,
+    out_order: Mutex<()>,
     emit_order: Mutex<()>,
     /// Kills the line when the password echoed. Set once the shell is open.
     line_kill: OnceLock<LineKill>,
+    /// Where output held back by a mask goes when the mask ends outside the
+    /// output path (a new fill, a failed write). Set with the sink chain.
+    forward: OnceLock<Forward>,
 }
 
-/// Events taken from the state, still holding the delivery order.
-struct Pending<'a> {
-    guard: &'a FillGuard,
-    _order: MutexGuard<'a, ()>,
-    events: Vec<FillEvent>,
-}
-
-impl Pending<'_> {
-    fn deliver(self) {
-        for event in self.events {
-            if event == FillEvent::Echoed {
-                // Before Enter can run the hidden password as a command.
-                if let Some(kill) = self.guard.line_kill.get() {
-                    kill();
-                }
-            }
-            self.guard.observer.on_fill(event);
-        }
-    }
+/// Exactly the bytes a terminal sends on its own when it gains or loses focus
+/// (focus reporting, `CSI ?1004 h`): not the user typing.
+fn is_focus_report(data: &[u8]) -> bool {
+    data == b"\x1b[I" || data == b"\x1b[O"
 }
 
 impl FillGuard {
@@ -765,7 +773,7 @@ impl FillGuard {
         item_id: String,
         login_user: String,
         allow_generic: bool,
-        digest_key: [u8; 32],
+        digest_key: Zeroizing<[u8; 32]>,
         observer: Arc<dyn SessionObserver>,
     ) -> Self {
         Self {
@@ -778,8 +786,10 @@ impl FillGuard {
             },
             observer,
             state: Mutex::new(GuardState::new()),
+            out_order: Mutex::new(()),
             emit_order: Mutex::new(()),
             line_kill: OnceLock::new(),
+            forward: OnceLock::new(),
         }
     }
 
@@ -790,43 +800,76 @@ impl FillGuard {
         }
     }
 
-    /// Runs `f` on the state and takes the delivery order before the state lock
-    /// is let go (hand over hand), so events reach the observer in state order.
-    fn update<R>(
+    /// Where held-back output goes when a mask ends off the output path.
+    pub(crate) fn set_forward(&self, forward: Forward) {
+        if self.forward.set(forward).is_err() {
+            // Set once per session, with the sink chain.
+        }
+    }
+
+    /// Lets go of the state, forwards `out`, then delivers `events` — each step
+    /// taken before the previous lock is released (see the type's docs).
+    fn release(
         &self,
-        f: impl FnOnce(&mut GuardState, &mut Vec<FillEvent>) -> R,
-    ) -> (R, Pending<'_>) {
-        let mut events = Vec::new();
-        let mut st = lock_recover(&self.state);
-        let r = f(&mut st, &mut events);
-        let order = lock_recover(&self.emit_order);
+        st: MutexGuard<'_, GuardState>,
+        out: Vec<u8>,
+        forward: impl FnOnce(Vec<u8>),
+        events: Vec<FillEvent>,
+    ) {
+        let out_order = lock_recover(&self.out_order);
         drop(st);
-        (
-            r,
-            Pending {
-                guard: self,
-                _order: order,
-                events,
-            },
-        )
+        if !out.is_empty() {
+            forward(out);
+        }
+        let emit_order = lock_recover(&self.emit_order);
+        drop(out_order);
+        self.deliver(emit_order, events);
+    }
+
+    /// Hands `events` to the observer while `_order` keeps their place in line.
+    fn deliver(&self, _order: MutexGuard<'_, ()>, events: Vec<FillEvent>) {
+        for event in events {
+            if event == FillEvent::Echoed {
+                // Before Enter can run the hidden password as a command.
+                if let Some(kill) = self.line_kill.get() {
+                    kill();
+                }
+            }
+            self.observer.on_fill(event);
+        }
+    }
+
+    /// Forwards through the stored sink chain, for output that leaves off the
+    /// output path.
+    fn forward_stored(&self, out: Vec<u8>) {
+        if let Some(forward) = self.forward.get() {
+            forward(out);
+        }
     }
 
     /// Runs one output chunk through the mask and the classifier, hands the
     /// (masked) bytes to `forward`, then reports what changed. The data goes
     /// first so the prompt is on screen by the time the offer appears.
     pub(crate) fn on_output(&self, data: Vec<u8>, now: Instant, forward: impl FnOnce(Vec<u8>)) {
-        let (out, pending) = self.update(|st, ev| st.on_output(data, &self.cfg, now, ev));
-        if !out.is_empty() {
-            forward(out);
-        }
-        pending.deliver();
+        let mut events = Vec::new();
+        let mut st = lock_recover(&self.state);
+        let out = st.on_output(data, &self.cfg, now, &mut events);
+        self.release(st, out, forward, events);
     }
 
     /// The user typed `data` into the session: whatever offer was live is gone.
     /// A password half-typed by hand must not get the saved one appended to it.
+    /// A focus report is the terminal's, not the user's, and changes nothing.
     pub(crate) fn note_input(&self, data: &[u8], now: Instant) {
-        let ((), pending) = self.update(|st, ev| st.note_input(data, now, ev));
-        pending.deliver();
+        if is_focus_report(data) {
+            return;
+        }
+        let mut events = Vec::new();
+        let mut st = lock_recover(&self.state);
+        st.note_input(data, now, &mut events);
+        let emit_order = lock_recover(&self.emit_order);
+        drop(st);
+        self.deliver(emit_order, events);
     }
 
     /// Whether offer `offer_id` would be filled right now — checked before the
@@ -846,18 +889,23 @@ impl FillGuard {
         now: Instant,
     ) -> Result<FillPromptKind, FfiError> {
         let digest = secret_digest(&self.cfg.digest_key, secret);
-        let (kind, pending) = self.update(|st, ev| st.claim(offer_id, secret, digest, now, ev));
-        pending.deliver();
+        let mut events = Vec::new();
+        let mut flushed = Vec::new();
+        let mut st = lock_recover(&self.state);
+        let kind = st.claim(offer_id, secret, digest, now, &mut events, &mut flushed);
+        self.release(st, flushed, |out| self.forward_stored(out), events);
         kind
     }
 
     /// The write after [`Self::claim`] failed: nothing was typed, so there is no
-    /// echo to watch for and no rejection to expect. The prompt instance stays
-    /// consumed — a dead channel is not worth a second try.
+    /// echo to watch for and no rejection to expect — what the mask held back
+    /// is forwarded. The prompt instance stays consumed — a dead channel is not
+    /// worth a second try.
     pub(crate) fn abort_fill(&self) {
         let mut st = lock_recover(&self.state);
-        st.echo = None;
+        let flushed = st.echo.take().map(EchoMask::into_held).unwrap_or_default();
         st.last_fill = None;
+        self.release(st, flushed, |out| self.forward_stored(out), Vec::new());
     }
 }
 
@@ -893,7 +941,7 @@ mod tests {
             "pw".into(),
             ALICE.into(),
             true,
-            [7; 32],
+            Zeroizing::new([7; 32]),
             events.clone(),
         );
         (g, events)
@@ -1195,6 +1243,29 @@ mod tests {
             g.claim(1, "s3cret", t0).is_err(),
             "the aborted offer stays spent"
         );
+    }
+
+    #[test]
+    fn a_focus_report_leaves_the_offer_alone() {
+        let (g, ev) = guard();
+        let now = Instant::now();
+        feed(&g, SUDO, now);
+        let id = offer_id(&ev);
+        g.note_input(b"\x1b[O", now);
+        g.note_input(b"\x1b[I", now);
+        assert_eq!(ev.take(), vec![offered_sudo(id, false)]);
+        assert!(g.check_offer(id).is_ok());
+    }
+
+    #[test]
+    fn a_failed_write_forwards_what_the_mask_held_back() {
+        let (g, _ev, t0) = filled("s3cret");
+        let forwarded = Arc::new(Mutex::new(Vec::new()));
+        let f = forwarded.clone();
+        g.set_forward(Box::new(move |d| f.lock().unwrap().extend(d)));
+        assert_eq!(feed(&g, b"ls s3", t0), b"ls ");
+        g.abort_fill();
+        assert_eq!(*forwarded.lock().unwrap(), b"s3");
     }
 
     #[test]
