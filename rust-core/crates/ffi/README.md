@@ -59,13 +59,17 @@ ssh_exec(host, port, user, vault_id, auth, command, jumps[]) -> {stdout, stderr,
 // multi-exec: max_concurrency (0=unlimited), timeout_secs (0=no timeout, per-host)
 ssh_exec_multi(targets[], command, max_concurrency, timeout_secs)
     -> [{host, stdout, stderr, exit, error?, duration_ms, timed_out}]  // concurrently
-open_session(host, port, user, vault_id, auth, jumps[], term, cols, rows, observer)
+open_session(host, port, user, auth, jumps[], proxy?, term, cols, rows, observer, recording?,
+             agent_forward, password_fill: Off|SudoOnly|SudoAndGeneric)
     -> SshSession            // interactive PTY; output to observer (callback). cols,rows > 0
+    // password_fill: Off for a gateway/template login — its password is not the target's
 SshSession::{write(data), resize(cols, rows), close()}  // resize is best-effort (no server ack)
-SshSession::fill_login_password()  // VaultPassword logins only: types the login password into the
-    // prompt the core is offering it for (no Enter); no item argument, plaintext never crosses the FFI
+SshSession::fill_login_password(offer_id)  // VaultPassword logins only: types the login password
+    // into the prompt the core offered it for as offer_id (no Enter); no item argument, plaintext
+    // never crosses the FFI; a password rejected on the session is not typed again
 SessionObserver::{on_data(bytes), on_close(exit), on_fill(FillEvent)}   // implemented by the UI
-    // FillEvent: Offered{kind: Sudo|Doas|Generic} | Withdrawn | Rejected | Echoed
+    // FillEvent: Offered{kind: Sudo|Doas|Generic, offer_id, user?, rejected_before}
+    //          | Withdrawn{offer_id} | Rejected | Echoed (masked, and the core sent Ctrl-U)
 
 // host groups (type-5 items; only references to profiles/nested groups)
 // ServerGroup{group_id, label, member_ids[], parent_id?} — parent_id for the folder tree in the UI

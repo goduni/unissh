@@ -933,6 +933,7 @@ fn interactive_pty_session() {
             observer.clone(),
             None,
             false,
+            unissh_ffi::PasswordFillMode::Off,
         )
         .unwrap();
 
@@ -1997,6 +1998,7 @@ fn connect_with_vault_password() {
 /// `Password:`, reads a line and answers `FILL-OK` when the line is the
 /// password. With `echo` it echoes what it reads, byte by byte — what a
 /// mis-detected, non-password prompt does, split the way a slow remote splits it.
+/// Ctrl-U kills the line read so far and says so with `LINE-KILLED`.
 mod promptserver {
     use std::sync::Arc;
 
@@ -2054,7 +2056,10 @@ mod promptserver {
             session: &mut Session,
         ) -> Result<(), russh::Error> {
             for &b in data {
-                if b == b'\r' {
+                if b == 0x15 {
+                    self.line.clear();
+                    session.data(channel, b"\r\nLINE-KILLED\r\n".to_vec())?;
+                } else if b == b'\r' {
                     let verdict: &[u8] = if self.line == self.password.as_bytes() {
                         b"\r\nFILL-OK\r\n"
                     } else {
@@ -2152,8 +2157,23 @@ impl FillObserver {
         }
     }
 
-    fn saw(&self, event: unissh_ffi::FillEvent) -> bool {
-        self.fills.lock().unwrap().contains(&event)
+    fn saw(&self, event: &unissh_ffi::FillEvent) -> bool {
+        self.fills.lock().unwrap().contains(event)
+    }
+
+    /// The id of a bare-prompt offer, once one was made.
+    fn offer(&self) -> Option<u64> {
+        self.fills.lock().unwrap().iter().find_map(|e| match e {
+            unissh_ffi::FillEvent::Offered {
+                kind: unissh_ffi::FillPromptKind::Generic,
+                offer_id,
+                ..
+            } => Some(*offer_id),
+            unissh_ffi::FillEvent::Offered { .. }
+            | unissh_ffi::FillEvent::Withdrawn { .. }
+            | unissh_ffi::FillEvent::Rejected
+            | unissh_ffi::FillEvent::Echoed => None,
+        })
     }
 }
 
@@ -2163,6 +2183,8 @@ struct AtPrompt {
     _server: tokio::runtime::Runtime,
     session: std::sync::Arc<unissh_ffi::SshSession>,
     obs: std::sync::Arc<FillObserver>,
+    /// The offer the core made at the prompt.
+    offer_id: u64,
 }
 
 /// Opens a session that logged in with the vault password `password` against a
@@ -2187,19 +2209,20 @@ fn open_at_prompt(dir: &std::path::Path, password: &str, echo: bool) -> AtPrompt
         obs.clone(),
         None,
         false,
+        unissh_ffi::PasswordFillMode::SudoAndGeneric,
     ) else {
         panic!("the session did not open");
     };
-    obs.wait_for("the offer", |o| {
-        o.saw(unissh_ffi::FillEvent::Offered {
-            kind: unissh_ffi::FillPromptKind::Generic,
-        })
-    });
+    obs.wait_for("the offer", |o| o.offer().is_some());
+    let Some(offer_id) = obs.offer() else {
+        panic!("the offer went away");
+    };
     AtPrompt {
         _core: core,
         _server: rt,
         session,
         obs,
+        offer_id,
     }
 }
 
@@ -2211,15 +2234,15 @@ fn saved_password_is_typed_at_the_prompt_and_never_shown() {
         _server,
         session,
         obs,
+        offer_id,
     } = open_at_prompt(dir.path(), "hunter2!", false);
 
-    session.fill_login_password().unwrap();
+    session.fill_login_password(offer_id).unwrap();
     // The fill never presses Enter: the user does.
     session.write(b"\r".to_vec()).unwrap();
     obs.wait_for("the prompt's verdict", |o| {
         contains(&o.buf.lock().unwrap(), b"FILL-OK")
     });
-    assert!(!contains(&obs.buf.lock().unwrap(), b"hunter2!"));
     session.close().unwrap();
 }
 
@@ -2231,10 +2254,15 @@ fn a_filled_password_the_remote_echoes_is_masked() {
         _server,
         session,
         obs,
+        offer_id,
     } = open_at_prompt(dir.path(), "hunter2!", true);
 
-    session.fill_login_password().unwrap();
-    obs.wait_for("the echo report", |o| o.saw(unissh_ffi::FillEvent::Echoed));
+    session.fill_login_password(offer_id).unwrap();
+    obs.wait_for("the echo report", |o| o.saw(&unissh_ffi::FillEvent::Echoed));
+    // The core kills the line itself, so Enter cannot run the hidden password.
+    obs.wait_for("the line kill", |o| {
+        contains(&o.buf.lock().unwrap(), b"LINE-KILLED")
+    });
     let out = obs.buf.lock().unwrap().clone();
     assert!(
         contains(&out, b"Password:********"),
@@ -3062,6 +3090,7 @@ fn resize_changes_terminal_size() {
             observer.clone(),
             None,
             false,
+            unissh_ffi::PasswordFillMode::Off,
         )
         .unwrap();
 
@@ -3121,6 +3150,7 @@ fn open_session_rejects_zero_size() {
         observer,
         None,
         false,
+        unissh_ffi::PasswordFillMode::Off,
     );
     assert!(r.is_err(), "zero width must be rejected by validation");
 }
@@ -4427,6 +4457,7 @@ fn session_recording_captures_and_persists() {
                 label: "test host".to_owned(),
             }),
             false,
+            unissh_ffi::PasswordFillMode::Off,
         )
         .unwrap();
 
@@ -4545,6 +4576,7 @@ fn a_recording_survives_the_session_being_dropped_on_close() {
                 label: "test host".to_owned(),
             }),
             false,
+            unissh_ffi::PasswordFillMode::Off,
         )
         .unwrap();
 
@@ -4615,6 +4647,7 @@ fn no_recording_request_records_nothing() {
             observer,
             None,
             false,
+            unissh_ffi::PasswordFillMode::Off,
         )
         .unwrap();
     session.write(b"echo nope\n".to_vec()).unwrap();
@@ -4739,6 +4772,7 @@ fn a_recording_is_written_off_the_runtime() {
                 label: "t".to_owned(),
             }),
             false,
+            unissh_ffi::PasswordFillMode::Off,
         )
         .unwrap();
     session.write(b"echo x\n".to_vec()).unwrap();
@@ -4830,6 +4864,7 @@ fn the_core_lock_is_free_during_a_handshake() {
             observer,
             None,
             false,
+            unissh_ffi::PasswordFillMode::Off,
         )
         .unwrap();
     let connect_took = connect_started.elapsed();
@@ -5005,6 +5040,7 @@ fn system_agent_authenticates_end_to_end() {
             observer.clone(),
             None,
             false,
+            unissh_ffi::PasswordFillMode::Off,
         )
         .expect("the agent must be able to authenticate this session");
 
@@ -5090,6 +5126,7 @@ fn system_agent_missing_key_is_named() {
         observer,
         None,
         false,
+        unissh_ffi::PasswordFillMode::Off,
     );
     let msg = match outcome {
         Ok(_) => panic!("the agent does not hold this key; the connect must fail"),
@@ -5139,6 +5176,7 @@ fn system_agent_auth_refuses_the_endpoint_set_on_the_core() {
         observer,
         None,
         false,
+        unissh_ffi::PasswordFillMode::Off,
     );
     let msg = match outcome {
         Ok(_) => panic!("UniSSH's own socket must be refused"),

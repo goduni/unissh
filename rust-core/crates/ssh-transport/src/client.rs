@@ -919,7 +919,10 @@ impl SshClient {
             }
             sink.on_close(exit);
         });
-        Ok(ShellHandle { write, shutdown })
+        Ok(ShellHandle {
+            write: Arc::new(write),
+            shutdown,
+        })
     }
 
     /// Opens an SFTP session (the `sftp` subsystem) over the connection. The connection
@@ -1028,7 +1031,7 @@ impl Drop for ExecHandle {
 /// background reader to FINISH on Drop — see the Drop impl for why it must
 /// finish rather than stop.
 pub struct ShellHandle {
-    write: russh::ChannelWriteHalf<Msg>,
+    write: Arc<russh::ChannelWriteHalf<Msg>>,
     shutdown: Arc<tokio::sync::Notify>,
 }
 
@@ -1037,6 +1040,28 @@ impl ShellHandle {
     pub async fn write(&self, data: &[u8]) -> Result<(), TransportError> {
         self.write.data_bytes(data.to_vec()).await?;
         Ok(())
+    }
+
+    /// Sends a secret (a saved password typed at a prompt) into the session.
+    ///
+    /// Takes the bytes in `Zeroizing`, so the only copy left in this process
+    /// once it returns is the one russh owns: its packet buffers, and the
+    /// encryption that consumes them, are not ours to wipe.
+    pub async fn write_secret(&self, data: Zeroizing<Vec<u8>>) -> Result<(), TransportError> {
+        self.write.data_bytes(data.to_vec()).await?;
+        Ok(())
+    }
+
+    /// A second, input-only way into the session, for writing from where a
+    /// `&ShellHandle` is not at hand (the output path).
+    ///
+    /// Cloneable and inert on drop: unlike this handle, it does not end the
+    /// reader when it goes, so it may live inside the session's own output sink
+    /// without keeping anything alive past the handle.
+    pub fn input(&self) -> ShellInput {
+        ShellInput {
+            write: Arc::clone(&self.write),
+        }
     }
 
     /// Changes the terminal window size.
@@ -1072,6 +1097,20 @@ impl Drop for ShellHandle {
     /// has not reached `notified()` yet, and the task ends on its next poll.
     fn drop(&mut self) {
         self.shutdown.notify_one();
+    }
+}
+
+/// Input-only access to an interactive session; see [`ShellHandle::input`].
+#[derive(Clone)]
+pub struct ShellInput {
+    write: Arc<russh::ChannelWriteHalf<Msg>>,
+}
+
+impl ShellInput {
+    /// Sends bytes into the session.
+    pub async fn write(&self, data: &[u8]) -> Result<(), TransportError> {
+        self.write.data_bytes(data.to_vec()).await?;
+        Ok(())
     }
 }
 

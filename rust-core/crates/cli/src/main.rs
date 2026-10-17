@@ -30,8 +30,8 @@ use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 use unissh_ffi::{
-    AuthMethod, Core, FillEvent, JumpHost, MultiExecTarget, ProxyConfig, ProxyKind, ProxyPassword,
-    ResolveStatus, SessionObserver,
+    AuthMethod, Core, FillEvent, JumpHost, MultiExecTarget, PasswordFillMode, ProxyConfig,
+    ProxyKind, ProxyPassword, ResolveStatus, SessionObserver,
 };
 
 /// Label of a group member's dry-run resolution status: the variant name, as the
@@ -809,6 +809,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 // Nor does it forward the agent: that needs an approver to confirm
                 // each signature, and there is nobody at a harness to ask.
                 false,
+                // And it offers no saved password at prompts: see `on_fill` below.
+                PasswordFillMode::Off,
             )?;
             // line-by-line input from stdin (no raw mode — this is a harness)
             for line in std::io::stdin().lock().lines() {
