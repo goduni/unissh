@@ -504,7 +504,7 @@ interface AppStore {
    *  fill off in the core — and hides an offer already on screen. */
   offerPasswordFill: boolean;
   setOfferPasswordFill: (on: boolean) => void;
-  /** Also offer at bare "Password:" prompts (su, login, …). Off unless turned
+  /** Also offer at bare "Password:" prompts (pkexec, login, …). Off unless turned
    *  on: a bare prompt names no one and can be any program on any machine the
    *  session reaches. Read at session open, like the setting above. */
   offerPasswordFillGeneric: boolean;
