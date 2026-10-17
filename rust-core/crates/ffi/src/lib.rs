@@ -12504,8 +12504,8 @@ mod tests {
     }
 
     /// B7: forward-compat. An unknown field (from a future version) is captured in
-    /// `extra` and survives deserialize→serialize; an empty `extra` adds no
-    /// keys (existing signed items do not change byte-for-byte).
+    /// `extra` and survives deserialize→serialize. That an empty `extra` adds no
+    /// keys is `bodies_without_appearance_keep_their_bytes`.
     #[test]
     fn stored_profile_preserves_unknown_fields() {
         let json = r#"{"uid":"u","label":"L","host":"h","port":22,"user":"x",
@@ -12523,13 +12523,6 @@ mod tests {
         );
         let out = serde_json::to_string(&sp).unwrap();
         assert!(out.contains("future_field") && out.contains("future_num"));
-        // Empty extra → no extra keys.
-        let sp0: StoredProfile = serde_json::from_str(
-            r#"{"label":"L","host":"h","port":22,"user":"x","jumps":[],"tags":[]}"#,
-        )
-        .unwrap();
-        assert!(sp0.extra.is_empty());
-        assert!(!serde_json::to_string(&sp0).unwrap().contains("extra"));
     }
 
     /// B7: an edit of a profile by a client that does NOT know a future-version field PRESERVES it
@@ -12692,6 +12685,25 @@ mod tests {
         ] {
             assert!(appearance_id(Some(bad.to_owned())).is_err(), "{bad}");
         }
+        // ...and the save path applies it: the bad id fails the save instead of
+        // reaching the vault.
+        let dir = tempfile::tempdir().unwrap();
+        let core = Core::new(
+            dir.path().join("i.db").to_string_lossy().to_string(),
+            dir.path().join("i.keyset").to_string_lossy().to_string(),
+        );
+        core.create_account(None).unwrap();
+        core.create_vault("v".into(), "V".into()).unwrap();
+        let group = ServerGroup {
+            group_id: "g".into(),
+            label: "G".into(),
+            member_ids: vec![],
+            parent_id: None,
+            color: Some("#ff0000".into()),
+            icon: None,
+        };
+        assert!(core.save_group("v".into(), group).is_err());
+        assert!(core.get_group("v".into(), "g".into()).is_err());
     }
 
     /// #134: like a profile, a group edited by a client that does not know a
