@@ -64,6 +64,8 @@ import type { TunnelType } from "@/store/app";
 import { exportPath } from "@/support/paths";
 import { authorizedKeysAppendCmd } from "@/support/authorizedKeys";
 import { indexHostGroups } from "@/support/hostGroups";
+import { AppearancePicker } from "@/components/AppearancePicker";
+import { groupColor } from "@/components/appearance";
 
 // ── Form atoms ─────────────────────────────────────────────────
 interface MSegOption<T extends string> {
@@ -515,6 +517,10 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
   const [tags, setTags] = useState<string[]>(edit?.tags ?? []);
   const [recordSessions, setRecordSessions] = useState<boolean>(edit?.recordSessions ?? false);
   const [agentForward, setAgentForward] = useState<boolean>(edit?.agentForward ?? false);
+  // Colour tag + icon ids (#134). Seeded with whatever is stored — an id this
+  // build does not know included — so an untouched picker saves it back as is.
+  const [color, setColor] = useState<string | null>(edit?.color ?? null);
+  const [icon, setIcon] = useState<string | null>(edit?.icon ?? null);
   // The explanation a "?" raises. One slot, not one flag per switch — only one
   // can be open, and Escape closes it before the host dialog because the dialog
   // stack in a11y.ts pops innermost first.
@@ -860,6 +866,8 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
       startupSnippetIds,
       recordSessions,
       agentForward,
+      color,
+      icon,
     };
 
     try {
@@ -1713,6 +1721,25 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
               </div>
             </Field>
           </div>
+
+          {/* appearance (#134) — after the group, because with no colour of its
+              own the host shows the group's, and the picker says which */}
+          <Field label={t("appearance.title")} w="100%" group>
+            <div style={{ fontSize: TEXT.small, color: p.txt3, marginBottom: rem(10) }}>
+              {t("appearance.hint")}
+            </div>
+            <AppearancePicker
+              color={color}
+              icon={icon}
+              onColor={setColor}
+              onIcon={setIcon}
+              inheritedColor={
+                groupId && groupId !== NEW_GROUP
+                  ? groupColor(groupId, new Map(groups.map((g) => [g.groupId, g])))
+                  : null
+              }
+            />
+          </Field>
 
           {/* session recording — per host, because recording production is a
               requirement and recording a homelab is noise */}
