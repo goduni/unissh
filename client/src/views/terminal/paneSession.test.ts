@@ -4,8 +4,13 @@
 // places.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createPaneEvents, createPreviewCapture, shouldRetryOnResume } from "./paneSession";
-import type { TermEvent } from "@/bridge/types";
+import {
+  createPaneEvents,
+  createPreviewCapture,
+  passwordFillMode,
+  shouldRetryOnResume,
+} from "./paneSession";
+import type { ConnectionProfile, TermEvent } from "@/bridge/types";
 import type { TerminalPaneState } from "@/store/app";
 
 const enc = (s: string): Uint8Array => new TextEncoder().encode(s);
@@ -202,9 +207,9 @@ describe("createPaneEvents", () => {
     const onClosed = vi.fn();
     createPaneEvents({ ...base, term, onFill, onClosed }).onEvent({
       type: "fill",
-      event: { type: "offered", kind: "sudo" },
+      event: { type: "withdrawn", offerId: 3 },
     });
-    expect(onFill).toHaveBeenCalledWith({ type: "offered", kind: "sudo" });
+    expect(onFill).toHaveBeenCalledWith({ type: "withdrawn", offerId: 3 });
     expect(term.write).not.toHaveBeenCalled();
     expect(term.writeln).not.toHaveBeenCalled();
     expect(onClosed).not.toHaveBeenCalled();
@@ -265,5 +270,21 @@ describe("shouldRetryOnResume", () => {
   it("leaves a live session running", () => {
     expect(shouldRetryOnResume(pane({ status: "online" }))).toBe(false);
     expect(shouldRetryOnResume(pane({ status: "connecting" }))).toBe(false);
+  });
+});
+
+describe("passwordFillMode", () => {
+  const profile = (usernameTemplate: string | null) =>
+    ({ usernameTemplate }) as ConnectionProfile;
+
+  it("follows the two settings", () => {
+    expect(passwordFillMode(profile(null), false, true)).toBe("off");
+    expect(passwordFillMode(profile(null), true, false)).toBe("sudoOnly");
+    expect(passwordFillMode(profile(""), true, true)).toBe("sudoAndGeneric");
+  });
+
+  it("never fills through a username template", () => {
+    // The saved password is the gateway's; the prompts are the machines behind it.
+    expect(passwordFillMode(profile("%u:prod-db"), true, true)).toBe("off");
   });
 });

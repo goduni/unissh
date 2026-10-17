@@ -444,10 +444,22 @@ export type FillPromptKind = "sudo" | "doas" | "generic";
 /** A change in a session's saved-password offer. Carries no secret and no
  *  output — the core decides what is a prompt and types the password itself. */
 export type FillEvent =
-  | { type: "offered"; kind: FillPromptKind }
-  | { type: "withdrawn" }
+  | {
+      type: "offered";
+      kind: FillPromptKind;
+      /** Names this offer to `sessionFillPassword`; increases per session. */
+      offerId: number;
+      /** The account a sudo/doas prompt names; null for a bare prompt. */
+      user: string | null;
+      /** A saved password was rejected on this session already. */
+      rejectedBefore: boolean;
+    }
+  | { type: "withdrawn"; offerId: number }
   | { type: "rejected" }
+  /** The core masked the echoed password and killed the line (Ctrl-U). */
   | { type: "echoed" };
+/** At which password prompts a session may offer its saved login password. */
+export type PasswordFillMode = "off" | "sudoOnly" | "sudoAndGeneric";
 export type TermEvent =
   | { type: "data"; bytes: number[] }
   | { type: "close"; exit: number }

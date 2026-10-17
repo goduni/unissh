@@ -2,7 +2,7 @@
 // a Tauri Channel. Tabs come from the store; each tab holds one or more panes in
 // a recursive split layout, and each pane owns its own session.
 
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { Terminal as Xterm, type IDisposable, type IMarker } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
@@ -26,7 +26,7 @@ import {
 import { useIsMobile } from "@/store/responsive";
 import { splitLocalTerminal, useCtx } from "@/store/ctx";
 import { localRecordingRequest, useLocalMachine } from "@/store/localShell";
-import { createPaneEvents, type PaneEvents } from "@/views/terminal/paneSession";
+import { createPaneEvents, passwordFillMode, type PaneEvents } from "@/views/terminal/paneSession";
 import { parseOsc52 } from "@/views/terminal/osc52";
 import { resetStaleAppModes } from "@/views/terminal/staleModes";
 import { newImageAddon } from "@/views/terminal/imageAddon";
@@ -337,18 +337,26 @@ function TerminalPane({
   // The core's saved-password offer for this pane's session (#135): which prompt
   // it is waiting at, and the notice the last fill left behind. Every decision
   // is the core's — this only shows them, and the password never comes here.
-  const [fillOffer, setFillOffer] = useState<FillPromptKind | null>(null);
+  const [fillOffer, setFillOffer] = useState<FillOffer | null>(null);
   const [fillNotice, setFillNotice] = useState<"rejected" | "echoed" | null>(null);
-  // Named on the offer, so the user can tell which saved password would go where.
+  // Named on the offer, so the user can tell which saved password would go.
   const [fillCredential, setFillCredential] = useState("");
+  // How much of the pane's foot the bar covers: the terminal gives that up, so
+  // the prompt the offer is about stays in sight above it.
+  const [fillBarHeight, setFillBarHeight] = useState(0);
   // The xterm key handler is installed once, so it reads the offer through refs.
-  const fillOfferRef = useRef<FillPromptKind | null>(null);
+  const fillOfferRef = useRef<FillOffer | null>(null);
+  // The newest offer id this session has sent. Events can overtake each other
+  // on the way here; an offer older than one already seen is stale.
+  const fillSeenRef = useRef(0);
   const acceptFillRef = useRef<() => void>(() => {});
   const fillNoticeTimerRef = useRef<number | null>(null);
   const fillShortcut = useShortcutLabel("fillPassword");
-  const showFillOffer = (kind: FillPromptKind | null) => {
-    fillOfferRef.current = kind;
-    setFillOffer(kind);
+  const offerPasswordFill = useApp((s) => s.offerPasswordFill);
+  const offerPasswordFillGeneric = useApp((s) => s.offerPasswordFillGeneric);
+  const showFillOffer = (offer: FillOffer | null) => {
+    fillOfferRef.current = offer;
+    setFillOffer(offer);
   };
   const clearFillNoticeTimer = () => {
     if (fillNoticeTimerRef.current != null) {
@@ -359,16 +367,23 @@ function TerminalPane({
   // A new or closed session starts with no offer and no leftover notice.
   const resetFill = () => {
     showFillOffer(null);
+    fillSeenRef.current = 0;
     clearFillNoticeTimer();
     setFillNotice(null);
   };
   const onFill = (e: FillEvent) => {
     switch (e.type) {
-      case "offered":
-        if (useApp.getState().offerPasswordFill) showFillOffer(e.kind);
+      case "offered": {
+        if (e.offerId <= fillSeenRef.current) return;
+        fillSeenRef.current = e.offerId;
+        const { offerPasswordFill: on, offerPasswordFillGeneric: generic } = useApp.getState();
+        if (!on || (e.kind === "generic" && !generic)) return;
+        showFillOffer({ kind: e.kind, offerId: e.offerId, user: e.user, rejectedBefore: e.rejectedBefore });
         return;
+      }
       case "withdrawn":
-        showFillOffer(null);
+        fillSeenRef.current = Math.max(fillSeenRef.current, e.offerId);
+        if (fillOfferRef.current?.offerId === e.offerId) showFillOffer(null);
         return;
       case "rejected":
         // Transient: the prompt itself is still there to be answered by hand.
@@ -380,27 +395,36 @@ function TerminalPane({
           setFillNotice((n) => (n === "rejected" ? null : n));
         }, 6000);
         return;
-      case "echoed": {
-        // Kill the line at once (Ctrl-U), so the password the core hid on screen
-        // is not run as a command when the user presses Enter. The warning stays
-        // until dismissed: something that looked like a password prompt was not.
-        const id = sessionIdRef.current;
-        if (id) void api.sessionWrite(id, [0x15]).catch(() => {});
+      case "echoed":
+        // The core has masked the echo and killed the line (Ctrl-U) already.
+        // The warning stays until dismissed: something that looked like a
+        // password prompt was not.
         showFillOffer(null);
         clearFillNoticeTimer();
         setFillNotice("echoed");
         return;
-      }
     }
   };
+  // Turning offers (or bare-prompt offers) off hides one already on screen.
+  useEffect(() => {
+    const shown = fillOfferRef.current;
+    if (shown && (!offerPasswordFill || (shown.kind === "generic" && !offerPasswordFillGeneric))) {
+      fillOfferRef.current = null;
+      setFillOffer(null);
+    }
+  }, [offerPasswordFill, offerPasswordFillGeneric]);
   // Accept = the button or the shortcut, never Enter. The core types the
   // password without a newline; the terminal keeps focus so Enter is the user's.
   const acceptFill = () => {
     const id = sessionIdRef.current;
-    if (!id || !fillOfferRef.current) return;
+    const offer = fillOfferRef.current;
+    if (!id || !offer) return;
     showFillOffer(null);
-    void api.sessionFillPassword(id).catch((err) => toast(apiErrorMessage(err), "err"));
-    xtermRef.current?.focus();
+    // Focus first, and only when it is elsewhere, so the user's Enter lands in
+    // the terminal the password was typed into.
+    const term = xtermRef.current;
+    if (term && !hostRef.current?.contains(document.activeElement)) term.focus();
+    void api.sessionFillPassword(id, offer.offerId).catch(() => toast(t("terminal.fill.failed"), "err"));
   };
   acceptFillRef.current = acceptFill;
   // The parameter form for the startup snippet being asked about, if any. The
@@ -955,6 +979,7 @@ async function runStartupSnippets(
               void fillCredentialLabel(target.profile, auth).then((label) => {
                 if (!cancelled) setFillCredential(label);
               });
+              const fill = useApp.getState();
               return api.sessionOpen(
                 {
                   host: target.profile.host,
@@ -979,6 +1004,8 @@ async function runStartupSnippets(
                     }
                   : undefined,
                 target.profile.agentForward,
+                // Fixed for the session's life: the core binds it at open.
+                passwordFillMode(target.profile, fill.offerPasswordFill, fill.offerPasswordFillGeneric),
               );
             });
 
@@ -1270,7 +1297,10 @@ async function runStartupSnippets(
         dragY.current = null;
       }}
     >
-      <div ref={hostRef} style={{ width: "100%", height: "100%" }} />
+      <div
+        ref={hostRef}
+        style={{ width: "100%", height: fillBarHeight > 0 ? `calc(100% - ${fillBarHeight}px)` : "100%" }}
+      />
       {/* Split panes get an explicit ✕ on hover so closing one is discoverable
           (the right-click menu and Ctrl/Cmd+W still work too). */}
       {multi && paneHover && !searchOpen && (
@@ -1427,10 +1457,10 @@ async function runStartupSnippets(
         <PasswordFillBar
           offer={fillOffer}
           notice={fillNotice}
-          host={paneProfile(pane)?.label || paneProfile(pane)?.host || ""}
-          credential={fillCredential}
+          credential={fillCredential || paneProfile(pane)?.label || ""}
           shortcut={fillShortcut}
           touch={isMobile}
+          onHeight={setFillBarHeight}
           onAccept={acceptFill}
           onDismissOffer={() => {
             showFillOffer(null);
@@ -1644,36 +1674,66 @@ async function fillCredentialLabel(profile: ConnectionProfile, auth: AuthMethod)
   }
 }
 
+/** The saved-password offer the pane is showing (#135). */
+interface FillOffer {
+  kind: FillPromptKind;
+  offerId: number;
+  /** The account a sudo/doas prompt names; null for a bare prompt. */
+  user: string | null;
+  /** A saved password was rejected on this session already: the core types it
+   *  again only if it has been changed in the vault since. */
+  rejectedBefore: boolean;
+}
+
 /** The saved-password offer and the notices a fill leaves, at the foot of a pane.
  *
  * Non-modal and never focused: the terminal keeps the keyboard, so typing on
  * simply withdraws the offer (the core sees the keystroke) and Enter can never
  * accept it by accident. Accepting is the button or the pane-only shortcut.
- * The button names the credential and the host, because the one mistake worth
- * guarding against is a password typed into the wrong place. */
+ * It never names a host: the core cannot tell which machine is asking — after
+ * an `ssh` to another host the prompt is that host's — so neither can this.
+ * It reports how much of the pane it covers, so the terminal can shrink and
+ * keep the prompt in sight. */
 function PasswordFillBar({
   offer,
   notice,
-  host,
   credential,
   shortcut,
   touch,
+  onHeight,
   onAccept,
   onDismissOffer,
   onDismissNotice,
 }: {
-  offer: FillPromptKind | null;
+  offer: FillOffer | null;
   notice: "rejected" | "echoed" | null;
-  host: string;
   credential: string;
   shortcut: string;
   touch: boolean;
+  onHeight: (px: number) => void;
   onAccept: () => void;
   onDismissOffer: () => void;
   onDismissNotice: () => void;
 }) {
   const p = usePalette();
   const { t } = useTranslation();
+  const barRef = useRef<HTMLDivElement | null>(null);
+  // The space from the bar's top edge to the pane's foot, or 0 when it is empty.
+  useLayoutEffect(() => {
+    const el = barRef.current;
+    if (!el) return;
+    const measure = () => {
+      const pane = el.offsetParent as HTMLElement | null;
+      onHeight(el.offsetHeight > 0 && pane ? Math.max(0, pane.clientHeight - el.offsetTop) : 0);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      onHeight(0);
+    };
+  }, [onHeight]);
   const target = touch ? rem(44) : rem(24);
   const row: CSSProperties = {
     display: "flex",
@@ -1699,9 +1759,16 @@ function PasswordFillBar({
     color: p.txt3,
     cursor: "pointer",
   };
-  const insertLabel = t("terminal.fill.insertLabel", { credential: credential || host, host });
+  const insertLabel = t("terminal.fill.insert", { credential });
+  const help = t("terminal.fill.anyMachine");
+  const prompt = !offer
+    ? ""
+    : offer.kind === "generic"
+      ? t("terminal.fill.generic")
+      : t(`terminal.fill.${offer.kind}`, { user: offer.user ?? "" });
   return (
     <div
+      ref={barRef}
       role="status"
       aria-live="polite"
       // Clicking here must not take focus from the terminal, and a touch must not
@@ -1736,12 +1803,14 @@ function PasswordFillBar({
         </div>
       )}
       {offer && (
-        <div style={{ ...row, border: `1px solid ${p.line2}` }}>
+        <div style={{ ...row, border: `1px solid ${offer.rejectedBefore ? p.amber : p.line2}` }}>
           <Icon name="key" size={16} color={p.txt2} />
-          <span
-            style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-          >
-            {t(`terminal.fill.${offer}`)}
+          <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: rem(2) }}>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{prompt}</span>
+            <span style={{ fontSize: TEXT.small, color: p.txt3 }}>{help}</span>
+            {offer.rejectedBefore && (
+              <span style={{ fontSize: TEXT.small, color: p.txt2 }}>{t("terminal.fill.rejectedBefore")}</span>
+            )}
           </span>
           {shortcut && !touch && (
             <span style={{ flexShrink: 0, fontFamily: MONO, fontSize: TEXT.small, color: p.txt3 }}>
@@ -1753,10 +1822,10 @@ function PasswordFillBar({
             icon="key"
             onClick={onAccept}
             title={shortcut ? `${insertLabel} (${shortcut})` : insertLabel}
-            aria-label={insertLabel}
+            aria-label={`${insertLabel}. ${help}`}
             style={touch ? { minHeight: target } : undefined}
           >
-            {t("terminal.fill.insert")}
+            {insertLabel}
           </Btn>
           <button
             type="button"

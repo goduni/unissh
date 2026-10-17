@@ -7,8 +7,24 @@
 // and having that written once is what keeps them from drifting.
 
 import type { Terminal as Xterm } from "@xterm/xterm";
-import type { FillEvent, TermEvent } from "@/bridge/types";
+import type { ConnectionProfile, FillEvent, PasswordFillMode, TermEvent } from "@/bridge/types";
 import type { TerminalPaneState } from "@/store/app";
+
+/** At which password prompts a new session with `profile` may offer its saved
+ *  login password (#135), given the two Terminal settings.
+ *
+ *  A profile with a username template logs in to a gateway: the saved password
+ *  is the gateway's, and the prompts the session shows are the machines behind
+ *  it. Typing it there would hand a gateway credential to them, so such a
+ *  session never fills, whatever the settings say. */
+export function passwordFillMode(
+  profile: ConnectionProfile,
+  offer: boolean,
+  generic: boolean,
+): PasswordFillMode {
+  if (!offer || profile.usernameTemplate?.trim()) return "off";
+  return generic ? "sudoAndGeneric" : "sudoOnly";
+}
 
 /** Whether returning from the background should re-open this pane.
  *
