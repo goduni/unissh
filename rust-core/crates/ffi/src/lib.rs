@@ -6638,13 +6638,17 @@ impl Core {
                 // immutable uid — personal bindings and hop_refs depend on it
                 // (B2.1/B2.2); a fresh uid would orphan them. We reuse the existing
                 // profile's uid, otherwise we mint a new one.
-                let existing_uid = vault
+                // The colour/icon are the user's own markings, not part of the
+                // ssh config, so an overwrite carries them over as well.
+                let existing = vault
                     .get_item(alias.as_bytes())
                     .ok()
                     .flatten()
-                    .and_then(|it| serde_json::from_slice::<StoredProfile>(&it.content).ok())
-                    .and_then(|sp| sp.uid)
-                    .filter(|u| !u.is_empty());
+                    .and_then(|it| serde_json::from_slice::<StoredProfile>(&it.content).ok());
+                let (existing_uid, color, icon) = match existing {
+                    Some(sp) => (sp.uid.filter(|u| !u.is_empty()), sp.color, sp.icon),
+                    None => (None, None, None),
+                };
                 let s = cfg.resolve(alias);
                 let stored = StoredProfile {
                     uid: Some(existing_uid.unwrap_or_else(mint_profile_uid)),
@@ -6663,8 +6667,8 @@ impl Core {
                     record_sessions: false,
                     agent_forward: false,
                     system_agent_public_key: None,
-                    color: None,
-                    icon: None,
+                    color,
+                    icon,
                     extra: BTreeMap::new(),
                 };
                 let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
@@ -12123,6 +12127,30 @@ mod tests {
         let p2 = core.get_connection("v".into(), "web".into()).unwrap();
         assert_eq!(p2.uid, uid1, "the uid is preserved on overwrite (#9)");
         assert_eq!(p2.port, 2222, "the other fields were updated");
+    }
+
+    /// A re-import keeps the colour/icon the user gave the host: they are not
+    /// part of the ssh config.
+    #[test]
+    fn import_ssh_config_keeps_appearance_on_overwrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = Core::new(
+            dir.path().join("i.db").to_string_lossy().to_string(),
+            dir.path().join("i.keyset").to_string_lossy().to_string(),
+        );
+        core.create_account(None).unwrap();
+        core.create_vault("v".into(), "V".into()).unwrap();
+        let cfg = "Host web\n  HostName web.example\n  User deploy\n";
+        core.import_ssh_config("v".into(), cfg.into()).unwrap();
+        let mut p = core.get_connection("v".into(), "web".into()).unwrap();
+        p.color = Some("red".into());
+        p.icon = Some("database".into());
+        core.save_connection("v".into(), p).unwrap();
+
+        core.import_ssh_config("v".into(), cfg.into()).unwrap();
+        let p2 = core.get_connection("v".into(), "web".into()).unwrap();
+        assert_eq!(p2.color.as_deref(), Some("red"));
+        assert_eq!(p2.icon.as_deref(), Some("database"));
     }
 
     /// A legacy profile (before password items): `key_item_id` as a flat field, and for a jump —
