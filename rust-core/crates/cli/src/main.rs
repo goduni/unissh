@@ -689,6 +689,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             parent,
         } => {
             do_unlock(&core, &unlock)?;
+            // An upsert: an edit keeps the colour/icon set elsewhere (the CLI has
+            // no flags for them); a new group starts without.
+            let (color, icon) = match core.get_group(vault.clone(), group.clone()) {
+                Ok(existing) => (existing.color, existing.icon),
+                Err(unissh_ffi::FfiError::NotFound) => (None, None),
+                Err(e) => return Err(e.into()),
+            };
             core.save_group(
                 vault,
                 unissh_ffi::ServerGroup {
@@ -696,8 +703,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                     label,
                     member_ids: members,
                     parent_id: parent,
-                    color: None,
-                    icon: None,
+                    color,
+                    icon,
                 },
             )?;
             println!("ok");
