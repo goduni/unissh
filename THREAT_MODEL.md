@@ -275,7 +275,10 @@ place is a disclosure, so the feature is built around one invariant:
   The client opens with fill off when the setting is off and for any host with
   a username template: that password authenticates to a gateway, and the
   prompts the session shows belong to the machines behind it. An SSH-terminating
-  proxy has the same property and must be opened with fill off too.
+  proxy has the same property and must be opened with fill off too. That
+  exclusion is the caller's: the core cannot see a profile's template or what
+  the endpoint terminates, and does what `open_session` is told — the same
+  limit as a compromised webview, below.
 - **Consent is to one prompt.** Each offer has an id, and the fill must name
   the live one; a fill for an offer that has since been replaced — the `sudo`
   timed out and a different prompt took its place — is refused.
@@ -296,7 +299,12 @@ place is a disclosure, so the feature is built around one invariant:
   not parse "Sorry, try again". It catches a program that asks again by itself
   within the window — `sudo`'s retry. It does not catch one that exits on a
   wrong password (`doas`, `su`, `sudo` with `passwd_tries=1`), nor a re-prompt
-  more than 15 seconds later: those are new prompts, offered again. Against PAM
+  more than 15 seconds later: those are new prompts, offered again. The other
+  way round, a genuinely new prompt of the same kind inside the window with
+  only Enter typed — `sudo a; sudo -k; sudo b` on one line — is taken for a
+  rejection: the second prompt is not offered, the user types it by hand, and
+  the saved password stays refused on that session (a new session forgets
+  it). Against PAM
   faillock or fail2ban the remaining guard is that every attempt is an
   explicit click; nothing is ever retried by itself. A rejected password that
   was then edited in the vault is typed again even if the edit restored the
@@ -305,8 +313,13 @@ place is a disclosure, so the feature is built around one invariant:
   seconds, cut to 3 seconds after the next keystroke — the password is masked
   out of the output (one `*` per character, in place) before the recorder or
   the UI sees it, also when it is split across reads, wrapped at the margin or
-  interleaved with colour and cursor sequences. The core then sends Ctrl-U so
-  the line is not run on Enter, and the UI warns. Recordings capture output
+  interleaved with colour and cursor sequences. An occurrence that completes
+  before the user's next keystroke is the fill's own echo: the core then sends
+  Ctrl-U so the line is not run on Enter, and the UI warns. One after it — a
+  short password turning up in a command's output — is masked without either,
+  since a Ctrl-U then would go into whatever program now runs. A possible start
+  of an echo held back at the end of a read is shown after 150 ms if nothing
+  follows, and when the session closes. Recordings capture output
   only, so the typed password is not in them either way.
 
 Not protected, and not claimed to be:
@@ -320,7 +333,8 @@ Not protected, and not claimed to be:
   never names a host.
 - **A transformed echo.** A program that echoes the password changed — readline
   showing a non-ASCII byte as `\303\244` in the C locale, `^X` or `M-x` for
-  control and meta characters — is not masked. Ctrl-U is readline's and zle's
+  control and meta characters — is not masked, nor is the part of an echo
+  that arrives more than 150 ms before the rest of it. Ctrl-U is readline's and zle's
   kill-line: the text stays in their kill ring, and a program reading the
   terminal raw may take it as just another byte.
 - **Copies the core does not own.** The password is handed to the SSH

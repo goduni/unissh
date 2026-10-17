@@ -3749,7 +3749,11 @@ impl Core {
     /// something other than the machine whose prompts the session will show:
     /// a gateway reached through a username template, or an SSH-terminating
     /// proxy — its password is not the target's, and typing it there hands a
-    /// gateway credential to whatever runs behind it.
+    /// gateway credential to whatever runs behind it. Excluding those is the
+    /// caller's responsibility: the core sees neither the profile's username
+    /// template nor what the endpoint terminates, and trusts this parameter as
+    /// it trusts the rest of the call (a compromised caller has the ungated
+    /// password reveal anyway).
     #[expect(
         clippy::too_many_arguments,
         reason = "signature mirrors the UI contract; a params struct would be a binding change"

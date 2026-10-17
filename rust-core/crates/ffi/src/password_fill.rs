@@ -82,8 +82,9 @@ const TAIL_MAX: usize = 512;
 /// A last line longer than this is not a prompt the core recognises.
 const PROMPT_MAX_CHARS: usize = 160;
 
-/// Bare prompts that name no account, compared case-insensitively: `su`,
-/// `login`, `passwd`'s first question and their common translations.
+/// Bare prompts that name no account, compared case-insensitively: `pkexec`,
+/// `login`, `passwd`'s first question and their common translations. (`su`
+/// asks the same way, but for the other account's password.)
 ///
 /// Deliberately not here: `Enter password:` (database and archive clients ask
 /// for *their* passwords that way), `New password:`, key passphrases and
@@ -108,7 +109,7 @@ pub enum PasswordFillMode {
     Off,
     /// `sudo` and `doas` prompts that name the login user.
     SudoOnly,
-    /// Those, and bare `Password:` prompts (`su`, `login`, …) that name no one.
+    /// Those, and bare `Password:` prompts (`pkexec`, `login`, …) that name no one.
     /// A bare prompt can be any program's on any machine this session reaches,
     /// hence a separate opt-in.
     SudoAndGeneric,

@@ -37,7 +37,7 @@ starts with `0.`:
 - Saved password at password prompts (#135): on a host logged into with a saved
   password, a `sudo` or `doas` prompt for the login account shows an offer in
   the pane, on the edge away from the cursor, to insert that password (button or Ctrl+Shift+P / ⇧⌘P
-  while the offer is shown); bare `Password:` prompts (`su`, `login`) only with
+  while the offer is shown); bare `Password:` prompts (`pkexec`, `login`) only with
   a second setting. It is typed without Enter, never through the clipboard, and
   never reaches the UI. The offer cannot tell which machine is asking and says
   so. Typing withdraws the offer; a password the prompt rejected is not typed

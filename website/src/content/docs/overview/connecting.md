@@ -36,9 +36,10 @@ is shown. The password is typed, not submitted: Enter is still yours. The
 offer sits at the edge of the pane away from the cursor, so the prompt stays in
 sight.
 
-Bare `Password:` prompts (`su`, `login`) are offered only if you also turn on
-**Also offer at bare “Password:” prompts** in Settings → Terminal. A bare
-prompt names no one, and it could be any program on any machine.
+Bare `Password:` prompts (`pkexec`, `login`) are offered only if you also turn
+on **Also offer at bare “Password:” prompts** in Settings → Terminal. A bare
+prompt names no one, and it could be any program on any machine. `su` asks for
+the other account's password, not yours, so the offer is no use there.
 
 What it cannot do: **tell which machine is asking.** The app sees what is
 printed in the terminal, not where it comes from. After you `ssh`, `telnet` or
@@ -61,7 +62,10 @@ What it will not do, on purpose:
   wrong password repeatedly is how accounts get locked. A program that simply
   exits on a wrong password (`doas`, `su`), or a prompt that comes back much
   later, is not recognised as a refusal: you get the offer again, and each
-  attempt still takes your click.
+  attempt still takes your click. The other way round, a second prompt of the
+  same kind within seconds — `sudo a; sudo -k; sudo b` — looks like a refusal:
+  type that one yourself. The saved password then stays off for the rest of the
+  session; a new session offers it again.
 - **Show it.** The password never reaches the window or the clipboard. If a
   prompt turns out to echo what it reads, the password is masked on screen and
   in the session recording, the line is cleared, and you are warned.
