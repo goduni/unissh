@@ -68,4 +68,14 @@ describe("liveHost", () => {
       icon: null,
     });
   });
+
+  // A tab must not lose the colour it inherited from a folder just because
+  // that host's vault is no longer the one loaded.
+  it("falls back to the tag last seen for the uid when the host is not loaded", () => {
+    const remembered = new Map([["u2", { color: "red" as const, icon: "database" }]]);
+    expect(liveHost({ uid: "u2", profileId: "h", color: null, icon: null }, loaded, index, remembered)).toEqual({
+      color: "red",
+      icon: "database",
+    });
+  });
 });

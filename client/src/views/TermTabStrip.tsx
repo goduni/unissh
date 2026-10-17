@@ -15,8 +15,7 @@ import { useTranslation, tDyn } from "@/i18n";
 import type { ConnectionProfile } from "@/bridge/types";
 import { paneProfile, useApp, type TerminalTab } from "@/store/app";
 import { isKnownIcon, swatchColor } from "@/components/appearance";
-import { colorName, useAppearanceIndex } from "@/components/ColorTick";
-import { liveHost } from "@/support/hostAppearance";
+import { colorName, paneHostTag, useAppearanceIndex } from "@/components/ColorTick";
 
 /** Aggregate a tab's pane statuses into one state: online if any pane is live,
  *  else error if any errored, else muted (connecting/closed). Colour AND shape
@@ -169,7 +168,7 @@ export function TermTabStrip({
           const focused = tab.panes.find((x) => x.id === tab.activePaneId) ?? tab.panes[0];
           const profile = focused ? paneProfile(focused) : null;
           const { color: tag, icon: tabIcon } = profile
-            ? liveHost(profile, storeHosts, appearance)
+            ? paneHostTag(profile, storeHosts, appearance)
             : { color: null, icon: null };
           const tagColor = swatchColor(tag, p);
           // The local marker belongs in the label too, not only in the icon: an

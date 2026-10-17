@@ -17,12 +17,12 @@ export interface AppearanceGroup extends GroupLike {
 
 /** Built once per render from the loaded groups; every lookup below reads it
  *  instead of re-scanning the groups per host. */
-export interface AppearanceIndex {
-  byId: ReadonlyMap<string, AppearanceGroup>;
-  byHost: HostGroupIndex<AppearanceGroup>;
+export interface AppearanceIndex<G extends AppearanceGroup = AppearanceGroup> {
+  byId: ReadonlyMap<string, G>;
+  byHost: HostGroupIndex<G>;
 }
 
-export function indexAppearance(groups: readonly AppearanceGroup[]): AppearanceIndex {
+export function indexAppearance<G extends AppearanceGroup>(groups: readonly G[]): AppearanceIndex<G> {
   return { byId: new Map(groups.map((g) => [g.groupId, g])), byHost: indexHostGroups([...groups]) };
 }
 
@@ -78,20 +78,35 @@ interface LiveHostLike {
   icon?: string | null;
 }
 
+/** What a host's tag looks like: its effective colour and its raw icon id. */
+export interface HostTag {
+  color: TagColor | null;
+  icon: string | null;
+}
+
+/** The tag a LOADED host shows, given the loaded groups. */
+export const hostTag = (host: LiveHostLike, index: AppearanceIndex): HostTag => ({
+  color: effectiveHostColor(host, index),
+  icon: host.icon ?? null,
+});
+
 /** The colour tag and icon id of the host behind an OPEN pane. A pane keeps the
  *  profile it was opened with, so recolouring a host — the moment someone
  *  notices the production tab looks like staging — must reach tabs already open.
  *  Matched by the immutable `uid`, not `profileId`: a pane may come from another
  *  vault, where the same id (an ssh-config alias) can name a different host, and
- *  that host's groups are not the ones loaded here. Unmatched → only the pane's
- *  own snapshot. The icon id is raw; the caller decides whether it can draw it. */
+ *  that host's groups are not the ones loaded here. Unmatched → the tag last
+ *  seen for that uid while it was loaded (`remembered`), so a production tab
+ *  does not lose the red it inherited from its folder when another vault is
+ *  opened; never seen → only the pane's own snapshot. The icon id is raw; the
+ *  caller decides whether it can draw it. */
 export function liveHost(
   profile: LiveHostLike,
   hosts: readonly LiveHostLike[],
   index: AppearanceIndex,
-): { color: TagColor | null; icon: string | null } {
+  remembered?: ReadonlyMap<string, HostTag>,
+): HostTag {
   const live = profile.uid ? hosts.find((h) => h.uid === profile.uid) : undefined;
-  return live
-    ? { color: effectiveHostColor(live, index), icon: live.icon ?? null }
-    : { color: effectiveHostColor(profile, NO_GROUPS), icon: profile.icon ?? null };
+  if (live) return hostTag(live, index);
+  return (profile.uid ? remembered?.get(profile.uid) : undefined) ?? hostTag(profile, NO_GROUPS);
 }
