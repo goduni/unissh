@@ -133,11 +133,14 @@ release version:
     python3 scripts/bump-version.py {{version}}
     cargo update -w --quiet
     (cd client/src-tauri && cargo update -w --quiet)
+    # crypto-wasm is its own Cargo root and only path-depends on unissh-crypto, so
+    # `-w` would not touch it; name the package so its lock entry follows the bump.
+    (cd server-ui/crypto-wasm && cargo update -p unissh-crypto --quiet)
     python3 scripts/bump-version.py --check {{version}}
     git add Cargo.toml Cargo.lock \
             client/package.json client/src-tauri/Cargo.toml \
             client/src-tauri/Cargo.lock client/src-tauri/tauri.conf.json \
-            server-ui/package.json
+            server-ui/package.json server-ui/crypto-wasm/Cargo.lock
     git commit -m "chore(release): v{{version}}"
     git tag -a "v{{version}}" -m "v{{version}}"
     echo

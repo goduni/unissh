@@ -114,7 +114,9 @@ jobs:
       # wasm users actually load is still built, from source and in release mode,
       # by the image pipeline.
       - name: Build crypto-wasm (throwaway — only to satisfy the type resolver)
-        run: wasm-pack build --target web --out-dir pkg --dev
+        # `--locked`: without it cargo silently rewrites a stale Cargo.lock and the
+        # build passes here while every locked build elsewhere fails.
+        run: wasm-pack build --target web --out-dir pkg --dev -- --locked
         working-directory: server-ui/crypto-wasm
 
       - run: npm run typecheck

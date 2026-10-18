@@ -15,6 +15,10 @@ This script is therefore both the writer and the verifier:
     bump-version.py 0.1.2           rewrite all five
     bump-version.py --check 0.1.2   fail unless all five already say 0.1.2
 
+--check also reads the unissh-crypto entry in server-ui/crypto-wasm/Cargo.lock. That
+crate inherits the workspace version, and crypto-wasm is a separate Cargo root whose
+lock nothing else refreshes; a stale entry breaks every `--locked` build there.
+
 `just release` calls the first, and .github/workflows/client.yml calls the second on
 every tagged build, so a tag pushed by hand cannot ship mislabeled binaries.
 """
@@ -45,6 +49,12 @@ JSON_TARGETS: list[Path] = [
 ]
 
 JSON_VERSION = re.compile(r'^  "version"(\s*):(\s*)"([^"]+)"', re.M)
+
+# Lockfiles of separate Cargo roots that path-depend on a workspace crate, with the
+# crate whose recorded version must follow the bump. `just release` refreshes them.
+LOCK_TARGETS: list[tuple[Path, str]] = [
+    (ROOT / "server-ui/crypto-wasm/Cargo.lock", "unissh-crypto"),
+]
 
 
 def read_toml(path: Path, section: str) -> str:
@@ -100,21 +110,35 @@ def write_json(path: Path, version: str) -> str:
     return old
 
 
+def read_lock(path: Path, package: str) -> str:
+    m = re.search(
+        rf'^name = "{re.escape(package)}"\nversion = "([^"]+)"', path.read_text(), re.M
+    )
+    if not m:
+        raise SystemExit(f"{path}: no [[package]] entry for {package}")
+    return m.group(1)
+
+
 def current() -> list[tuple[Path, str]]:
     found = [(p, read_toml(p, s)) for p, s in TOML_TARGETS]
     found += [(p, read_json(p)) for p in JSON_TARGETS]
     return found
 
 
+def current_locks() -> list[tuple[Path, str]]:
+    return [(p, read_lock(p, pkg)) for p, pkg in LOCK_TARGETS]
+
+
 def cmd_check(version: str) -> int:
     found = current()
-    bad = [(p, v) for p, v in found if v != version]
+    locks = current_locks()
+    bad = [(p, v) for p, v in found + locks if v != version]
     for path, value in bad:
         print(f"::error::{path.relative_to(ROOT)} says {value}, expected {version}")
     if bad:
-        print(f"\n{len(bad)} manifest(s) disagree with {version} — run 'just release {version}'")
+        print(f"\n{len(bad)} file(s) disagree with {version} — run 'just release {version}'")
         return 1
-    print(f"all {len(found)} manifests agree: {version}")
+    print(f"all {len(found)} manifests and {len(locks)} lockfile(s) agree: {version}")
     return 0
 
 
