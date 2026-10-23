@@ -70,17 +70,20 @@ impl Ended {
             .wait_while(state, |e| e.status.is_none() && !e.hung_up)
             .unwrap_or_else(PoisonError::into_inner);
         (
-            state.status.unwrap_or(i32::from(EXIT_CONNECT)),
+            state.status.unwrap_or_else(|| i32::from(EXIT_CONNECT)),
             state.hung_up,
         )
     }
 
     /// After a hang-up: gives the close up to `timeout` to come through.
     fn wait_closed(&self, timeout: Duration) {
-        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        let state = self
+        let (state, _) = self
             .changed
-            .wait_timeout_while(state, timeout, |e| e.status.is_none())
+            .wait_timeout_while(
+                self.state.lock().unwrap_or_else(PoisonError::into_inner),
+                timeout,
+                |e| e.status.is_none(),
+            )
             .unwrap_or_else(PoisonError::into_inner);
         drop(state);
     }
