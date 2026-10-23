@@ -58,6 +58,13 @@ ignore = [
     "RUSTSEC-2026-0371", # zbus_names
     "RUSTSEC-2026-0372", # zvariant_derive
 
+    # --- basic-toml, unmaintained (RUSTSEC-2026-0374) ----------------------------
+    # No successor release. Reached only through askama_derive, the template proc
+    # macro of uniffi_bindgen (uniffi's `cli` feature on the core FFI crate), which
+    # reads askama's own config at compile time. Never in the app's runtime path,
+    # never parsing untrusted input. Same entry as the root deny.toml.
+    "RUSTSEC-2026-0374",
+
     # --- quick-xml DoS advisories (fix is out of the pinned semver range) --------
     # RUSTSEC-2026-0194/0195: quadratic / unbounded-allocation DoS parsing crafted
     # XML. Fix is quick-xml >= 0.41, but the desktop toolkit (muda/wry menu + resource
