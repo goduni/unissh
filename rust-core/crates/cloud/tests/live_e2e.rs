@@ -10,6 +10,13 @@
 //! one-link invite → a distinct account joins → owner grants it into the vault →
 //! sync push/pull → a second (sibling) device reads the shared secret. Plus the
 //! device-to-device PAKE onboarding path (Path B) and keyless escrow recovery (Path A).
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stderr,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 use std::io::Write;
 use std::net::TcpListener;
