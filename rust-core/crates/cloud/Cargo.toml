@@ -24,10 +24,9 @@ serde_json = "1"
 thiserror = "2"
 log = "0.4"
 
-[dev-dependencies]
-tempfile = "3"
-# The live end-to-end tests mint pairing codes the way the app does.
-uuid = { version = "1", features = ["v4"] }
+# No [dev-dependencies], on purpose: the desktop workspace, where this crate is
+# a path dependency rather than a member, can only test a crate without them —
+# and its CI runs the recovery tests on every desktop OS.
 
 [lints]
 workspace = true
