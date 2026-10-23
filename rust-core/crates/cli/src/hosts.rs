@@ -336,7 +336,9 @@ mod tests {
     #[test]
     fn find_refuses_an_ambiguous_name_and_lists_the_candidates() {
         let hosts = [host("team", "db", "a"), host("lab", "db", "b")];
-        let err = find(&hosts, "db").expect_err("ambiguous");
+        let Err(err) = find(&hosts, "db") else {
+            panic!("an ambiguous name must not pick a host");
+        };
         assert!(
             err.message.contains("team/db") && err.message.contains("lab/db"),
             "{err}"

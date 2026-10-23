@@ -34,7 +34,7 @@ impl Failure {
     }
 
     /// The same failure, reported as a connection failure (exit 255).
-    pub const fn connecting(self) -> Self {
+    pub fn connecting(self) -> Self {
         Self {
             exit: EXIT_CONNECT,
             ..self
