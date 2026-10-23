@@ -27,11 +27,13 @@ Pick one of three ways, depending on which account the machine should be.
 server. Create an invite in the app or the admin panel, then run:
 
 ```bash
-unissh login join https://unissh.example.com '<invite token or join link>'
+unissh login join https://unissh.example.com
 ```
 
-This creates a new account on the machine, shows its Emergency Kit once, and
-joins the server. The account can open only the vaults a vault admin grants it,
+It asks for the invite (the token or the join link) on the terminal rather
+than taking it as an argument, where any user of the machine could read it
+before it is redeemed. Then it creates a new account on the machine, shows its
+Emergency Kit once, and joins the server. The account can open only the vaults a vault admin grants it,
 so the machine never holds more than it needs. Run `unissh sync` after the grant
 to pull them.
 
@@ -56,10 +58,10 @@ unissh login escrow https://unissh.example.com <handle>
 Pairing and escrow both put your **whole** account on that machine. Use them on
 machines you trust as much as your laptop.
 
-Each way asks for a master password for this machine's copy, and keeps the Secret
-Key in an owner-only file so that unlocking needs only that password, as the app
-keeps it in the OS keychain. `--no-remember` asks for the Secret Key at every
-unlock instead.
+Pairing and joining ask for a master password for this machine's copy; escrow
+keeps the account password. Each keeps the Secret Key in an owner-only file so
+that unlocking needs only that password, as the app keeps it in the OS keychain.
+`--no-remember` asks for the Secret Key at every unlock instead.
 
 ## Connect
 

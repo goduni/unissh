@@ -359,7 +359,7 @@ This is a single monorepo. The four primary components share one `rust-core` fou
 
 | Path           | What it is                          | Stack                                                              |
 | -------------- | ----------------------------------- | ----------------------------------------------------------------- |
-| `rust-core/`   | Shared SSH + crypto + vault core    | Rust (12 crates), UniFFI, SQLCipher, `russh`, desktop MCP         |
+| `rust-core/`   | Shared SSH + crypto + vault core    | Rust (13 crates), UniFFI, SQLCipher, `russh`, desktop MCP         |
 | `client/`      | Cross-platform GUI client           | **Tauri v2** + **React 18** + TypeScript + xterm.js               |
 | `server/`      | Self-hosted zero-knowledge server   | Rust, axum 0.8, sqlx (SQLite/Postgres), rustls (TLS 1.3)          |
 | `server-ui/`   | Self-hosted admin web panel         | React 18 + Vite SPA + real `rust-core` crypto compiled to **wasm**|

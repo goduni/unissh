@@ -4608,6 +4608,63 @@ fn session_recording_captures_and_persists() {
     assert!(core.list_recordings("v".to_owned()).unwrap().is_empty());
 }
 
+/// A process that exits right after a session — the CLI — has to wait for the
+/// recording, which is written on a thread of its own: once the observer has
+/// heard of the close, `wait_for_recordings` returns only after the write.
+#[test]
+fn wait_for_recordings_outlasts_the_detached_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
+    let pubkey = core
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
+        .unwrap();
+    let sshd = TestSshd::start(&pubkey);
+
+    let observer = std::sync::Arc::new(CollectObserver {
+        buf: std::sync::Mutex::new(Vec::new()),
+        closed: std::sync::atomic::AtomicBool::new(false),
+    });
+    let session = core
+        .open_session(
+            "127.0.0.1".to_owned(),
+            sshd.port,
+            "root".to_owned(),
+            agent_auth("v", "key"),
+            vec![],
+            None,
+            "xterm".to_owned(),
+            80,
+            24,
+            observer.clone(),
+            Some(unissh_ffi::RecordingRequest {
+                vault_id: "v".to_owned(),
+                recording_id: "rec-wait".to_owned(),
+                label: "test host".to_owned(),
+            }),
+            false,
+            unissh_ffi::PasswordFillMode::Off,
+        )
+        .unwrap();
+    session.write(b"exit\n".to_vec()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !observer.closed.load(std::sync::atomic::Ordering::SeqCst) {
+        assert!(Instant::now() <= deadline, "the shell never exited");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    assert!(
+        core.wait_for_recordings(5_000),
+        "the write finished in time"
+    );
+    assert_eq!(
+        core.list_recordings("v".to_owned()).unwrap().len(),
+        1,
+        "the recording is in the vault the moment the wait returns"
+    );
+}
+
 /// Closing the TAB, not the shell: the handle is closed and dropped at once.
 ///
 /// This is what the desktop app does — `session_close` takes the session out of

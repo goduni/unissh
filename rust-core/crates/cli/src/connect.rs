@@ -5,12 +5,13 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use unissh_ffi::{
     AuthMethod, Core, ExecHandleFfi, ExecObserver, FillEvent, PasswordFillMode, RecordingRequest,
     SessionObserver, SftpFfi, SftpProgressObserver, SshSession,
 };
+use zeroize::Zeroize;
 
 use crate::device::ask_secret;
 use crate::escape::{Escape, Escapes, HELP};
@@ -18,38 +19,70 @@ use crate::failure::{best_effort, Failure, Res, EXIT_CONNECT};
 use crate::hosts::{Host, Target};
 use crate::tty::{self, RawMode, INPUT_TICK};
 
-/// The status a session or command ended with, handed over from the core's
-/// thread to the one waiting for it.
+/// How a session or command ended, handed over from the core's thread (the
+/// remote's status) or the key reader (a hang-up) to the one waiting.
 struct Ended {
-    status: Mutex<Option<i32>>,
+    state: Mutex<Ending>,
     changed: Condvar,
 }
 
+#[derive(Default)]
+struct Ending {
+    status: Option<i32>,
+    hung_up: bool,
+}
+
 impl Ended {
-    const fn new() -> Self {
+    fn new() -> Self {
         Self {
-            status: Mutex::new(None),
+            state: Mutex::default(),
             changed: Condvar::new(),
         }
     }
 
-    /// Records the status; the first one recorded wins.
-    fn set(&self, status: i32) {
-        let mut slot = self.status.lock().unwrap_or_else(PoisonError::into_inner);
-        if slot.is_none() {
-            *slot = Some(status);
-            self.changed.notify_all();
-        }
+    fn update(&self, change: impl FnOnce(&mut Ending)) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        change(&mut state);
+        drop(state);
+        self.changed.notify_all();
     }
 
-    /// Waits for the status.
-    fn wait(&self) -> i32 {
-        let slot = self.status.lock().unwrap_or_else(PoisonError::into_inner);
-        let slot = self
+    /// The remote's exit status arrived; the first one counts.
+    fn closed(&self, status: i32) {
+        self.update(|e| {
+            if e.status.is_none() {
+                e.status = Some(status);
+            }
+        });
+    }
+
+    /// We are leaving (`~.`, or nobody can type any more).
+    fn hang_up(&self) {
+        self.update(|e| e.hung_up = true);
+    }
+
+    /// Waits for the end. `(status, hung_up)`: the remote's status, or 255
+    /// when we hung up before it gave one.
+    fn wait(&self) -> (i32, bool) {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let state = self
             .changed
-            .wait_while(slot, |s| s.is_none())
+            .wait_while(state, |e| e.status.is_none() && !e.hung_up)
             .unwrap_or_else(PoisonError::into_inner);
-        slot.unwrap_or(-1)
+        (
+            state.status.unwrap_or(i32::from(EXIT_CONNECT)),
+            state.hung_up,
+        )
+    }
+
+    /// After a hang-up: gives the close up to `timeout` to come through.
+    fn wait_closed(&self, timeout: Duration) {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let state = self
+            .changed
+            .wait_timeout_while(state, timeout, |e| e.status.is_none())
+            .unwrap_or_else(PoisonError::into_inner);
+        drop(state);
     }
 }
 
@@ -61,7 +94,11 @@ pub fn exit_code(status: i32) -> u8 {
 /// Asks for the password a host wants typed at every connection.
 fn fill_password(target: &mut Target) -> Res<()> {
     if target.ask_password {
-        let prompt = format!("Password for {}@{}: ", target.user, target.host);
+        let prompt = format!(
+            "Password for {}@{}: ",
+            tty::one_line(&target.user),
+            tty::one_line(&target.host)
+        );
         let mut password = ask_secret(
             &prompt,
             "the password",
@@ -72,6 +109,13 @@ fn fill_password(target: &mut Target) -> Res<()> {
         };
     }
     Ok(())
+}
+
+/// Forgets a typed password once the connection no longer needs it.
+fn forget_password(target: &mut Target) {
+    if let AuthMethod::Password { password } = &mut target.auth {
+        password.zeroize();
+    }
 }
 
 /// Whether this machine has pinned a key for `host:port` already.
@@ -96,7 +140,8 @@ fn announce_pinned(core: &Core, host: &str, port: u16) {
         .find(|k| k.port == port && k.host.eq_ignore_ascii_case(host))
     {
         eprintln!(
-            "unissh: first connection to {host}:{port}; pinned its key {} on this machine",
+            "unissh: first connection to {}:{port}; pinned its key {} on this machine",
+            tty::one_line(host),
             k.fingerprint
         );
     }
@@ -138,7 +183,7 @@ impl SessionObserver for Screen {
     }
 
     fn on_close(&self, exit_status: i32) {
-        self.ended.set(exit_status);
+        self.ended.closed(exit_status);
     }
 
     // Saved-password fill is off for CLI sessions: nothing is ever offered.
@@ -151,6 +196,11 @@ impl SessionObserver for Screen {
 /// forwarding is not offered here, because approving each signature needs a
 /// prompt the raw terminal cannot show.
 pub fn shell(core: &Core, host: &Host, mut target: Target) -> Res<i32> {
+    if !tty::SUPPORTED {
+        return Err(Failure::msg(
+            "an interactive session needs a Unix terminal here; give a command to run instead",
+        ));
+    }
     if !io::stdin().is_terminal() {
         return Err(Failure::msg(
             "stdin is not a terminal: give a command to run (`unissh ssh <host> -- <command>`)",
@@ -161,7 +211,8 @@ pub fn shell(core: &Core, host: &Host, mut target: Target) -> Res<i32> {
     }
     fill_password(&mut target)?;
     let size = tty::window_size().unwrap_or((80, 24));
-    let recording = host.profile.record_sessions.then(|| RecordingRequest {
+    let recorded = host.profile.record_sessions;
+    let recording = recorded.then(|| RecordingRequest {
         vault_id: host.vault_id.clone(),
         recording_id: format!("rec-{}-{}", host.profile.profile_id, now_millis()),
         label: host.profile.label.clone(),
@@ -187,6 +238,7 @@ pub fn shell(core: &Core, host: &Host, mut target: Target) -> Res<i32> {
             PasswordFillMode::Off,
         )?)
     })?;
+    forget_password(&mut target);
 
     let raw = RawMode::enter()?;
     let stop = Arc::new(AtomicBool::new(false));
@@ -196,13 +248,30 @@ pub fn shell(core: &Core, host: &Host, mut target: Target) -> Res<i32> {
         let ended = Arc::clone(&ended);
         thread::spawn(move || pump_keys(&session, &stop, &ended, size))
     };
-    let status = ended.wait();
+    let (status, hung_up) = ended.wait();
     stop.store(true, Ordering::SeqCst);
     best_effort(input.join());
     drop(raw);
-    eprintln!("Connection to {} closed.", target.host);
+    if hung_up {
+        // `~.` is the way out of a remote that stopped answering, so the close
+        // runs on a thread of its own and gets a few seconds to come through —
+        // the recording, if any, is written when it does.
+        let closing = Arc::clone(&session);
+        thread::spawn(move || best_effort(closing.close()));
+        ended.wait_closed(CLOSE_GRACE);
+    }
+    if recorded && !core.wait_for_recordings(RECORDING_GRACE_MS) {
+        eprintln!("unissh: the session recording is still being written and may be lost");
+    }
+    eprintln!("Connection to {} closed.", tty::one_line(&target.host));
     Ok(status)
 }
+
+/// How long a hang-up waits for the remote to confirm the close.
+const CLOSE_GRACE: Duration = Duration::from_secs(3);
+
+/// How long the end of a recorded session waits for the recording's write.
+const RECORDING_GRACE_MS: u32 = 15_000;
 
 /// Sends keys to the session until it ends, following window resizes and
 /// acting on `~` escapes.
@@ -250,10 +319,7 @@ fn pump_keys(session: &SshSession, stop: &AtomicBool, ended: &Ended, mut size: (
         }
     }
     if hang_up {
-        best_effort(session.close());
-        // Not waiting for the remote to confirm: `~.` is the way out of a
-        // remote that stopped answering.
-        ended.set(i32::from(EXIT_CONNECT));
+        ended.hang_up();
     }
 }
 
@@ -274,7 +340,7 @@ impl ExecObserver for Streams {
     }
 
     fn on_exit(&self, exit_status: i32) {
-        self.ended.set(exit_status);
+        self.ended.closed(exit_status);
     }
 }
 
@@ -298,6 +364,7 @@ pub fn run(core: &Core, mut target: Target, command: String, no_stdin: bool) -> 
             observer,
         )?)
     })?;
+    forget_password(&mut target);
     if no_stdin {
         handle.close_stdin()?;
     } else {
@@ -306,7 +373,7 @@ pub fn run(core: &Core, mut target: Target, command: String, no_stdin: bool) -> 
         // the process exits around it.
         thread::spawn(move || pump_stdin(&handle));
     }
-    let status = ended.wait();
+    let (status, _) = ended.wait();
     best_effort(handle.close());
     Ok(status)
 }
@@ -389,6 +456,7 @@ pub fn copy(core: &Core, mut target: Target, direction: Direction, force: bool) 
             1,
         )?)
     })?;
+    forget_password(&mut target);
     let done = transfer(&sftp, direction, force);
     sftp.close();
     done

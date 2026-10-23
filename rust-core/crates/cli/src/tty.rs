@@ -10,7 +10,21 @@ use std::time::Duration;
 
 use zeroize::Zeroizing;
 
-pub use imp::{read_stdin, wait_for_input, window_size, RawMode, Tty};
+pub use imp::{read_stdin, wait_for_input, window_size, RawMode, Tty, SUPPORTED};
+
+/// `text` without control characters, for one line that came from a server,
+/// a vault or a remote host: printed raw, an escape sequence in it could move
+/// the cursor, rewrite what is on screen or fake a prompt.
+pub fn one_line(text: &str) -> String {
+    text.chars().filter(|c| !c.is_control()).collect()
+}
+
+/// [`one_line`] for text that may span lines: line breaks stay.
+pub fn lines(text: &str) -> String {
+    text.chars()
+        .filter(|c| *c == '\n' || !c.is_control())
+        .collect()
+}
 
 /// Whether a typed answer means yes.
 fn is_yes(answer: &str) -> bool {
@@ -63,7 +77,7 @@ mod imp {
     use std::fs::{File, OpenOptions};
     use std::io::{self, Read, Write};
     use std::os::fd::{AsFd, BorrowedFd};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use rustix::event::{poll, PollFd, PollFlags, Timespec};
     use rustix::io::Errno;
@@ -73,6 +87,9 @@ mod imp {
 
     use crate::failure::best_effort;
     use zeroize::Zeroizing;
+
+    /// Whether this platform has the terminal an interactive session needs.
+    pub const SUPPORTED: bool = true;
 
     /// The controlling terminal.
     pub struct Tty {
@@ -186,20 +203,28 @@ mod imp {
             .then_some((u32::from(size.ws_col), u32::from(size.ws_row)))
     }
 
-    /// Waits up to `timeout` for stdin to become readable. A signal arriving
-    /// meanwhile (a window resize) counts as "nothing yet".
+    /// Waits up to `timeout` for stdin to become readable.
     pub fn wait_for_input(timeout: Duration) -> io::Result<bool> {
         ready(io::stdin().as_fd(), timeout)
     }
 
+    /// Waits up to `timeout` for `fd` to become readable. A signal arriving
+    /// meanwhile does not end the wait early: it goes on for the time left.
     fn ready(fd: BorrowedFd<'_>, timeout: Duration) -> io::Result<bool> {
-        let mut fds = [PollFd::new(&fd, PollFlags::IN)];
-        let timeout = Timespec::try_from(timeout)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-        match poll(&mut fds, Some(&timeout)) {
-            Ok(ready) => Ok(ready > 0),
-            Err(e) if e == Errno::INTR => Ok(false),
-            Err(e) => Err(e.into()),
+        let start = Instant::now();
+        loop {
+            let left = timeout.saturating_sub(start.elapsed());
+            if left.is_zero() {
+                return Ok(false);
+            }
+            let left = Timespec::try_from(left)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+            let mut fds = [PollFd::new(&fd, PollFlags::IN)];
+            match poll(&mut fds, Some(&left)) {
+                Ok(ready) => return Ok(ready > 0),
+                Err(e) if e == Errno::INTR => {}
+                Err(e) => return Err(e.into()),
+            }
         }
     }
 
@@ -229,8 +254,11 @@ mod imp {
         )
     }
 
-    /// The controlling terminal (unsupported on this platform).
-    pub struct Tty;
+    /// Whether this platform has the terminal an interactive session needs.
+    pub const SUPPORTED: bool = false;
+
+    /// The controlling terminal: none here, so no value of this type exists.
+    pub enum Tty {}
 
     impl Tty {
         /// Always fails here.
@@ -238,23 +266,23 @@ mod imp {
             Err(unsupported())
         }
 
-        /// Never reached: there is no `Tty` to call it on.
+        /// Never called: there is no `Tty` to call it on.
         pub fn say(&mut self, _text: &str) -> io::Result<()> {
-            Err(unsupported())
+            match *self {}
         }
 
-        /// Never reached: there is no `Tty` to call it on.
+        /// Never called: there is no `Tty` to call it on.
         pub fn wait(&self, _timeout: Duration) -> io::Result<bool> {
-            Err(unsupported())
+            match *self {}
         }
 
         pub(super) fn read_line(&self, _quiet: bool) -> io::Result<Zeroizing<Vec<u8>>> {
-            Err(unsupported())
+            match *self {}
         }
     }
 
-    /// Raw mode (unsupported on this platform).
-    pub struct RawMode;
+    /// Raw mode: none here, so no value of this type exists.
+    pub enum RawMode {}
 
     impl RawMode {
         /// Always fails here.
@@ -285,7 +313,16 @@ pub const INPUT_TICK: Duration = Duration::from_millis(100);
 
 #[cfg(test)]
 mod tests {
-    use super::is_yes;
+    use super::{is_yes, lines, one_line};
+
+    /// What a hostile server or host name could try: clear the screen, move
+    /// the cursor (also via the 8-bit CSI), ring the bell, add a fake line.
+    #[test]
+    fn untrusted_text_loses_its_control_characters() {
+        let hostile = "web\x1b[2J\x1b[1;1H\u{9b}31m\x07\nMaster password: ";
+        assert_eq!(one_line(hostile), "web[2J[1;1H31mMaster password: ");
+        assert_eq!(lines(hostile), "web[2J[1;1H31m\nMaster password: ");
+    }
 
     #[test]
     fn only_y_or_yes_confirms() {

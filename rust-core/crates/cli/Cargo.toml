@@ -28,10 +28,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 zeroize = "1"
 
-# Raw terminal mode, window size and polling the terminal — through safe
-# wrappers, since the workspace denies `unsafe`. Already in the tree (tempfile).
+# Raw terminal mode, window size, polling the terminal and the user id — through
+# safe wrappers, since the workspace denies `unsafe`. Already in the tree (tempfile).
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1", features = ["termios", "event"] }
+rustix = { version = "1", features = ["termios", "event", "process"] }
 
 [dev-dependencies]
 tempfile = "3"

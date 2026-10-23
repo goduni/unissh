@@ -10,7 +10,7 @@
 //! - `sync.lock` — held while syncing, so two commands never sync at once.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{ErrorKind, Read, Write};
+use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -39,9 +39,19 @@ pub enum Origin {
     Joined,
 }
 
+/// Layout version of `link.json`. A newer one is refused rather than misread.
+pub const LINK_FORMAT: u32 = 1;
+
+const fn link_format() -> u32 {
+    LINK_FORMAT
+}
+
 /// The server and account this device belongs to. Nothing in it is secret.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Link {
+    /// Layout version ([`LINK_FORMAT`]).
+    #[serde(default = "link_format")]
+    pub format: u32,
     /// Server base URL.
     pub base_url: String,
     /// Opaque server-instance id (base64).
@@ -109,6 +119,26 @@ impl Home {
         Ok(())
     }
 
+    /// Refuses a directory that is not the user's alone: whoever can write to
+    /// it can swap `link.json` and choose which server this device talks to.
+    /// Like `ssh` with `~/.ssh`, an existing directory is checked, not fixed.
+    pub fn check_private(&self) -> Res<()> {
+        let meta = match fs::metadata(&self.dir) {
+            Ok(meta) => meta,
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e.into()),
+        };
+        if owned_privately(&meta) {
+            Ok(())
+        } else {
+            Err(Failure::msg(format!(
+                "{} must belong to you and be writable by you alone (`chmod 700 {}`)",
+                self.dir.display(),
+                self.dir.display()
+            )))
+        }
+    }
+
     /// The server link, if this machine is signed in.
     pub fn link(&self) -> Res<Option<Link>> {
         let bytes = match fs::read(self.dir.join(LINK)) {
@@ -116,9 +146,16 @@ impl Home {
             Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e.into()),
         };
-        serde_json::from_slice(&bytes)
-            .map(Some)
-            .map_err(|e| Failure::msg(format!("{} is damaged: {e}", self.dir.join(LINK).display())))
+        let link: Link = serde_json::from_slice(&bytes).map_err(|e| {
+            Failure::msg(format!("{} is damaged: {e}", self.dir.join(LINK).display()))
+        })?;
+        if link.format > LINK_FORMAT {
+            return Err(Failure::msg(format!(
+                "{} was written by a newer unissh; update this one",
+                self.dir.join(LINK).display()
+            )));
+        }
+        Ok(Some(link))
     }
 
     /// Records the server link.
@@ -224,9 +261,20 @@ pub fn read_private(path: &Path) -> Res<Option<Zeroizing<String>>> {
             )));
         }
     }
-    let mut text = Zeroizing::new(String::new());
-    file.read_to_string(&mut text)?;
-    Ok(Some(text))
+    Ok(Some(Zeroizing::new(io::read_to_string(&mut file)?)))
+}
+
+/// Owned by this user, and writable by nobody else.
+#[cfg(unix)]
+fn owned_privately(meta: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    meta.uid() == rustix::process::getuid().as_raw() && meta.mode() & 0o022 == 0
+}
+
+/// Not checked here: the per-user profile directories are already private.
+#[cfg(not(unix))]
+const fn owned_privately(_meta: &fs::Metadata) -> bool {
+    true
 }
 
 /// An environment variable holding an absolute path; empty or relative is unset

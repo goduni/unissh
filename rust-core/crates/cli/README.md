@@ -16,9 +16,9 @@ only.
 There are three ways, and each creates this machine's instance:
 
 ```bash
-unissh login pair                                   # the same account as a signed-in app
-unissh login escrow https://unissh.example.com alice # the same account, by password + Secret Key
-unissh login join   https://unissh.example.com <invite or join link>   # a separate account
+unissh login pair                                     # the same account as a signed-in app
+unissh login escrow https://unissh.example.com alice  # the same account, by password + Secret Key
+unissh login join   https://unissh.example.com        # a separate account (asks for the invite)
 ```
 
 - **pair**: in a signed-in app, open Settings → Server → Add device, then paste the
@@ -28,15 +28,18 @@ unissh login join   https://unissh.example.com <invite or join link>   # a separ
 - **escrow**: asks for the account password and Secret Key, then fetches the
   escrowed keyset. Escrow sign-in has to be on for the account. The machine
   enrolls as its own device, labelled `CLI · <OS>`.
-- **join**: creates a new account here, prints its Emergency Kit once, and redeems
-  the invite. **This is the right choice for a shared or production server.** The
+- **join**: asks for the invite (the token or the join link; never an argument,
+  where every user of the machine could read it), creates a new account here,
+  prints its Emergency Kit once, and redeems the invite. **This is the right choice for a shared or production server.** The
   machine then holds only the vaults a vault admin grants that account, not
   everything your own account can open.
 
 By default the Secret Key is kept in an owner-only file, so an unlock needs only
 the master password; this matches the app keeping it in the OS keychain. Use
-`--no-remember` to be asked for it on every unlock. `--no-password` leaves this
-machine's copy without a master password, so the Secret Key file alone unlocks it.
+`--no-remember` to be asked for it on every unlock. For pair and join,
+`--no-password` leaves this machine's copy without a master password, so the
+Secret Key file alone unlocks it; an escrow sign-in always keeps the account
+password.
 
 ## Using it
 

@@ -104,6 +104,24 @@ jobs:
       # real loopback sockets, native digest persistence, guards and SDK logging.
       - run: cargo test -p unissh-mcp
 
+  cli-platform:
+    name: CLI (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    env:
+      # The vendored OpenSSL (SQLCipher on Windows) in portable C: this job
+      # lints, it ships nothing, and NASM is one more thing to install.
+      OPENSSL_RUST_USE_NASM: 0
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+      # `lint` covers Linux; these hosts compile the halves of the CLI it never
+      # sees — macOS termios, and the Windows stand-ins for the terminal.
+      - run: cargo clippy -p unissh-cli --all-targets -- -D warnings
+
   deny:
     name: cargo-deny (supply chain)
     runs-on: ubuntu-latest

@@ -401,6 +401,14 @@ sends the outer host's password to whatever is asking, and that is documented,
 not a bug. Nor does it defend against a compromised webview, which already has
 the ungated password-reveal call. The invariant and its limits are in
 [`THREAT_MODEL.md`](THREAT_MODEL.md#saved-password-at-interactive-prompts).
+So does the **command-line client** (`rust-core/crates/cli`): a secret (master
+password, Secret Key, invite, typed host password) taken from argv or the
+environment, written anywhere but the owner-only files it documents, or printed
+to stdout; a kept Secret Key or password file used while others can read it; a
+session token at rest; or server-, vault- or host-supplied text reaching the
+terminal with its control characters. That whoever controls the machine it runs
+on can read an unlocked process is the documented boundary, in
+[`THREAT_MODEL.md`](THREAT_MODEL.md#the-command-line-client-a-device-wherever-it-runs).
 
 Out of scope: the unsigned-build OS warnings above, and the documented
 **server-trusted** (not cryptographic) limitations — revocation/live-grant expiry,

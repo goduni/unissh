@@ -81,11 +81,6 @@ impl Storage {
         conn.query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(()))
             .map_err(map_cipher_error)?;
 
-        // Another process may have the same instance open (two CLI commands at
-        // once): wait for its write to finish instead of failing at once with
-        // "database is locked". Connection-local; changes nothing on disk.
-        conn.busy_timeout(std::time::Duration::from_secs(5))?;
-
         // NB: the schema does NOT declare any FOREIGN KEY (sync semantics: an
         // item may arrive before its vault), so this PRAGMA is effectively a
         // no-op right now. We keep it enabled for the future (should FKs

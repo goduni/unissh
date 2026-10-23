@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use unissh_ffi::{AuthMethod, ConnectionProfile, Core, JumpHost, ProfileAuth, ProxyConfig};
 
 use crate::failure::{Failure, Res};
+use crate::tty::one_line;
 
 /// A host and the vault it lives in.
 pub struct Host {
@@ -59,7 +60,7 @@ pub fn load(core: &Core) -> Res<Vec<Host>> {
                 vault_name: vault.name.clone(),
                 profile,
             })),
-            Err(e) => eprintln!("unissh: skipping vault \"{}\": {e}", vault.name),
+            Err(e) => eprintln!("unissh: skipping vault \"{}\": {e}", one_line(&vault.name)),
         }
     }
     hosts.sort_by_cached_key(|h| (h.vault_name.to_lowercase(), h.profile.label.to_lowercase()));
@@ -111,9 +112,9 @@ fn ambiguous(query: &str, many: &[&Host]) -> String {
         let _ = write!(
             text,
             "\n  {}/{}  {}",
-            h.vault_name,
-            h.profile.label,
-            h.target_text()
+            one_line(&h.vault_name),
+            one_line(&h.profile.label),
+            one_line(&h.target_text())
         );
     }
     text
@@ -133,10 +134,10 @@ pub fn table(hosts: &[&Host], numbered: bool) -> String {
         let _ = writeln!(
             text,
             "{:<label_w$}  {:<target_w$}  {:<vault_w$}  {}",
-            h.profile.label,
-            h.target_text(),
-            h.vault_name,
-            h.profile.tags.join(",")
+            one_line(&h.profile.label),
+            one_line(&h.target_text()),
+            one_line(&h.vault_name),
+            one_line(&h.profile.tags.join(","))
         );
     }
     text

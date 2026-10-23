@@ -1629,6 +1629,50 @@ pub struct Core {
     /// Where this process's own system agent listens, if the host runs one.
     /// "System agent" auth refuses it rather than ask itself for a vault key.
     own_system_agent: OwnSystemAgent,
+    /// Session recordings still being written on a thread of their own
+    /// ([`Core::wait_for_recordings`]).
+    recordings: Arc<InFlight>,
+}
+
+/// Background writes that a process about to exit has to wait for: a
+/// session's recording is written on a thread of its own once the session
+/// ends (see `RecordingSink::on_close`), and exiting first loses it.
+#[derive(Default)]
+struct InFlight {
+    count: Mutex<u32>,
+    idle: Condvar,
+}
+
+impl InFlight {
+    /// Counts one write in until the returned guard is dropped.
+    fn begin(self: &Arc<Self>) -> InFlightGuard {
+        let mut count = lock_recover(&self.count);
+        *count = count.saturating_add(1);
+        drop(count);
+        InFlightGuard(Arc::clone(self))
+    }
+
+    /// Waits up to `timeout` for every write to finish; `false` on timeout.
+    fn wait_idle(&self, timeout: std::time::Duration) -> bool {
+        let count = lock_recover(&self.count);
+        let (count, waited) = self
+            .idle
+            .wait_timeout_while(count, timeout, |n| *n > 0)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        drop(count);
+        !waited.timed_out()
+    }
+}
+
+struct InFlightGuard(Arc<InFlight>);
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        let mut count = lock_recover(&self.0.count);
+        *count = count.saturating_sub(1);
+        drop(count);
+        self.0.idle.notify_all();
+    }
 }
 
 /// See [`Core::set_system_agent_endpoint`]. Shared by Arc like the approver, so
@@ -1678,6 +1722,7 @@ impl Core {
             prompter: Arc::new(Mutex::new(None)),
             approver: Arc::new(Approvals::new()),
             own_system_agent: Arc::new(Mutex::new(None)),
+            recordings: Arc::default(),
         })
     }
 
@@ -1778,6 +1823,18 @@ impl Core {
     /// fails with [`FfiError::Locked`].
     pub fn unlock(&self, password: Option<String>, secret_key_hex: String) -> Result<(), FfiError> {
         self.unlock_unless_locked_since(self.lock_epoch(), password, secret_key_hex)
+    }
+
+    /// Waits up to `timeout_ms` for session recordings still being written to
+    /// the vault; `true` once none is left, `false` on timeout.
+    ///
+    /// An SSH session's recording is written on a thread of its own after the
+    /// session ends — begun before the observer's `on_close` — so a process
+    /// that exits right after a session (a command-line client) calls this
+    /// first, or the recording is lost with the process.
+    pub fn wait_for_recordings(&self, timeout_ms: u32) -> bool {
+        self.recordings
+            .wait_idle(std::time::Duration::from_millis(u64::from(timeout_ms)))
     }
 
     /// Whether the instance is unlocked.
@@ -3867,6 +3924,7 @@ impl Core {
                         host: host_for_record,
                         user: user_for_record,
                         started_unix,
+                        in_flight: Arc::clone(&self.recordings),
                     }),
                     saved: std::sync::atomic::AtomicBool::new(false),
                     // SSH: on_close lands on a tokio worker — see the field.
@@ -3950,6 +4008,7 @@ impl Core {
                         host: "localhost".to_owned(),
                         user: unissh_local_pty::os_username(),
                         started_unix,
+                        in_flight: Arc::clone(&self.recordings),
                     }),
                     saved: std::sync::atomic::AtomicBool::new(false),
                     // Local: on_close lands on the pty's waiter thread, which
@@ -9703,6 +9762,8 @@ struct RecordingSaver {
     host: String,
     user: String,
     started_unix: u64,
+    /// Where a detached write is counted, for [`Core::wait_for_recordings`].
+    in_flight: Arc<InFlight>,
 }
 
 impl RecordingSaver {
@@ -9800,7 +9861,13 @@ impl OutputSink for RecordingSink {
             }
             let saver = Arc::clone(&self.saver);
             let recorder = Arc::clone(&self.recorder);
-            std::thread::spawn(move || saver.save(&recorder));
+            // Counted from before the observer hears of the close, so whoever
+            // waits after seeing it waits for this write too.
+            let pending = self.saver.in_flight.begin();
+            std::thread::spawn(move || {
+                saver.save(&recorder);
+                drop(pending);
+            });
         }
         self.inner.on_close(exit_status);
     }

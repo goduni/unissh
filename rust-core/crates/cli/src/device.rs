@@ -8,7 +8,8 @@ use zeroize::Zeroizing;
 
 use crate::failure::{Failure, Res};
 use crate::home::{read_private, Home, Link};
-use crate::tty::Tty;
+use crate::server::Sessions;
+use crate::tty::{lines, one_line, Tty};
 
 /// What the user said about where the master password comes from.
 pub struct Credentials {
@@ -16,7 +17,8 @@ pub struct Credentials {
     pub password_file: Option<PathBuf>,
 }
 
-/// A signed-in device: its directory, its server link and its (locked) core.
+/// A signed-in device: its directory, its server link, its (locked) core and
+/// the process's server session.
 pub struct Device {
     /// The device directory.
     pub home: Home,
@@ -24,6 +26,7 @@ pub struct Device {
     pub link: Link,
     /// The core over its instance.
     pub core: Arc<Core>,
+    sessions: Sessions,
 }
 
 /// What to do when this machine is not signed in.
@@ -35,15 +38,15 @@ pub const NOT_SIGNED_IN: &str = "this machine is not signed in to UniSSH. Sign i
 impl Device {
     /// The device signed in at `home`.
     pub fn open(home: Home) -> Res<Self> {
+        home.check_private()?;
         let link = home.link()?;
         let complete = home.db().exists() && home.keyset().exists();
         let partial = home.has_instance() || link.is_some();
         match link {
-            Some(link) if complete => Ok(Self {
-                core: open_core(&home),
-                link,
-                home,
-            }),
+            Some(link) if complete => {
+                let core = open_core(&home);
+                Ok(Self::new(home, link, core))
+            }
             Some(_) | None if partial => Err(Failure::msg(format!(
                 "the UniSSH data in {} is incomplete (an interrupted sign-in?). \
                  Remove it with `unissh logout --local` and sign in again",
@@ -51,6 +54,22 @@ impl Device {
             ))),
             Some(_) | None => Err(Failure::msg(NOT_SIGNED_IN)),
         }
+    }
+
+    /// A device over parts already at hand (a sign-in that just made them).
+    pub fn new(home: Home, link: Link, core: Arc<Core>) -> Self {
+        Self {
+            home,
+            link,
+            core,
+            sessions: Sessions::default(),
+        }
+    }
+
+    /// A bearer for a call to the server, signing in first when needed. The
+    /// core must be unlocked.
+    pub fn access(&self) -> Res<String> {
+        self.sessions.access(&self.core, &self.link)
     }
 
     /// Unlocks the instance for this process.
@@ -135,7 +154,7 @@ pub fn normalize_secret_key(key: &str) -> String {
 
 /// The Emergency Kit form of a Secret Key: uppercase, in groups of five.
 pub fn format_secret_key(hex: &str) -> String {
-    let upper = hex.to_ascii_uppercase();
+    let upper = Zeroizing::new(hex.to_ascii_uppercase());
     let groups: Vec<&str> = upper
         .as_bytes()
         .chunks(5)
@@ -151,22 +170,31 @@ struct TtyPrompter;
 impl AuthPrompter for TtyPrompter {
     fn prompt(&self, request: AuthPromptRequest) -> Option<Vec<String>> {
         let mut tty = Tty::open().ok()?;
-        let header = [request.name.trim(), request.instruction.trim()]
+        // Everything here comes from the remote host (or the vault): it is
+        // printed without control characters, so it cannot rewrite the line
+        // that says who is asking.
+        let header = [one_line(&request.name), lines(&request.instruction)]
             .into_iter()
-            .filter(|s| !s.is_empty())
+            .filter(|s| !s.trim().is_empty())
             .collect::<Vec<_>>()
             .join("\n");
-        let intro = format!("{}@{}:{} asks:\n", request.user, request.host, request.port);
+        let intro = format!(
+            "{}@{}:{} asks:\n",
+            one_line(&request.user),
+            one_line(&request.host),
+            request.port
+        );
         tty.say(&intro).ok()?;
         if !header.is_empty() {
             tty.say(&format!("{header}\n")).ok()?;
         }
         let mut answers = Vec::with_capacity(request.prompts.len());
         for field in request.prompts {
+            let prompt = one_line(&field.prompt);
             let answer = if field.echo {
-                tty.line(&field.prompt).ok()?
+                tty.line(&prompt).ok()?
             } else {
-                let mut secret = tty.secret(&field.prompt).ok()?;
+                let mut secret = tty.secret(&prompt).ok()?;
                 std::mem::take(&mut *secret)
             };
             answers.push(answer);
@@ -177,7 +205,56 @@ impl AuthPrompter for TtyPrompter {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_secret_key, normalize_secret_key};
+    use super::{format_secret_key, master_password, normalize_secret_key, Credentials, Device};
+    use crate::home::Home;
+
+    /// A sign-in cut short leaves files without a link (or a link without
+    /// files): that is said as such, distinct from a machine never signed in.
+    #[test]
+    fn a_half_written_device_is_told_apart_from_a_signed_out_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = Home::locate(Some(dir.path().join("u"))).unwrap();
+        home.create().unwrap();
+        let Err(empty) = Device::open(home.clone()) else {
+            panic!("nothing here to open");
+        };
+        assert!(empty.message.contains("not signed in"), "{empty}");
+        std::fs::write(home.keyset(), b"k").unwrap();
+        let Err(partial) = Device::open(home) else {
+            panic!("half an instance is not a device");
+        };
+        assert!(partial.message.contains("incomplete"), "{partial}");
+    }
+
+    /// `echo pw > file` adds a line ending that is not part of the password;
+    /// anything beyond that one is.
+    #[cfg(unix)]
+    #[test]
+    fn a_password_file_loses_exactly_one_line_ending() {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let read = |name: &str, content: &[u8]| {
+            let path = dir.path().join(name);
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&path)
+                .unwrap();
+            file.write_all(content).unwrap();
+            let credentials = Credentials {
+                password_file: Some(path),
+            };
+            master_password(&credentials, "")
+                .unwrap()
+                .as_str()
+                .to_owned()
+        };
+        assert_eq!(read("crlf", b"pw\r\n"), "pw");
+        assert_eq!(read("two", b"pw\n\n"), "pw\n");
+        assert_eq!(read("none", b" pw "), " pw ", "spaces are the password's");
+    }
 
     /// What the kit prints is what the core reads back.
     #[test]

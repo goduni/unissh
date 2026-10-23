@@ -11,18 +11,16 @@
 
 use std::fmt::Write as _;
 use std::io::ErrorKind;
-use std::sync::Arc;
 
 use unissh_cloud::client::{http, unb64, validate_base_url};
 use unissh_cloud::dto::PairingPayload;
 use unissh_cloud::{identity, onboard, recovery, CloudError};
-use unissh_ffi::Core;
 use zeroize::Zeroizing;
 
 use crate::device::{format_secret_key, normalize_secret_key, open_core, Device};
 use crate::failure::{best_effort, Failure, Res};
-use crate::home::{Home, Link, Origin};
-use crate::tty::Tty;
+use crate::home::{Home, Link, Origin, LINK_FORMAT};
+use crate::tty::{one_line, Tty};
 use crate::{hosts, server};
 
 /// Choices common to every way of signing in.
@@ -72,6 +70,7 @@ impl<'h> Fresh<'h> {
             )));
         }
         home.create()?;
+        home.check_private()?;
         Ok(Self { home, keep: false })
     }
 
@@ -96,13 +95,15 @@ fn terminal() -> Res<Tty> {
 pub fn pair(home: &Home, choice: &SignIn) -> Res<()> {
     let fresh = Fresh::start(home)?;
     let mut tty = terminal()?;
+    // Asked before the paste: the pairing channel lives about two minutes from
+    // the moment the app shows its text, and a password typed twice is time.
+    let password = choice.new_password(&mut tty, "Master password for this machine: ")?;
     tty.say(
         "In a signed-in UniSSH app open Settings → Server → Add device, copy the\n\
          text it shows and paste it here. Keep that card open until this finishes.\n",
     )?;
     let payload = read_payload(&mut tty)?;
     validate_base_url(&payload.base_url)?;
-    let password = choice.new_password(&mut tty, "Master password for this machine: ")?;
     let core = open_core(home);
     tty.say("Pairing…\n")?;
     onboard::responder_join(
@@ -113,8 +114,20 @@ pub fn pair(home: &Home, choice: &SignIn) -> Res<()> {
         unb64(&payload.oob_code)?,
         password.map(|mut p| std::mem::take(&mut *p)),
         |key| choice.keep_secret_key(home, key),
-    )?;
+    )
+    .map_err(|e| {
+        Failure::from(e)
+            .hint_for(
+                "gone",
+                "the pairing text expired: open \"Add device\" again and paste it within two minutes",
+            )
+            .hint_for(
+                "timeout",
+                "the app did not answer: keep its \"Add device\" card open until pairing finishes",
+            )
+    })?;
     let link = Link {
+        format: LINK_FORMAT,
         base_url: payload.base_url,
         instance_id: payload.instance_id,
         space_id: payload.space_id,
@@ -125,12 +138,13 @@ pub fn pair(home: &Home, choice: &SignIn) -> Res<()> {
     };
     home.save_link(&link)?;
     fresh.keep();
-    welcome(home, core, link)
+    welcome(&Device::new(home.clone(), link, core))
 }
 
 /// Reads the pasted pairing text, up to its last field or an empty line.
 fn read_payload(tty: &mut Tty) -> Res<PairingPayload> {
-    let mut text = String::new();
+    // It carries the pairing secret.
+    let mut text = Zeroizing::new(String::new());
     loop {
         let line = match tty.line("") {
             Ok(line) => line,
@@ -157,23 +171,27 @@ pub fn escrow(home: &Home, base_url: &str, handle: &str, choice: &SignIn) -> Res
     validate_base_url(base_url)?;
     let fresh = Fresh::start(home)?;
     let mut tty = terminal()?;
-    let password = (!choice.no_password)
-        .then(|| tty.secret("Account password: "))
-        .transpose()?;
-    let secret_key = normalize_secret_key(&tty.secret("Secret Key: ")?);
-    let password = password.map(|mut p| std::mem::take(&mut *p));
+    let mut password = tty.secret("Account password: ")?;
+    if password.is_empty() {
+        // An account without a password (SSO) fetches its escrow inside a
+        // session, which a machine signing in for the first time has not got.
+        return Err(Failure::msg(
+            "escrow sign-in needs the account password; an SSO account pairs instead (`unissh login pair`)",
+        ));
+    }
+    let mut secret_key = Zeroizing::new(normalize_secret_key(&tty.secret("Secret Key: ")?));
 
     let instance = identity::instance_info(http(), base_url)?;
     let params = identity::escrow_params(http(), base_url, handle)?;
     let core = open_core(home);
-    let k_auth = core.derive_escrow_auth_with_params(
-        password.clone(),
-        secret_key.clone(),
+    let k_auth = Zeroizing::new(core.derive_escrow_auth_with_params(
+        Some(password.as_str().to_owned()),
+        secret_key.as_str().to_owned(),
         params.argon_salt,
         params.argon_mem_kib,
         params.argon_iterations,
         params.argon_parallelism,
-    )?;
+    )?);
     // The server answers every refusal alike (no oracle for which part was wrong).
     let (blob, account_id) =
         identity::escrow_fetch(http(), base_url, handle, &k_auth).map_err(|e| match e {
@@ -184,9 +202,13 @@ pub fn escrow(home: &Home, base_url: &str, handle: &str, choice: &SignIn) -> Res
                 e.into()
             }
         })?;
-    recovery::install_keyset(&core, blob, password, secret_key, |key| {
-        choice.keep_secret_key(home, key)
-    })?;
+    recovery::install_keyset(
+        &core,
+        blob,
+        Some(std::mem::take(&mut *password)),
+        std::mem::take(&mut *secret_key),
+        |key| choice.keep_secret_key(home, key),
+    )?;
     let registration = core.build_registration_request()?;
     let (_, device_id) = identity::device_self_enroll_as(
         http(),
@@ -194,7 +216,10 @@ pub fn escrow(home: &Home, base_url: &str, handle: &str, choice: &SignIn) -> Res
         &registration,
         &identity::device_label("CLI"),
     )?;
-    let mut link = Link {
+    // The device exists on the server from here on: keep what makes it usable
+    // whatever fails next, rather than leave an orphan behind.
+    let link = Link {
+        format: LINK_FORMAT,
         base_url: base_url.to_owned(),
         instance_id: instance.instance_id,
         space_id: String::new(),
@@ -203,17 +228,25 @@ pub fn escrow(home: &Home, base_url: &str, handle: &str, choice: &SignIn) -> Res
         handle: Some(handle.to_owned()),
         origin: Origin::Escrow,
     };
-    link.space_id = first_space(&core, &link)?;
     home.save_link(&link)?;
     fresh.keep();
-    welcome(home, core, link)
+    let mut device = Device::new(home.clone(), link, core);
+    // The account's first space is where its cloud vaults are bound, as the
+    // app picks it after an escrow sign-in. Like the app, carry on without
+    // one: the device still pulls, it only has nothing to push to yet.
+    match first_space(&device) {
+        Ok(space) if !space.is_empty() => {
+            device.link.space_id = space;
+            home.save_link(&device.link)?;
+        }
+        Ok(_) => {}
+        Err(e) => eprintln!("unissh: could not read the account's spaces: {e}"),
+    }
+    welcome(&device)
 }
 
-/// The account's first space — where its cloud vaults are bound, as the app
-/// picks it after an escrow sign-in.
-fn first_space(core: &Core, link: &Link) -> Res<String> {
-    let session = server::ServerSession::open(core, link)?;
-    let spaces = identity::list_spaces(http(), &link.base_url, session.access())?;
+fn first_space(device: &Device) -> Res<String> {
+    let spaces = identity::list_spaces(http(), &device.link.base_url, &device.access()?)?;
     Ok(spaces
         .into_iter()
         .next()
@@ -221,10 +254,8 @@ fn first_space(core: &Core, link: &Link) -> Res<String> {
         .unwrap_or_default())
 }
 
-/// What `unissh login join` needs besides the server.
-pub struct Joining<'a> {
-    /// The invite: its token, or the join link that carries it.
-    pub invite: &'a str,
+/// What `unissh login join` needs besides the server and the invite.
+pub struct Joining {
     /// Display name for the new account.
     pub display_name: Option<String>,
     /// Handle for the new account.
@@ -233,22 +264,37 @@ pub struct Joining<'a> {
 
 /// `unissh login join`: creates a separate account on this machine and joins
 /// it to the server with an invite.
-pub fn join(home: &Home, base_url: &str, joining: &Joining<'_>, choice: &SignIn) -> Res<()> {
+///
+/// The invite is asked on the terminal, never taken as an argument: it is a
+/// single-use bearer secret, and a command line is visible to every user of
+/// the machine for as long as the sign-in takes.
+pub fn join(home: &Home, base_url: &str, joining: &Joining, choice: &SignIn) -> Res<()> {
     validate_base_url(base_url)?;
-    let token = invite_token(joining.invite);
     let fresh = Fresh::start(home)?;
     let mut tty = terminal()?;
+    let token = invite_token(&tty.secret("Invite (the token or the join link): ")?);
+    if token.is_empty() {
+        return Err(Failure::msg("no invite given"));
+    }
     let instance = identity::instance_info(http(), base_url)?;
-    let preview = identity::join_preview(http(), base_url, &token)?;
+    let preview = identity::join_preview(http(), base_url, &token)
+        .map_err(|e| Failure::from(e).hint_for("not_found", "this server knows no such invite"))?;
     let mut about = format!(
         "This invite joins a new account to {}",
-        preview
-            .instance_name
-            .or(instance.name)
-            .unwrap_or_else(|| base_url.to_owned())
+        one_line(
+            &preview
+                .instance_name
+                .or(instance.name)
+                .unwrap_or_else(|| base_url.to_owned())
+        )
     );
     for space in &preview.spaces {
-        let _ = write!(about, "\n  space {} as {}", space.name, space.role);
+        let _ = write!(
+            about,
+            "\n  space {} as {}",
+            one_line(&space.name),
+            one_line(&space.role)
+        );
     }
     tty.say(&format!("{about}\n"))?;
     if !tty.confirm("Create the account and join? [y/N] ")? {
@@ -268,8 +314,16 @@ pub fn join(home: &Home, base_url: &str, joining: &Joining<'_>, choice: &SignIn)
         joining.display_name.clone(),
         joining.handle.clone(),
     )?;
-    // The invite is spent now: whatever fails next, this account must survive.
+    // The invite is spent and the account exists: from here nothing may
+    // delete the keys, and the Emergency Kit comes before anything else that
+    // can fail.
+    fresh.keep();
+    let kit = Zeroizing::new(format_secret_key(&secret_key));
+    tty.say(&emergency_kit(&kit))?;
+    best_effort(tty.line("Press Enter once it is saved. "));
+    best_effort(choice.keep_secret_key(home, &secret_key));
     let link = Link {
+        format: LINK_FORMAT,
         base_url: base_url.to_owned(),
         instance_id: instance.instance_id,
         space_id: outcome.spaces.first().cloned().unwrap_or_default(),
@@ -278,18 +332,18 @@ pub fn join(home: &Home, base_url: &str, joining: &Joining<'_>, choice: &SignIn)
         handle: joining.handle.clone(),
         origin: Origin::Joined,
     };
-    home.save_link(&link)?;
-    fresh.keep();
-    best_effort(choice.keep_secret_key(home, &secret_key));
-    // Shown once, on the terminal only (never stdout, which may be a log).
-    let kit = Zeroizing::new(format_secret_key(&secret_key));
-    tty.say(&emergency_kit(&kit))?;
-    best_effort(tty.line("Press Enter once it is saved. "));
+    home.save_link(&link).map_err(|e| {
+        Failure::msg(format!(
+            "the account was created and its keys are in {}, but its server link could \
+             not be saved: {e}. Do not delete that directory",
+            home.dir().display()
+        ))
+    })?;
     tty.say(
         "A vault admin now has to grant this account access to the vaults it needs;\n\
          after that, `unissh sync` brings them here.\n",
     )?;
-    welcome(home, core, link)
+    welcome(&Device::new(home.clone(), link, core))
 }
 
 /// The Emergency Kit text for a new account's Secret Key, as printed.
@@ -303,23 +357,19 @@ fn emergency_kit(kit: &str) -> Zeroizing<String> {
 
 /// The invite token out of whatever was pasted: the token itself, or a join
 /// link (`https://server/join#<token>`).
-fn invite_token(invite: &str) -> String {
+fn invite_token(invite: &str) -> Zeroizing<String> {
     let invite = invite.trim();
-    invite
-        .rsplit_once('#')
-        .map_or(invite, |(_, token)| token)
-        .to_owned()
+    Zeroizing::new(
+        invite
+            .rsplit_once('#')
+            .map_or(invite, |(_, token)| token)
+            .to_owned(),
+    )
 }
 
 /// The first sync after signing in, and what came of it.
-fn welcome(home: &Home, core: Arc<Core>, link: Link) -> Res<()> {
-    let base_url = link.base_url.clone();
-    let device = Device {
-        home: home.clone(),
-        link,
-        core,
-    };
-    match server::sync(&device) {
+fn welcome(device: &Device) -> Res<()> {
+    match server::sync(device) {
         Ok(report) => server::warn_about(&report),
         Err(e) => eprintln!(
             "unissh: signed in, but the first sync failed: {e}\nRun `unissh sync` to try again."
@@ -328,18 +378,44 @@ fn welcome(home: &Home, core: Arc<Core>, link: Link) -> Res<()> {
     let vaults = device.core.list_vaults()?.len();
     let hosts = hosts::load(&device.core)?.len();
     println!(
-        "Signed in to {base_url}: {hosts} host(s) in {vaults} vault(s). `unissh hosts` lists them."
+        "Signed in to {}: {hosts} host(s) in {vaults} vault(s). `unissh hosts` lists them.",
+        device.link.base_url
     );
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::invite_token;
+    use super::{invite_token, Fresh};
+    use crate::home::Home;
+
+    /// The promise of every sign-in: a failure leaves nothing behind, success
+    /// stays, and a second sign-in on top of it is refused.
+    #[test]
+    fn a_failed_sign_in_is_rolled_back_and_a_kept_one_blocks_the_next() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = Home::locate(Some(dir.path().join("u"))).unwrap();
+        let fresh = Fresh::start(&home).unwrap();
+        std::fs::write(home.keyset(), b"k").unwrap();
+        drop(fresh);
+        assert!(!home.has_instance(), "an abandoned sign-in is wiped");
+
+        let fresh = Fresh::start(&home).unwrap();
+        std::fs::write(home.keyset(), b"k").unwrap();
+        fresh.keep();
+        assert!(home.has_instance(), "a kept one stays");
+        assert!(
+            Fresh::start(&home).is_err(),
+            "and the next sign-in is refused"
+        );
+    }
 
     #[test]
     fn an_invite_is_taken_as_a_token_or_out_of_its_join_link() {
-        assert_eq!(invite_token(" abc123 \n"), "abc123");
-        assert_eq!(invite_token("https://u.example/join#abc123"), "abc123");
+        assert_eq!(invite_token(" abc123 \n").as_str(), "abc123");
+        assert_eq!(
+            invite_token("https://u.example/join#abc123").as_str(),
+            "abc123"
+        );
     }
 }

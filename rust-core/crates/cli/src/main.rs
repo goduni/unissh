@@ -131,16 +131,15 @@ enum Login {
         server: String,
         /// The account's handle.
         handle: String,
-        #[command(flatten)]
-        options: SignInArgs,
+        /// Do not keep the Secret Key on this machine; ask for it at every unlock.
+        #[arg(long)]
+        no_remember: bool,
     },
     /// A separate account for this machine, joined with an invite: it holds only
-    /// what the team grants it.
+    /// what the team grants it. The invite is asked on the terminal.
     Join {
         /// Server URL, e.g. https://unissh.example.com.
         server: String,
-        /// The invite token, or the join link.
-        invite: String,
         /// Display name for the new account.
         #[arg(long)]
         name: Option<String>,
@@ -281,11 +280,19 @@ fn log_in(home: &Home, how: Login) -> Res<()> {
         Login::Escrow {
             server,
             handle,
-            options,
-        } => login::escrow(home, &server, &handle, &options.choice()),
+            no_remember,
+        } => login::escrow(
+            home,
+            &server,
+            &handle,
+            &SignIn {
+                remember: !no_remember,
+                // The copy here is wrapped with the account password.
+                no_password: false,
+            },
+        ),
         Login::Join {
             server,
-            invite,
             name,
             handle,
             options,
@@ -293,7 +300,6 @@ fn log_in(home: &Home, how: Login) -> Res<()> {
             home,
             &server,
             &Joining {
-                invite: &invite,
                 display_name: name,
                 handle,
             },

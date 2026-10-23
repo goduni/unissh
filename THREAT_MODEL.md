@@ -271,9 +271,17 @@ What the design does about it:
   your whole account. The documentation tells people to use `join` for shared
   and production servers.
 - **No secret on the command line or in the environment.** Secrets are asked on
-  the controlling terminal (`/dev/tty`), with echo off. For unattended use,
+  the controlling terminal (`/dev/tty`), with echo off — the invite of
+  `login join` included, since a single-use invite in argv is readable by every
+  user of the machine until it is redeemed. For unattended use,
   `--password-file` / `UNISSH_PASSWORD_FILE` names a file — never the password
-  itself — and a file anyone but its owner can read is refused.
+  itself — and a file anyone but its owner can read is refused, as is a device
+  directory that is not the user's alone.
+- **Untrusted text stays text.** Instance and space names, server errors, host
+  labels and keyboard-interactive prompts come from the server, vault members
+  or the remote host; they reach the terminal without control characters, so
+  none of them can move the cursor, rewrite the line naming who asks, or fake
+  a prompt.
 - **No session at rest.** No access or refresh token is written to disk. Each
   command that needs the server signs a fresh server challenge with the unlocked
   keyset and signs out when it ends. A copy of the device directory without the

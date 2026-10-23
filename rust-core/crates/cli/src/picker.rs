@@ -95,13 +95,27 @@ fn ask(tty: &mut Tty, device: &Device, credentials: &Credentials) -> Res<Option<
     if !tty.wait(IDLE_LOCK)? {
         device.core.lock();
         tty.say("\nLocked after 15 minutes without input.\n")?;
-        device.unlock(credentials)?;
+        unlock_again(device, credentials)?;
         tty.say("> ")?;
     }
     match tty.line("") {
         Ok(line) => Ok(Some(line)),
         Err(e) if e.kind() == ErrorKind::UnexpectedEof => Ok(None),
         Err(e) => Err(e.into()),
+    }
+}
+
+/// Unlocks after an idle lock, allowing a mistyped password or two.
+fn unlock_again(device: &Device, credentials: &Credentials) -> Res<()> {
+    const TRIES: u32 = 3;
+    let mut tried = 0;
+    loop {
+        tried += 1;
+        match device.unlock(credentials) {
+            Ok(()) => return Ok(()),
+            Err(e) if tried < TRIES => eprintln!("unissh: {e}"),
+            Err(e) => return Err(e),
+        }
     }
 }
 

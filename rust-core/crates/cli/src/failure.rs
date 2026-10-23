@@ -10,6 +10,8 @@ use std::fmt;
 use unissh_cloud::CloudError;
 use unissh_ffi::FfiError;
 
+use crate::tty::lines;
+
 /// Exit code of a failure that is not about a connection.
 pub const EXIT_FAILURE: u8 = 1;
 /// Exit code of a connection that failed before a remote command could run.
@@ -22,6 +24,8 @@ pub struct Failure {
     pub message: String,
     /// Exit code of the process.
     pub exit: u8,
+    /// The server's code, when the server refused.
+    code: Option<String>,
 }
 
 impl Failure {
@@ -30,21 +34,35 @@ impl Failure {
         Self {
             message: message.into(),
             exit: EXIT_FAILURE,
+            code: None,
         }
     }
 
     /// The same failure, reported as a connection failure (exit 255).
-    pub fn connecting(self) -> Self {
-        Self {
-            exit: EXIT_CONNECT,
-            ..self
+    pub const fn connecting(mut self) -> Self {
+        self.exit = EXIT_CONNECT;
+        self
+    }
+
+    /// The server's refusal `code`, with `hint` added; any other failure as is.
+    /// For the call sites that know what a code means there.
+    pub fn hint_for(self, code: &str, hint: &str) -> Self {
+        if self.code.as_deref() == Some(code) {
+            Self {
+                message: format!("{} — {hint}", self.message),
+                ..self
+            }
+        } else {
+            self
         }
     }
 }
 
+/// Printed without control characters: a message can quote a server or a
+/// remote host, and nothing they say may drive the terminal.
 impl fmt::Display for Failure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
+        f.write_str(&lines(&self.message))
     }
 }
 
@@ -60,6 +78,7 @@ impl From<FfiError> for Failure {
                 return Self {
                     message: host_key_warning(&host, port, &fingerprint),
                     exit: EXIT_CONNECT,
+                    code: None,
                 }
             }
             FfiError::HostUntrusted
@@ -85,7 +104,10 @@ impl From<CloudError> for Failure {
     fn from(e: CloudError) -> Self {
         match e {
             CloudError::Core(e) => e.into(),
-            CloudError::Server { code, message } => Self::msg(server_message(&code, &message)),
+            CloudError::Server { code, message } => Self {
+                code: Some(code.clone()),
+                ..Self::msg(server_message(&code, &message))
+            },
             CloudError::Other { msg } => Self::msg(msg),
         }
     }
@@ -101,11 +123,9 @@ impl From<std::io::Error> for Failure {
 fn server_message(code: &str, message: &str) -> String {
     let hint = match code {
         "network" => "is the server reachable from this machine?",
-        "unauthenticated" | "forbidden" => {
-            "the server no longer accepts this device — was it revoked? (`unissh logout`, then sign in again)"
+        "unauthenticated" => {
+            "if this device was revoked, `unissh logout --local` clears it so you can sign in again"
         }
-        "gone" => "the pairing code expired: start \"Add device\" again and paste within two minutes",
-        "timeout" => "the other device did not answer: keep its \"Add device\" card open while pairing",
         _ => "",
     };
     let detail = if message.is_empty() { code } else { message };
@@ -123,7 +143,8 @@ pub fn host_key_warning(host: &str, port: u16, fingerprint: &str) -> String {
          Someone could be intercepting this connection, or the host was reinstalled.\n\
          It now presents {fingerprint}.\n\
          Check that fingerprint with the host's administrator. If it is right, trust it with:\n  \
-         unissh known-hosts trust {host}:{port} {fingerprint}"
+         unissh known-hosts trust {host}:{port} {fingerprint}\n\
+         (for a host behind a jump host: unissh known-hosts forget {host}:{port}, then connect again)"
     )
 }
 

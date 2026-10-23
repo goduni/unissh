@@ -10,7 +10,6 @@ use unissh_ffi::Core;
 use crate::device::{open_core, Credentials, Device, NOT_SIGNED_IN};
 use crate::failure::{Failure, Res};
 use crate::home::{Home, Link, Origin};
-use crate::server::ServerSession;
 use crate::tty::Tty;
 
 /// `unissh status`: what this machine is signed in to. Needs no unlock.
@@ -156,33 +155,74 @@ pub fn logout(home: &Home, credentials: &Credentials, yes: bool, local: bool) ->
     }
     let device = Device::open(home.clone())?;
     device.unlock(credentials)?;
-    let session = ServerSession::open(&device.core, &device.link)?;
-    let mut warning = format!(
-        "This revokes this device on {} and deletes UniSSH's data from this machine.\n",
-        device.link.base_url
-    );
-    if device.link.origin == Origin::Joined && is_only_device(&device.link, &session)? {
-        warning.push_str(
-            "THIS IS THE ACCOUNT'S ONLY DEVICE. Without another device, its vault contents\n\
-             are lost for good unless you still have its Emergency Kit and escrow is on.\n",
-        );
-    }
-    confirm(yes, &warning)?;
-    identity::device_revoke(
-        http(),
-        &device.link.base_url,
-        session.access(),
-        &device.link.device_id,
-    )?;
-    drop(session);
+    let reached = device.access().and_then(|access| {
+        let only = device.link.origin == Origin::Joined && is_only_device(&device.link, &access)?;
+        Ok((access, only))
+    });
+    let revoked = match reached {
+        Ok((access, only)) => {
+            let mut warning = format!(
+                "This revokes this device on {} and deletes UniSSH's data from this machine.\n",
+                device.link.base_url
+            );
+            if only {
+                warning.push_str(
+                    "THIS IS THE ACCOUNT'S ONLY DEVICE. Without another device, its vault contents\n\
+                     are lost for good unless you still have its Emergency Kit and escrow is on.\n",
+                );
+            }
+            confirm(yes, &warning)?;
+            identity::device_revoke(
+                http(),
+                &device.link.base_url,
+                &access,
+                &device.link.device_id,
+            )
+            .map_err(|e| {
+                Failure::msg(format!(
+                    "could not revoke this device ({}); nothing was deleted. \
+                         `unissh logout --local` deletes the data without the server",
+                    Failure::from(e)
+                ))
+            })?;
+            true
+        }
+        // An account joined here may have no other device: without the server
+        // there is no telling, and deleting it on a guess could lose it.
+        Err(e) if device.link.origin == Origin::Joined => {
+            return Err(Failure::msg(format!(
+                "cannot sign out through the server: {e}\n\
+                 This account may exist on this machine only. To delete it anyway: \
+                 `unissh logout --local`"
+            )));
+        }
+        // Paired or escrow: the account lives on its other devices. A device
+        // the server already revoked, or a server out of reach, must not keep
+        // the data here hostage.
+        Err(e) => {
+            confirm(
+                yes,
+                &format!(
+                    "The server could not be reached or refused this device: {e}\n\
+                     This deletes UniSSH's data from this machine; if the device is still\n\
+                     registered, revoke it from another device (Settings → Devices).\n"
+                ),
+            )?;
+            false
+        }
+    };
     device.core.lock();
     home.wipe()?;
-    println!("Signed out: the device is revoked and its data deleted.");
+    if revoked {
+        println!("Signed out: the device is revoked and its data deleted.");
+    } else {
+        println!("Signed out locally: the data is deleted.");
+    }
     Ok(())
 }
 
-fn is_only_device(link: &Link, session: &ServerSession<'_>) -> Res<bool> {
-    let devices = identity::device_list(http(), &link.base_url, session.access())?;
+fn is_only_device(link: &Link, access: &str) -> Res<bool> {
+    let devices = identity::device_list(http(), &link.base_url, access)?;
     Ok(!devices
         .iter()
         .any(|d| d.device_id != link.device_id && d.status == "active"))
