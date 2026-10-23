@@ -21,6 +21,8 @@ crates/
   automation     native MCP grants, approvals, revocation and managed SSH exec
   mcp            authenticated loopback HTTP adapter and nine MCP tool contracts
   ffi            UniFFI contract for the UI (no plaintext keys)       [SPEC 4]
+  cloud          client for a UniSSH server's /v1 API: HTTP, sync transport,
+                 device pairing — shared by the desktop app and the CLI
   cli            temporary CLI harness to "kick the tires" on the core
 ```
 

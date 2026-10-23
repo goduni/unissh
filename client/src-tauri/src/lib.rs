@@ -57,6 +57,14 @@ fn log_filter_from_env() -> (log::LevelFilter, Vec<(String, log::LevelFilter)>) 
 /// Tauri `setup`: open the instance, register the observers and controllers,
 /// manage the app state, wire token rotation and apply the per-OS window tweaks.
 fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    // The server client's platform half, before anything can talk to a server:
+    // the client is built once, and on Android its certificate verifier is the
+    // one `platform_tls` prepares (#34).
+    cloud::client::install_platform(cloud::client::Platform {
+        user_agent: concat!("unissh-client/", env!("CARGO_PKG_VERSION")).to_owned(),
+        configure: platform_tls::configure,
+        prepare: platform_tls::init,
+    });
     // One local instance = two files in the app-data dir: the SQLCipher DB
     // and the encrypted keyset sidecar. The DB key is derived from the
     // unlocked keyset, so neither opens without unlocking.

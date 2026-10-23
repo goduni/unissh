@@ -1,6 +1,6 @@
 ---
 title: Crate reference
-description: A per-crate tour of the UniSSH Rust core — crypto, keychain, storage, vault, ssh-agent, ssh-transport, sync, and the FFI facade.
+description: A per-crate tour of the UniSSH Rust core — crypto, keychain, storage, vault, ssh-agent, ssh-transport, sync, the FFI facade, and the server client.
 ---
 
 The [rust-core](../rust-core/) workspace is a stack of focused crates. Dependencies run bottom-up; each crate is `#![forbid(unsafe_code)]` (except `ssh-agent`, which has a single audited `unsafe` module for `mlock`). This page summarizes the role and public surface of each.
@@ -54,5 +54,9 @@ The stable UI boundary. A `Core` facade binds `keychain` + `storage` + `vault` +
 **The hard rule:** no method returns a private key or keyset secret *as a side effect* — private SSH keys are generated in the core, authentication signs there, and only the public key leaves. An end-to-end test enforces this against the whole facade. Three calls cross the boundary by explicit user request and are allowlisted in that test: a **server password** (`get_password`), a **note** (`get_note`), and **`export_ssh_key`** — the user's own private key, handed back because they own it and may need it elsewhere. The keyset itself is never exportable by any path.
 
 The facade covers vaults, keys/items, known-hosts, `ssh_exec` and the streaming/fleet/broadcast variants, sessions, tunnels, SFTP, secret version history, integrity audit, interop, encrypted vault backup, connection profiles, and the Milestone-2 surface (cloud vaults, membership/grants, identity/auth, device onboarding, audit append/query, and the `FfiSyncTransport` callback). Bindings (Swift, Kotlin, …) are generated on demand with `uniffi-bindgen` (UniFFI 0.31) and are **not** committed to the repository. The temporary [`cli`](../../overview/quickstart/) crate drives this facade for the `init → create-vault → gen-key → exec` flow.
+
+## `cloud` — the server client
+
+The core never opens a network connection of its own; `cloud` is the wire the applications hand it. It is the blocking HTTP client for a UniSSH server's `/v1` API (rustls; plaintext `http://` only to loopback), the challenge-signed login and session calls, devices, spaces and escrow, the `FfiSyncTransport` the sync engine drives, and the device-pairing relay. The desktop app and the CLI share it, so both speak one protocol. Everything it carries was built and signed by a core and is verified by the receiving core before it is applied — the server stays untrusted.
 
 See also: [System overview](../../architecture/system-overview/) for how the crates fit together.

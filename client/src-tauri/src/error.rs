@@ -101,6 +101,18 @@ impl From<FfiError> for ApiError {
     }
 }
 
+/// Lossless: the server client's buckets are this type's own `Server`/`Other`,
+/// and a core error maps exactly as it does when it reaches a command directly.
+impl From<unissh_cloud::CloudError> for ApiError {
+    fn from(e: unissh_cloud::CloudError) -> Self {
+        match e {
+            unissh_cloud::CloudError::Server { code, message } => Self::Server { code, message },
+            unissh_cloud::CloudError::Core(e) => e.into(),
+            unissh_cloud::CloudError::Other { msg } => Self::Other { msg },
+        }
+    }
+}
+
 /// A `JoinError` from `spawn_blocking` (task panicked / cancelled).
 impl From<tauri::Error> for ApiError {
     fn from(e: tauri::Error) -> Self {

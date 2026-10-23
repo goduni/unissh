@@ -38,20 +38,22 @@ same-file = "1"
 thiserror = "2"
 dashmap = "6"
 uuid = { version = "1", features = ["v4"] }
-once_cell = "1"
 
-# Cloud server integration: blocking HTTP client (rustls TLS, no system OpenSSL)
-# and base64 STANDARD (the server's wire encoding for every crypto blob/id).
+# The browser SSO flow's own HTTP (the OIDC token exchange) and the Android TLS
+# hook for the shared server client: blocking, rustls, no system OpenSSL. The
+# same version and features as `unissh-cloud`, so both resolve to one copy.
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json", "blocking"] }
 # x-www-form-urlencoded body for the OIDC token exchange (reqwest's `.form()` is
 # stripped by default-features=false; this is the same crate it uses internally).
 serde_urlencoded = "0.7"
+# PKCE for the SSO flow: an S256 challenge, base64url without padding.
 base64 = "0.23.0"
-# Content-stable Idempotency-Key for sync/push (server replays identical pushes).
 sha2 = "0.10"
 
 # The SSH core — depended on directly as a path dependency (its crate-type includes `lib`).
 unissh-ffi = { path = "../../rust-core/crates/ffi" }
+# The server client (HTTP API, sync transport, pairing relay), shared with the CLI.
+unissh-cloud = { path = "../../rust-core/crates/cloud" }
 # The key hierarchy, named directly for one thing the FFI facade has no reason
 # to export: `device_wrap`, which seals the biometric-unlock material under a
 # device secret (src/biometric.rs). Checking the password before it is stored
@@ -91,8 +93,9 @@ rustls-platform-verifier = "0.7"
 # RUNTIME trap rather than a compile-time one: `tls_backend_preconfigured` takes
 # `impl Any` and downcasts at run time, so a second copy of the crate type-checks
 # perfectly and fails inside `Client::build()` with "Unknown TLS backend passed to
-# `use_preconfigured_tls`". src/cloud/client.rs logs that, then falls back to a
-# default client — safe, but back to the Android bug this fixes.
+# `use_preconfigured_tls`". The shared client (`unissh_cloud::client::http`) logs
+# that, then falls back to a default client — safe, but back to the Android bug
+# this fixes.
 #
 # `default-features = false` is load-bearing, not tidiness: rustls's defaults add
 # `logging` and `prefer-post-quantum`, and the latter changes the ClientHello key

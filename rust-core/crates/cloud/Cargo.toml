@@ -1,0 +1,32 @@
+[package]
+name = "unissh-cloud"
+version.workspace = true
+description = "UniSSH server client: the `/v1` HTTP API, the sync transport and the device-pairing relay, shared by the desktop app and the headless CLI."
+readme = "README.md"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+unissh-ffi = { path = "../ffi" }
+
+# Blocking HTTP client with rustls (no system OpenSSL on the wire) — the same
+# configuration the desktop client has always used for its cloud calls.
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json", "blocking"] }
+# base64 STANDARD: the server's wire encoding for every crypto blob and id.
+base64 = "0.23"
+# Content-stable Idempotency-Key for sync/push (the server replays identical pushes).
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+log = "0.4"
+
+# No [dev-dependencies], on purpose: the desktop workspace, where this crate is
+# a path dependency rather than a member, can only test a crate without them —
+# and its CI runs the recovery tests on every desktop OS.
+
+[lints]
+workspace = true

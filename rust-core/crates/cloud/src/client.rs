@@ -7,82 +7,116 @@ use std::time::Duration;
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use once_cell::sync::Lazy;
-use reqwest::blocking::{Client, Request, RequestBuilder, Response};
+use reqwest::blocking::{Client, ClientBuilder, Request, RequestBuilder, Response};
 use reqwest::header::{HeaderValue, AUTHORIZATION};
 use reqwest::StatusCode;
 use serde_json::Value;
 
-use crate::error::{ApiError, ApiResult};
+use crate::{CloudError, CloudResult};
 
 /// How many times to retry a `429 Too Many Requests` (honoring `Retry-After`).
 const MAX_429_RETRIES: u32 = 2;
 /// Cap a server-suggested `Retry-After` so a hostile/buggy value can't hang the UI.
 const MAX_RETRY_AFTER_SECS: u64 = 5;
 
-/// Process-global blocking HTTP client (connection pool reuse). Initialised lazily
-/// on first use — which always happens inside `spawn_blocking`, so the inner
-/// current-thread runtime is never created from within Tauri's async runtime.
+/// What the embedding application contributes to the shared HTTP client.
 ///
-/// `platform_tls::configure` is the identity function on every target but
-/// Android, where it swaps in a certificate verifier that can tell a revoked
-/// certificate apart from one Android was simply unable to ask about. It sits
-/// here rather than at the call site because the TLS backend is a property of
-/// the client, fixed once when it is built.
+/// Installed once with [`install_platform`], before the first [`http`] call.
+/// Without it the client is a plain rustls client verifying against the
+/// platform trust store, which is right everywhere except Android.
+pub struct Platform {
+    /// `User-Agent` of every request.
+    pub user_agent: String,
+    /// Applied once to the builder of the shared client.
+    ///
+    /// The desktop app's hook is the identity function on every target but
+    /// Android, where it swaps in a certificate verifier that can tell a revoked
+    /// certificate apart from one Android was simply unable to ask about. It sits
+    /// here rather than at a call site because the TLS backend is a property of
+    /// the client, fixed once when it is built.
+    ///
+    /// One consequence to know about before adding a TLS option to the client:
+    /// on Android that swap hands `reqwest` a finished rustls config, and
+    /// `reqwest` then uses it verbatim. Its own TLS knobs —
+    /// `min_tls_version`/`max_tls_version`, `tls_sni`, `add_root_certificate`,
+    /// `danger_accept_invalid_certs`, ALPN — are read on the path that is no
+    /// longer taken, so calling one of them in [`http`] would work everywhere and
+    /// silently do nothing on Android. Nothing calls them today; the settings
+    /// they would have produced are reproduced by hand in the app's
+    /// `platform_tls/android.rs`, and anything new has to be added in both places.
+    pub configure: fn(ClientBuilder) -> ClientBuilder,
+    /// Runs before every hand-out of the shared client; an error is logged.
+    ///
+    /// The app prepares Android's platform verifier here, ahead of the build,
+    /// and that is the fix for #34: the certificate trust store is reached over
+    /// JNI there, and a verifier that was never handed the JVM panics — on
+    /// reqwest's own internal thread, where the message is thrown away and
+    /// replaced by reqwest's secondary "event loop thread panicked". Every cloud
+    /// call on Android died there. It runs per call rather than once because the
+    /// Android activity is not guaranteed to exist before the first cloud
+    /// command, and a transient failure must be retried instead of cached for
+    /// the life of the process. After the first success it is one atomic load.
+    pub prepare: fn() -> Result<(), String>,
+}
+
+static PLATFORM: OnceLock<Platform> = OnceLock::new();
+
+/// Process-global blocking HTTP client (connection pool reuse). Built lazily on
+/// first use — which must be a blocking context, so the inner current-thread
+/// runtime is never created from within an async runtime (the app's Tauri one).
+static HTTP: OnceLock<Client> = OnceLock::new();
+
+/// Installs the embedding application's hooks for the shared client.
 ///
-/// One consequence to know about before adding a TLS option here: on Android
-/// that swap hands `reqwest` a finished rustls config, and `reqwest` then uses it
-/// verbatim. Its own TLS knobs — `min_tls_version`/`max_tls_version`, `tls_sni`,
-/// `add_root_certificate`, `danger_accept_invalid_certs`, ALPN — are read on the
-/// path we no longer take, so calling one of them here would work everywhere and
-/// silently do nothing on Android. Nothing calls them today; the settings they
-/// would have produced are reproduced by hand in `platform_tls/android.rs`, and
-/// anything new has to be added in both places.
+/// Call once at start-up, before anything talks to a server. A second call is
+/// ignored, and so is a call after the client was built — its TLS backend is
+/// already fixed — and both are logged, because either means the order of
+/// start-up is not what the hooks rely on.
+pub fn install_platform(platform: Platform) {
+    if HTTP.get().is_some() {
+        log::error!("cloud: platform hooks installed after the HTTP client was built; ignored");
+        return;
+    }
+    if PLATFORM.set(platform).is_err() {
+        log::debug!("cloud: platform hooks already installed; keeping the first ones");
+    }
+}
+
+/// The shared blocking client. MUST be called from a blocking context.
+///
+/// The error of the platform's `prepare` hook is logged, not returned: this
+/// hands out a `&'static Client` to ~45 call sites, several of which implement
+/// infallible core traits and have nowhere to put one. A failure still ends in a
+/// panic further down — but with a log line naming the real cause, which is
+/// exactly what #34 lacked. Making the whole path fallible is a separate change.
 ///
 /// The `build()` failure is logged rather than swallowed. It is unreachable
 /// today, but there is exactly one way to reach it and it is worth naming:
 /// `tls_backend_preconfigured` downcasts its argument at run time, so a rustls
-/// major bump that leaves `reqwest` and this crate on two different copies of the
-/// crate compiles cleanly and fails right here. Falling back to `Client::new()`
-/// is safe — it is the plain platform verifier, i.e. today's behaviour — but it
-/// also silently restores the very Android bug the wrapper exists to fix, and a
+/// major bump that leaves `reqwest` and the app's Android verifier on two
+/// different copies of the crate compiles cleanly and fails right here. Falling
+/// back to `Client::new()` is safe — it is the plain platform verifier — but it
+/// also silently restores the very Android bug the hook exists to fix, and a
 /// silent restoration is not something to discover from a bug report.
-static HTTP: Lazy<Client> = Lazy::new(|| {
-    let builder =
-        Client::builder().user_agent(concat!("unissh-client/", env!("CARGO_PKG_VERSION")));
-    crate::platform_tls::configure(builder)
-        .build()
-        .unwrap_or_else(|e| {
+pub fn http() -> &'static Client {
+    let platform = PLATFORM.get();
+    if let Some(Err(e)) = platform.map(|p| (p.prepare)()) {
+        log::error!("cloud: platform certificate verifier unavailable — {e}");
+    }
+    HTTP.get_or_init(|| {
+        let user_agent = platform.map_or(concat!("unissh/", env!("CARGO_PKG_VERSION")), |p| {
+            p.user_agent.as_str()
+        });
+        let builder = Client::builder().user_agent(user_agent);
+        let builder = match platform {
+            Some(p) => (p.configure)(builder),
+            None => builder,
+        };
+        builder.build().unwrap_or_else(|e| {
             log::error!("cloud: HTTP client build failed ({e}) — falling back to a default client");
             Client::new()
         })
-});
-
-/// The shared blocking client. MUST be called from a blocking context.
-///
-/// Preparing the platform verifier here, ahead of the `HTTP` deref that builds
-/// the client, is the fix for #34. On Android the certificate trust store is
-/// reached over JNI, and a verifier that was never handed the JVM panics — on
-/// reqwest's own internal thread, where the message is thrown away and replaced
-/// by reqwest's secondary "event loop thread panicked". Every cloud call on
-/// Android died there.
-///
-/// It sits in this function rather than in `HTTP`'s initialiser or in `setup()`
-/// for two reasons: the Android activity is not guaranteed to exist before the
-/// first cloud command, and running once per call means a transient failure is
-/// retried instead of being cached with the client for the life of the process.
-/// After the first success it is one atomic load. See `crate::platform_tls`.
-///
-/// The error is logged, not returned: this hands out a `&'static Client` to ~45
-/// call sites, several of which implement infallible core traits and have
-/// nowhere to put one. A failure still ends in a panic further down — but with a
-/// log line naming the real cause, which is exactly what #34 lacked. Making the
-/// whole path fallible is a separate change.
-pub fn http() -> &'static Client {
-    if let Err(e) = crate::platform_tls::init() {
-        log::error!("cloud: platform certificate verifier unavailable — {e}");
-    }
-    &HTTP
+    })
 }
 
 /// base64 STANDARD (padded) — the server's wire encoding for every blob/id.
@@ -90,12 +124,13 @@ pub fn b64(bytes: &[u8]) -> String {
     STANDARD.encode(bytes)
 }
 
+/// Decode base64 STANDARD from the server; a bad payload is `malformed`.
 #[expect(
     clippy::map_err_ignore,
     reason = "the decode error quotes an offending byte of the payload, which may be a token or key material"
 )]
-pub fn unb64(s: &str) -> ApiResult<Vec<u8>> {
-    STANDARD.decode(s.trim()).map_err(|_| ApiError::Server {
+pub fn unb64(s: &str) -> CloudResult<Vec<u8>> {
+    STANDARD.decode(s.trim()).map_err(|_| CloudError::Server {
         code: "malformed".into(),
         message: "invalid base64 from server".into(),
     })
@@ -141,11 +176,11 @@ pub fn url(base_url: &str, path: &str) -> String {
 /// on-path attacker, who can then mint access to the (server-trusted) account.
 /// `http://` is permitted ONLY for loopback hosts (localhost / 127.x / [::1]),
 /// which the integration tests and the local-eval stack use.
-pub fn validate_base_url(base_url: &str) -> ApiResult<()> {
+pub fn validate_base_url(base_url: &str) -> CloudResult<()> {
     let s = base_url.trim();
     if let Some(rest) = s.strip_prefix("https://") {
         return if rest.is_empty() {
-            Err(ApiError::other("server URL is missing a host"))
+            Err(CloudError::other("server URL is missing a host"))
         } else {
             Ok(())
         };
@@ -159,13 +194,13 @@ pub fn validate_base_url(base_url: &str) -> ApiResult<()> {
         return if is_loopback {
             Ok(())
         } else {
-            Err(ApiError::other(format!(
+            Err(CloudError::other(format!(
                 "refusing plaintext http:// to non-loopback host \"{host}\": \
                  use https:// so tokens and data are encrypted in transit"
             )))
         };
     }
-    Err(ApiError::other(
+    Err(CloudError::other(
         "server URL must start with https:// (http:// allowed for localhost only)",
     ))
 }
@@ -182,7 +217,7 @@ pub fn headers(rb: RequestBuilder, bearer: Option<&str>) -> RequestBuilder {
 /// Exchanges a rejected bearer for a fresh one. Installed once at startup by the
 /// app, which is what owns the refresh token; this layer only knows that a call
 /// came back 401 and which bearer it sent.
-type Reauth = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+pub type Reauth = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 static REAUTH: OnceLock<Reauth> = OnceLock::new();
 
 /// Wire up token rotation. Called once during setup; later calls are ignored.
@@ -221,13 +256,13 @@ fn reauth_header(req: &Request, reauth: &Reauth) -> Option<HeaderValue> {
 /// Safe to replay: the server authenticates in its extractor, before any handler
 /// runs, so a request rejected with 401 had no effect to repeat. Once only — a
 /// second 401 is a real authentication problem and must reach the user.
-pub fn send_json(rb: RequestBuilder) -> ApiResult<Value> {
+pub fn send_json(rb: RequestBuilder) -> CloudResult<Value> {
     send_json_reauth(rb, REAUTH.get().cloned())
 }
 
 /// The body of [`send_json`], with the refresher passed in rather than read from
 /// the process-global — so the retry can be tested without installing one.
-fn send_json_reauth(rb: RequestBuilder, reauth: Option<Reauth>) -> ApiResult<Value> {
+fn send_json_reauth(rb: RequestBuilder, reauth: Option<Reauth>) -> CloudResult<Value> {
     let (http, built) = rb.build_split();
     let mut req = built.map_err(transport_err)?;
     let mut attempt: u32 = 0;
@@ -254,14 +289,15 @@ fn send_json_reauth(rb: RequestBuilder, reauth: Option<Reauth>) -> ApiResult<Val
     }
 }
 
-fn finish(resp: Response) -> ApiResult<Value> {
+fn finish(resp: Response) -> CloudResult<Value> {
     let status = resp.status();
     let bytes = resp.bytes().map_err(transport_err)?;
     if status.is_success() {
         if bytes.is_empty() {
             return Ok(Value::Null);
         }
-        serde_json::from_slice(&bytes).map_err(|e| ApiError::other(format!("bad server JSON: {e}")))
+        serde_json::from_slice(&bytes)
+            .map_err(|e| CloudError::other(format!("bad server JSON: {e}")))
     } else {
         Err(envelope_err(status, &bytes))
     }
@@ -276,7 +312,7 @@ fn retry_after_secs(resp: &Response) -> u64 {
         .clamp(1, MAX_RETRY_AFTER_SECS)
 }
 
-fn transport_err(e: reqwest::Error) -> ApiError {
+fn transport_err(e: reqwest::Error) -> CloudError {
     let chain = error_chain(&e);
     // The whole chain goes to the log whatever we end up showing: the line the
     // user can paste is short by necessity, and the one that identifies the
@@ -297,7 +333,7 @@ fn transport_err(e: reqwest::Error) -> ApiError {
         message.push_str(" — ");
         message.push_str(&cause);
     }
-    ApiError::Server {
+    CloudError::Server {
         code: "network".into(),
         message,
     }
@@ -362,9 +398,9 @@ fn tls_hint(chain: &str) -> Option<&'static str> {
     None
 }
 
-/// Map `{error:{code,message,retry_after}}` → `ApiError::Server`. Falls back to the
+/// Map `{error:{code,message,retry_after}}` → `CloudError::Server`. Falls back to the
 /// HTTP status if the body isn't the expected envelope.
-fn envelope_err(status: StatusCode, body: &[u8]) -> ApiError {
+fn envelope_err(status: StatusCode, body: &[u8]) -> CloudError {
     if let Ok(v) = serde_json::from_slice::<Value>(body) {
         if let Some(err) = v.get("error") {
             let code = err
@@ -377,10 +413,10 @@ fn envelope_err(status: StatusCode, body: &[u8]) -> ApiError {
                 .and_then(|m| m.as_str())
                 .unwrap_or("")
                 .to_owned();
-            return ApiError::Server { code, message };
+            return CloudError::Server { code, message };
         }
     }
-    ApiError::Server {
+    CloudError::Server {
         code: format!("http_{}", status.as_u16()),
         message: status.to_string(),
     }
@@ -388,35 +424,38 @@ fn envelope_err(status: StatusCode, body: &[u8]) -> ApiError {
 
 // ---- typed extraction from a JSON response (server contract is fixed) ----
 
-fn missing(key: &str) -> ApiError {
-    ApiError::Server {
+fn missing(key: &str) -> CloudError {
+    CloudError::Server {
         code: "malformed".into(),
         message: format!("server response missing '{key}'"),
     }
 }
 
-pub fn jstr(v: &Value, key: &str) -> ApiResult<String> {
+/// A required string field.
+pub fn jstr(v: &Value, key: &str) -> CloudResult<String> {
     v.get(key)
         .and_then(Value::as_str)
         .map(str::to_owned)
         .ok_or_else(|| missing(key))
 }
 
-pub fn ju64(v: &Value, key: &str) -> ApiResult<u64> {
+/// A required `u64` field.
+pub fn ju64(v: &Value, key: &str) -> CloudResult<u64> {
     v.get(key)
         .and_then(Value::as_u64)
         .ok_or_else(|| missing(key))
 }
 
 /// A `u32` field; a value that does not fit is a malformed response, never truncated.
-pub fn ju32(v: &Value, key: &str) -> ApiResult<u32> {
-    u32::try_from(ju64(v, key)?).map_err(|e| ApiError::Server {
+pub fn ju32(v: &Value, key: &str) -> CloudResult<u32> {
+    u32::try_from(ju64(v, key)?).map_err(|e| CloudError::Server {
         code: "malformed".into(),
         message: format!("server response field '{key}' is out of range: {e}"),
     })
 }
 
-pub fn ji64(v: &Value, key: &str) -> ApiResult<i64> {
+/// A required `i64` field.
+pub fn ji64(v: &Value, key: &str) -> CloudResult<i64> {
     v.get(key)
         .and_then(Value::as_i64)
         .ok_or_else(|| missing(key))
@@ -425,7 +464,7 @@ pub fn ji64(v: &Value, key: &str) -> ApiResult<i64> {
 #[cfg(test)]
 mod field_tests {
     use super::ju32;
-    use crate::error::ApiError;
+    use crate::CloudError;
     use serde_json::json;
 
     /// A hostile server must not wrap a value (e.g. `argon_mem_kib`) under a cap.
@@ -433,7 +472,7 @@ mod field_tests {
     fn ju32_rejects_a_value_above_u32_max() {
         let v = json!({ "argon_mem_kib": u64::from(u32::MAX) + 1 });
         let err = ju32(&v, "argon_mem_kib").unwrap_err();
-        assert!(matches!(&err, ApiError::Server { code, .. } if code == "malformed"));
+        assert!(matches!(&err, CloudError::Server { code, .. } if code == "malformed"));
     }
 
     #[test]
@@ -597,7 +636,7 @@ mod reauth_tests {
     );
     const OK: (&str, &str) = ("200 OK", r#"{"ok":true}"#);
 
-    fn get(base: &str, bearer: &str, reauth: Option<Reauth>) -> ApiResult<Value> {
+    fn get(base: &str, bearer: &str, reauth: Option<Reauth>) -> CloudResult<Value> {
         send_json_reauth(
             headers(http().get(url(base, "/v1/thing")), Some(bearer)),
             reauth,
@@ -648,7 +687,7 @@ mod reauth_tests {
 
         let err = get(&base, "stale-token", Some(reauth)).expect_err("must surface the 401");
         assert!(
-            matches!(&err, ApiError::Server { code, .. } if code == "unauthenticated"),
+            matches!(&err, CloudError::Server { code, .. } if code == "unauthenticated"),
             "the caller sees the server's own error, not a rotation failure: {err:?}"
         );
         assert_eq!(calls.load(Ordering::SeqCst), 1, "rotation attempted once");
@@ -661,7 +700,7 @@ mod reauth_tests {
     fn without_a_refresher_the_401_surfaces_untouched() {
         let (base, seen) = serve(vec![UNAUTH]);
         let err = get(&base, "stale-token", None).expect_err("must surface the 401");
-        assert!(matches!(&err, ApiError::Server { code, .. } if code == "unauthenticated"));
+        assert!(matches!(&err, CloudError::Server { code, .. } if code == "unauthenticated"));
         assert_eq!(
             seen.lock().unwrap().len(),
             1,
@@ -676,7 +715,7 @@ mod reauth_tests {
         let (base, seen) = serve(vec![UNAUTH]);
         let reauth: Reauth = Arc::new(|_| None);
         let err = get(&base, "stale-token", Some(reauth)).expect_err("must surface the 401");
-        assert!(matches!(&err, ApiError::Server { code, .. } if code == "unauthenticated"));
+        assert!(matches!(&err, CloudError::Server { code, .. } if code == "unauthenticated"));
         assert_eq!(seen.lock().unwrap().len(), 1);
     }
 }

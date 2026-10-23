@@ -2,14 +2,21 @@
 //!
 //! Ignored by default (they need the server binary built + free TCP ports). Run:
 //! ```text
-//! cargo build -p unissh-server            # from the workspace root (../../)
-//! cd client/src-tauri && cargo test cloud::tests -- --ignored --nocapture
+//! cargo build -p unissh-server            # from the repository root
+//! cargo test -p unissh-cloud --test live_e2e -- --ignored --nocapture
 //! ```
 //! They exercise the real HTTP/crypto/sync chain the cloud client drives, on the
 //! instance-scoped server (v2): claim (owner + first space) → auth → cloud vault →
 //! one-link invite → a distinct account joins → owner grants it into the vault →
 //! sync push/pull → a second (sibling) device reads the shared secret. Plus the
 //! device-to-device PAKE onboarding path (Path B) and keyless escrow recovery (Path A).
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stderr,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 use std::io::Write;
 use std::net::TcpListener;
@@ -19,8 +26,37 @@ use std::time::{Duration, Instant};
 
 use unissh_ffi::{Core, FfiMemberRole};
 
-use crate::cloud::transport::HttpSyncTransport;
-use crate::cloud::{client, identity};
+use unissh_cloud::transport::HttpSyncTransport;
+use unissh_cloud::{client, identity, onboard};
+
+/// A fresh directory under the system temp dir, removed when dropped.
+///
+/// Not `tempfile`: this crate keeps no dev-dependencies (see its Cargo.toml).
+struct Scratch(std::path::PathBuf);
+
+impl Scratch {
+    fn new() -> Self {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "unissh-cloud-test-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        drop(std::fs::remove_dir_all(&self.0));
+    }
+}
 
 /// The fixed setup code the spawned server boots with (`[setup] code`). Any stable
 /// value works — the test sets it in the config and presents it verbatim on claim.
@@ -29,7 +65,7 @@ const SETUP_CODE: &str = "integration-test-setup-code";
 struct ServerProc {
     child: Child,
     base_url: String,
-    _dir: tempfile::TempDir,
+    _dir: Scratch,
 }
 
 impl Drop for ServerProc {
@@ -47,13 +83,13 @@ impl Drop for ServerProc {
 
 /// Path to the workspace-built server binary (sibling workspace `target/`).
 fn server_binary() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/unissh-server")
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/unissh-server")
 }
 
 /// The server crate dir — its CWD when running, so it can resolve the relative
 /// `./migrations/sqlite` path.
 fn server_dir() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../server")
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../server")
 }
 
 fn free_port() -> u16 {
@@ -76,7 +112,7 @@ fn spawn_server() -> Option<ServerProc> {
         );
         return None;
     }
-    let dir = tempfile::tempdir().ok()?;
+    let dir = Scratch::new();
     let port = free_port();
     let metrics_port = free_port();
     let db_path = dir.path().join("unissh.db");
@@ -158,7 +194,10 @@ fn new_core(dir: &std::path::Path, name: &str) -> Arc<Core> {
 /// Locate an account (by server id) in the owner's `/v1/accounts` listing and return
 /// its `(ed25519_pub_hex, x25519_pub_hex)` — the hex public material that feeds
 /// `add_member` / `pin_vault_genesis_owner`.
-fn account_pubkeys(accounts: &[crate::dto::AccountInfo], account_id: &str) -> (String, String) {
+fn account_pubkeys(
+    accounts: &[unissh_cloud::dto::AccountInfo],
+    account_id: &str,
+) -> (String, String) {
     let a = accounts
         .iter()
         .find(|a| a.account_id == account_id)
@@ -183,7 +222,7 @@ fn live_e2e_claim_invite_join_and_two_device_sync() {
     let http = client::http();
 
     // ── Device A: claim the instance (owner + first space) + login ─────────────
-    let dir_a = tempfile::tempdir().unwrap();
+    let dir_a = Scratch::new();
     let core_a = new_core(dir_a.path(), "a");
     let secret_a = core_a.create_account(None).unwrap();
 
@@ -218,7 +257,7 @@ fn live_e2e_claim_invite_join_and_two_device_sync() {
     assert!(!invite.token.is_empty(), "invite carries a one-shot token");
 
     // ── Device B: a DISTINCT account (its OWN keyset) joins via the invite ──────
-    let dir_b = tempfile::tempdir().unwrap();
+    let dir_b = Scratch::new();
     let core_b = new_core(dir_b.path(), "b");
     let _secret_b = core_b.create_account(None).unwrap();
     let reg_b = core_b.build_registration_request().unwrap();
@@ -319,7 +358,7 @@ fn live_e2e_claim_invite_join_and_two_device_sync() {
     let device_a2 = identity::device_add(http, base, &session_a.access_token)
         .expect("devices/add should succeed");
     let keyset_blob = std::fs::read(dir_a.path().join("a.keyset.bin")).unwrap();
-    let dir_a2 = tempfile::tempdir().unwrap();
+    let dir_a2 = Scratch::new();
     let core_a2 = new_core(dir_a2.path(), "a2");
     core_a2
         .unlock_from_server_blob(keyset_blob, None, secret_a)
@@ -370,7 +409,7 @@ fn live_e2e_path_b_pake_onboarding_shares_account_secret_key() {
     let http = client::http();
 
     // ── Device A: claim the instance + login (existing, authenticated device) ──
-    let dir_a = tempfile::tempdir().unwrap();
+    let dir_a = Scratch::new();
     let core_a = new_core(dir_a.path(), "a");
     let secret_a = core_a.create_account(Some("pw-a".into())).unwrap();
     let reg = core_a.build_registration_request().unwrap();
@@ -392,7 +431,13 @@ fn live_e2e_path_b_pake_onboarding_shares_account_secret_key() {
     let channel_id =
         identity::relay_open(http, &base, &session_a.access_token).expect("relay_open");
     // Shared OOB code (raw bytes — both sides key the PAKE off the same value).
-    let oob = uuid::Uuid::new_v4().as_bytes().to_vec();
+    // Any 16 unpredictable-enough bytes do for a test's pairing code.
+    let oob = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos()
+        .to_be_bytes()
+        .to_vec();
 
     // Initiator runs concurrently (it blocks polling the relay for msg2).
     let initiator = {
@@ -401,29 +446,32 @@ fn live_e2e_path_b_pake_onboarding_shares_account_secret_key() {
         let oob = oob.clone();
         let secret_a = secret_a.clone();
         std::thread::spawn(move || {
-            crate::cloud::onboard::initiator_complete(
-                &core_a,
-                client::http(),
-                &base,
-                &channel_id,
-                oob,
-                secret_a,
-            )
+            onboard::initiator_complete(&core_a, client::http(), &base, &channel_id, oob, secret_a)
         })
     };
 
     // ── Device B (responder): no prior local state ────────────────────────────
-    let dir_b = tempfile::tempdir().unwrap();
+    let dir_b = Scratch::new();
     let core_b = new_core(dir_b.path(), "b");
-    crate::cloud::onboard::responder_join(
+    let mut remembered = None;
+    onboard::responder_join(
         &core_b,
         http,
         &base,
         &channel_id,
         oob,
         Some("pw-b".into()),
+        |key| {
+            remembered = Some(key.to_owned());
+            Ok::<(), unissh_cloud::CloudError>(())
+        },
     )
     .expect("B responder_join should succeed");
+    assert_eq!(
+        remembered.as_deref(),
+        Some(secret_a.as_str()),
+        "B is handed the SHARED account Secret Key to remember"
+    );
     initiator
         .join()
         .unwrap()
@@ -463,7 +511,7 @@ fn live_e2e_escrow_recovery() {
 
     // ── Device A: claim (handle "alice") + login. A password-backed account, so
     //    escrow arms the password+SecretKey sign-in. ───────────────────────────
-    let dir_a = tempfile::tempdir().unwrap();
+    let dir_a = Scratch::new();
     let core_a = new_core(dir_a.path(), "a");
     let secret_a = core_a.create_account(Some("pw-a".into())).unwrap();
     let reg_a = core_a.build_registration_request().unwrap();
@@ -529,7 +577,7 @@ fn live_e2e_escrow_recovery() {
     assert!(generation >= 1, "the escrowed keyset has a generation");
 
     // ── Device C (fresh, no session, no device): keyless recovery by handle ────
-    let dir_c = tempfile::tempdir().unwrap();
+    let dir_c = Scratch::new();
     let core_c = new_core(dir_c.path(), "c");
 
     // Re-derive K_auth with the SERVER-STORED params (enroll/fetch symmetry).

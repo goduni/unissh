@@ -348,8 +348,10 @@ jobs:
 
       # Exercise recovery with real crypto/SQLCipher on every desktop host.
       # Release mode shares compiled dependencies with the bundle build below.
-      - name: Test recovery (Tauri crate)
-        run: cargo test --locked --release --lib cloud::recovery::tests -- --test-threads=1
+      # The code lives in the unissh-cloud crate, a path dependency here: it
+      # has no dev-dependencies precisely so that this workspace can test it.
+      - name: Test recovery (server client crate)
+        run: cargo test --locked --release -p unissh-cloud --lib recovery::tests -- --test-threads=1
         working-directory: client/src-tauri
 
       - name: Test local SFTP file integrity (Tauri crate)
@@ -361,7 +363,7 @@ jobs:
       # wiped around a keyset change. Linux only: there the platform store is
       # absent by design, so a wipe touches nothing but the temp directory; on
       # macOS and Windows the same code would reach the runner's real Keychain
-      # and Windows Hello. Reuses the test binary the two steps above built.
+      # and Windows Hello. Reuses the test binary the SFTP step above built.
       - name: Test biometric unlock logic (Tauri crate)
         if: matrix.platform == 'ubuntu-22.04'
         run: cargo test --locked --release --lib biometric::tests

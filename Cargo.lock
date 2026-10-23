@@ -5259,6 +5259,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "unissh-cloud"
+version = "0.6.1"
+dependencies = [
+ "base64 0.23.1",
+ "log",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
+ "unissh-ffi",
+]
+
+[[package]]
 name = "unissh-crypto"
 version = "0.6.1"
 dependencies = [
