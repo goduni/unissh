@@ -1869,7 +1869,7 @@ impl SystemAgent {
             #[cfg(unix)]
             Self::Uds(c) => c.request_identities().await,
             #[cfg(windows)]
-            SystemAgent::Pipe(c) => c.request_identities().await,
+            Self::Pipe(c) => c.request_identities().await,
         };
         r.map_err(|e| TransportError::SystemAgent(e.to_string()))
     }

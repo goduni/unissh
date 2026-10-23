@@ -41,6 +41,7 @@ export default defineConfig({
             { label: 'Install & prerequisites', slug: 'overview/install' },
             { label: 'Quickstart (local, no server)', slug: 'overview/quickstart' },
             { label: 'Connecting to hosts', slug: 'overview/connecting' },
+            { label: 'Command-line client', slug: 'overview/cli' },
           ],
         },
         {

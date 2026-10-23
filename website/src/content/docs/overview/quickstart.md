@@ -3,7 +3,7 @@ title: Quickstart (local, no server)
 description: Drive the UniSSH core end-to-end from the terminal — create a local vault, generate an SSH key, and connect — with no server and no UI.
 ---
 
-The fastest way to feel UniSSH is the **local, single-device** flow: an encrypted local vault, a generated SSH key, and a real connection — **no server, no sync, no UI**. The core ships a temporary CLI harness (`unissh`, crate `unissh-cli`) that drives the same [FFI facade](../../components/crates/) the desktop client uses.
+The fastest way to feel UniSSH is the **local, single-device** flow: an encrypted local vault, a generated SSH key, and a real connection — **no server, no sync, no UI**. The core ships a harness (`unissh-harness`, crate `unissh-cli`) that drives the same [FFI facade](../../components/crates/) the desktop client uses. It takes secrets as arguments, so it is for trying the core out, not for real keys. To use UniSSH on a machine without a GUI, use the [command-line client](../cli/).
 
 This is a genuinely useful standalone product on its own: a fully working single-device SSH client with an encrypted local store.
 
@@ -15,25 +15,25 @@ You need the [core build prerequisites](../install/): Rust 1.95+, a C toolchain,
 
 ```bash
 # 1) Initialize an identity. Prints the Secret Key (your Emergency Kit) on the last line.
-SK=$(cargo run -p unissh-cli -- init --password pw | tail -1)
+SK=$(cargo run -p unissh-cli --bin unissh-harness -- init --password pw | tail -1)
 
 # 2) Create a local vault.
-cargo run -p unissh-cli -- create-vault \
+cargo run -p unissh-cli --bin unissh-harness -- create-vault \
     --secret-key $SK --password pw --id default --name Default
 
 # 3) Generate an SSH key as an item inside the vault.
 #    The private key is encrypted into the vault; only the public key leaves the core.
-cargo run -p unissh-cli -- gen-key \
+cargo run -p unissh-cli --bin unissh-harness -- gen-key \
     --secret-key $SK --password pw --vault default --item id_ed25519
 
 # 4) Run a command on a host, optionally through a bastion (ProxyJump).
-cargo run -p unissh-cli -- exec \
+cargo run -p unissh-cli --bin unissh-harness -- exec \
     --secret-key $SK --password pw --vault default --item id_ed25519 \
     --host 10.0.0.5 --user deploy --command "uname -a" \
     --jump bastion:22:admin:id_ed25519
 
 # 5) Or open an interactive terminal (PTY).
-cargo run -p unissh-cli -- shell \
+cargo run -p unissh-cli --bin unissh-harness -- shell \
     --secret-key $SK --password pw --vault default --item id_ed25519 \
     --host 10.0.0.5 --user deploy
 ```

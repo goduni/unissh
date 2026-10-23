@@ -186,12 +186,8 @@ pub fn validate_base_url(base_url: &str) -> CloudResult<()> {
         };
     }
     if let Some(rest) = s.strip_prefix("http://") {
-        let host = rest.split('/').next().unwrap_or("").to_ascii_lowercase();
-        let is_loopback = host.starts_with("localhost")
-            || host.starts_with("127.")
-            || host.starts_with("[::1]")
-            || host.starts_with("::1");
-        return if is_loopback {
+        let host = url_host(rest).to_ascii_lowercase();
+        return if is_loopback_host(&host) {
             Ok(())
         } else {
             Err(CloudError::other(format!(
@@ -203,6 +199,26 @@ pub fn validate_base_url(base_url: &str) -> CloudResult<()> {
     Err(CloudError::other(
         "server URL must start with https:// (http:// allowed for localhost only)",
     ))
+}
+
+/// The host of an URL's remainder after `scheme://`: no path, query or
+/// fragment, no `user@`, no port, no brackets around an IPv6 address.
+fn url_host(rest: &str) -> &str {
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    if let Some(v6) = host_port.strip_prefix('[') {
+        return v6.split_once(']').map_or(v6, |(h, _)| h);
+    }
+    host_port.split_once(':').map_or(host_port, |(h, _)| h)
+}
+
+/// `localhost`, or a loopback IP address — the name compared whole, so
+/// `localhost.attacker.example` and `127.attacker.example` are not loopback.
+fn is_loopback_host(host: &str) -> bool {
+    host == "localhost"
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// Attach an optional Bearer to a request builder. The instance is addressed by
@@ -504,6 +520,17 @@ mod base_url_tests {
         assert!(validate_base_url("ftp://cloud.example.com").is_err());
         assert!(validate_base_url("cloud.example.com").is_err());
         assert!(validate_base_url("https://").is_err());
+    }
+
+    /// A name that merely starts like a loopback address is a real host on
+    /// the network, and plaintext to it must be refused.
+    #[test]
+    fn http_to_a_name_that_only_looks_loopback_is_rejected() {
+        assert!(validate_base_url("http://localhost.attacker.example").is_err());
+        assert!(validate_base_url("http://127.attacker.example").is_err());
+        assert!(validate_base_url("http://localhost@attacker.example").is_err());
+        assert!(validate_base_url("http://localhost:8080/v1").is_ok());
+        assert!(validate_base_url("http://127.0.0.2:8443").is_ok());
     }
 }
 
