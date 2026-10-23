@@ -1,7 +1,10 @@
 //! Which shell to start, and who/where we are — the environment facts a local
 //! terminal needs before it can open one.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+// Only the non-Windows shell lookup checks paths.
+#[cfg(not(windows))]
+use std::path::Path;
 
 /// The program a local terminal starts when the user has not named one, plus the
 /// arguments that make it behave the way that platform's users expect.
