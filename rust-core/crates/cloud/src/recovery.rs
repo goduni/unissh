@@ -39,6 +39,37 @@ pub fn install_keyset<E: std::fmt::Debug>(
 mod tests {
     use super::*;
 
+    /// A fresh directory under the system temp dir, removed when dropped.
+    ///
+    /// Not `tempfile`: this crate keeps no dev-dependencies, so that the
+    /// desktop workspace — where it is a path dependency, not a member — can
+    /// run these tests on every desktop OS it ships for.
+    struct Scratch(std::path::PathBuf);
+
+    impl Scratch {
+        fn new() -> Self {
+            use std::sync::atomic::{AtomicU32, Ordering};
+            static NEXT: AtomicU32 = AtomicU32::new(0);
+            let dir = std::env::temp_dir().join(format!(
+                "unissh-cloud-test-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            drop(std::fs::remove_dir_all(&self.0));
+        }
+    }
+
     fn core(dir: &std::path::Path) -> std::sync::Arc<Core> {
         Core::new(
             dir.join("instance.db").to_string_lossy().into_owned(),
@@ -50,11 +81,11 @@ mod tests {
 
     #[test]
     fn recovery_remembers_only_an_installed_identity_and_reopens_offline() {
-        let source = tempfile::tempdir().unwrap();
+        let source = Scratch::new();
         let original = core(source.path());
         let secret = original.create_account(Some("password".into())).unwrap();
         let blob = std::fs::read(source.path().join("instance.keyset.bin")).unwrap();
-        let target = tempfile::tempdir().unwrap();
+        let target = Scratch::new();
         let recovered = core(target.path());
         let mut saved = None;
         install_keyset(
@@ -76,7 +107,7 @@ mod tests {
             .unlock(Some("password".into()), saved.unwrap())
             .unwrap();
 
-        let clean = tempfile::tempdir().unwrap();
+        let clean = Scratch::new();
         assert!(install_keyset(
             &core(clean.path()),
             blob,
@@ -92,10 +123,10 @@ mod tests {
 
     #[test]
     fn unavailable_keychain_keeps_manual_unlock_working() {
-        let source = tempfile::tempdir().unwrap();
+        let source = Scratch::new();
         let secret = core(source.path()).create_account(None).unwrap();
         let blob = std::fs::read(source.path().join("instance.keyset.bin")).unwrap();
-        let target = tempfile::tempdir().unwrap();
+        let target = Scratch::new();
         let recovered = core(target.path());
         install_keyset(&recovered, blob, None, secret.clone(), |_| {
             Err(CloudError::other("unavailable"))
