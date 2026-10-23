@@ -13,7 +13,7 @@ use crate::failure::{Failure, Res};
 use crate::home::Home;
 use crate::hosts::{self, Host};
 use crate::server;
-use crate::tty::Tty;
+use crate::tty::{one_line, Tty};
 
 /// How long the list may sit unanswered before the instance locks.
 pub const IDLE_LOCK: Duration = Duration::from_secs(15 * 60);
@@ -38,7 +38,9 @@ pub fn run(home: Home, credentials: &Credentials, offline: bool) -> Res<u8> {
     loop {
         let all = hosts::load(&device.core)?;
         let shown = hosts::filter(&all, filter.as_deref(), None);
-        if shown.is_empty() {
+        if let (true, Some(text)) = (shown.is_empty(), &filter) {
+            tty.say(&format!("Nothing matches \"{}\".\n", one_line(text)))?;
+        } else if shown.is_empty() {
             tty.say("No hosts here yet — add them in the UniSSH app, then sync.\n")?;
         } else {
             tty.say(&hosts::table(&shown, true))?;
