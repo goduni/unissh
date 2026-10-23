@@ -134,7 +134,7 @@ fn default_program() -> String {
             return found;
         }
     }
-    std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".to_string())
+    std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".to_owned())
 }
 
 /// First match for `name` on `PATH`. Only used on Windows, where the candidates
@@ -145,7 +145,7 @@ fn which(name: &str) -> Option<String> {
     std::env::split_paths(&path)
         .map(|dir| dir.join(name))
         .find(|p| p.is_file())
-        .map(|p| p.to_string_lossy().to_string())
+        .map(|p| p.to_string_lossy().into_owned())
 }
 
 #[cfg(target_os = "macos")]
@@ -153,7 +153,7 @@ fn default_args() -> Vec<String> {
     // A login shell is the norm on macOS: Terminal.app and iTerm both start one,
     // and without it `~/.zprofile` — where Homebrew puts the PATH — never runs,
     // so half the user's tools would appear to be missing.
-    vec!["-l".to_string()]
+    vec!["-l".to_owned()]
 }
 
 #[cfg(not(target_os = "macos"))]

@@ -1654,10 +1654,9 @@ impl InFlight {
 
     /// Waits up to `timeout` for every write to finish; `false` on timeout.
     fn wait_idle(&self, timeout: std::time::Duration) -> bool {
-        let count = lock_recover(&self.count);
         let (count, waited) = self
             .idle
-            .wait_timeout_while(count, timeout, |n| *n > 0)
+            .wait_timeout_while(lock_recover(&self.count), timeout, |n| *n > 0)
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         drop(count);
         !waited.timed_out()
