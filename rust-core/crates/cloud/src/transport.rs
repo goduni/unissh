@@ -12,7 +12,7 @@ use std::sync::Mutex;
 use serde_json::{json, Value};
 use unissh_ffi::{FfiError, FfiSyncTransport, SyncDeltaItem};
 
-use crate::cloud::client;
+use crate::client;
 
 /// Page size for `/v1/sync/delta` (server clamps to its max, default 1000).
 const DELTA_LIMIT: u64 = 1000;
@@ -46,11 +46,14 @@ pub struct HttpSyncTransport {
 pub struct CatalogEntry {
     /// hex vault_id.
     pub vault_id: String,
+    /// Highest version of the vault record the server holds.
     pub latest_version: i64,
+    /// The server's latest record is a deletion.
     pub tombstone: bool,
 }
 
 impl HttpSyncTransport {
+    /// A transport for one sync against `base_url`, authenticated with `bearer`.
     pub const fn new(base_url: String, bearer: String) -> Self {
         Self {
             base_url,

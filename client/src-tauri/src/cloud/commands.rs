@@ -85,7 +85,7 @@ async fn try_refresh_spaces_cache(state: &AppState, server_id: &str) -> ApiResul
     let base_url = cfg.base_url;
     let spaces = blocking_api(move || {
         let http = client::http();
-        identity::list_spaces(http, &base_url, &access)
+        identity::list_spaces(http, &base_url, &access).map_err(ApiError::from)
     })
     .await?;
     let entries = spaces
@@ -106,7 +106,7 @@ async fn best_effort_logout(cfg: ServerConfig, access: String) {
     let sid = cfg.server_id.clone();
     let result = blocking_api(move || {
         let http = client::http();
-        identity::logout(http, &cfg.base_url, &access)
+        identity::logout(http, &cfg.base_url, &access).map_err(ApiError::from)
     })
     .await;
     if let Err(e) = result {
@@ -264,7 +264,7 @@ pub async fn server_join(
     let core = state.core.clone();
     let session = blocking_api(move || {
         let http = client::http();
-        identity::login(http, &base_url, &core, &account_id, &device_id)
+        identity::login(http, &base_url, &core, &account_id, &device_id).map_err(ApiError::from)
     })
     .await?;
     state
@@ -303,7 +303,7 @@ pub async fn server_claim(
     let outcome = blocking_api(move || {
         let http = client::http();
         let reg = core.build_registration_request().map_err(ApiError::from)?;
-        identity::claim(http, &base, &code, reg, dn, hd, sn)
+        identity::claim(http, &base, &code, reg, dn, hd, sn).map_err(ApiError::from)
     })
     .await?;
 
@@ -333,7 +333,7 @@ pub async fn server_claim(
     let core = state.core.clone();
     let session = blocking_api(move || {
         let http = client::http();
-        identity::login(http, &base_url, &core, &account_id, &device_id)
+        identity::login(http, &base_url, &core, &account_id, &device_id).map_err(ApiError::from)
     })
     .await?;
     state
@@ -458,6 +458,7 @@ pub async fn server_login(
     let session = blocking_api(move || {
         let http = client::http();
         identity::login(http, &cfg.base_url, &core, &cfg.account_id, &cfg.device_id)
+            .map_err(ApiError::from)
     })
     .await?;
     state
@@ -482,7 +483,7 @@ pub async fn server_refresh_session(
     })?;
     let session = blocking_api(move || {
         let http = client::http();
-        identity::refresh(http, &cfg.base_url, &refresh_token)
+        identity::refresh(http, &cfg.base_url, &refresh_token).map_err(ApiError::from)
     })
     .await?;
     state
@@ -539,7 +540,7 @@ pub async fn server_join_preview(
     client::validate_base_url(&base_url)?;
     blocking_api(move || {
         let http = client::http();
-        identity::join_preview(http, &base_url, &token)
+        identity::join_preview(http, &base_url, &token).map_err(ApiError::from)
     })
     .await
 }
@@ -554,7 +555,7 @@ pub async fn server_device_add(
     let access = require_access(&state, server_id.as_deref())?;
     blocking_api(move || {
         let http = client::http();
-        identity::device_add(http, &cfg.base_url, &access)
+        identity::device_add(http, &cfg.base_url, &access).map_err(ApiError::from)
     })
     .await
 }
@@ -569,7 +570,7 @@ pub async fn server_list_devices(
     let access = require_access(&state, server_id.as_deref())?;
     blocking_api(move || {
         let http = client::http();
-        identity::device_list(http, &cfg.base_url, &access)
+        identity::device_list(http, &cfg.base_url, &access).map_err(ApiError::from)
     })
     .await
 }
@@ -585,7 +586,7 @@ pub async fn server_device_revoke(
     let access = require_access(&state, server_id.as_deref())?;
     blocking_api(move || {
         let http = client::http();
-        identity::device_revoke(http, &cfg.base_url, &access, &device_id)
+        identity::device_revoke(http, &cfg.base_url, &access, &device_id).map_err(ApiError::from)
     })
     .await
 }
@@ -606,7 +607,7 @@ pub async fn server_account_profile(
     let hd = handle.clone();
     blocking_api(move || {
         let http = client::http();
-        identity::account_profile(http, &base, &access, dn, hd)
+        identity::account_profile(http, &base, &access, dn, hd).map_err(ApiError::from)
     })
     .await?;
     if handle.is_some() {
@@ -1037,7 +1038,7 @@ pub async fn server_list_accounts(
     let access = require_access(&state, server_id.as_deref())?;
     blocking_api(move || {
         let http = client::http();
-        identity::list_accounts(http, &cfg.base_url, &access)
+        identity::list_accounts(http, &cfg.base_url, &access).map_err(ApiError::from)
     })
     .await
 }
@@ -1194,6 +1195,7 @@ pub async fn server_invite(
     blocking_api(move || {
         let http = client::http();
         identity::invite(http, &cfg.base_url, &access, &space_id, &role, ttl_seconds)
+            .map_err(ApiError::from)
     })
     .await
 }
@@ -1208,7 +1210,7 @@ pub async fn server_list_spaces(
     let access = require_access(&state, server_id.as_deref())?;
     blocking_api(move || {
         let http = client::http();
-        identity::list_spaces(http, &cfg.base_url, &access)
+        identity::list_spaces(http, &cfg.base_url, &access).map_err(ApiError::from)
     })
     .await
 }
@@ -1225,7 +1227,7 @@ pub async fn server_create_space(
     let access = require_access(&state, server_id.as_deref())?;
     blocking_api(move || {
         let http = client::http();
-        identity::create_space(http, &cfg.base_url, &access, &name)
+        identity::create_space(http, &cfg.base_url, &access, &name).map_err(ApiError::from)
     })
     .await
 }
@@ -1245,6 +1247,7 @@ pub async fn server_add_space_member(
     blocking_api(move || {
         let http = client::http();
         identity::add_space_member(http, &cfg.base_url, &access, &space_id, &account_id, &role)
+            .map_err(ApiError::from)
     })
     .await
 }
@@ -1260,7 +1263,7 @@ pub async fn server_directory(
     let access = require_access(&state, server_id.as_deref())?;
     blocking_api(move || {
         let http = client::http();
-        identity::directory(http, &cfg.base_url, &access)
+        identity::directory(http, &cfg.base_url, &access).map_err(ApiError::from)
     })
     .await
 }
@@ -1278,7 +1281,7 @@ pub async fn server_pending(
     let access = require_access(&state, server_id.as_deref())?;
     blocking_api(move || {
         let http = client::http();
-        identity::pending(http, &cfg.base_url, &access)
+        identity::pending(http, &cfg.base_url, &access).map_err(ApiError::from)
     })
     .await
 }
@@ -1301,6 +1304,7 @@ pub async fn server_attestations_put(
         let signature = client::unb64(&signature)?;
         let http = client::http();
         identity::attestation_put(http, &cfg.base_url, &access, &account_id, &blob, &signature)
+            .map_err(ApiError::from)
     })
     .await
 }
@@ -1318,6 +1322,7 @@ pub async fn server_attestations_list(
     blocking_api(move || {
         let http = client::http();
         identity::attestations_list(http, &cfg.base_url, &access, &account_id)
+            .map_err(ApiError::from)
     })
     .await
 }
@@ -1363,6 +1368,7 @@ pub async fn server_keyset_push(
         };
         let http = client::http();
         identity::keyset_put(http, &cfg.base_url, &access, &blob, Some(&escrow))
+            .map_err(ApiError::from)
     })
     .await
 }
@@ -1595,6 +1601,7 @@ pub async fn server_import_keyset_and_unlock(
                 secret_key_hex,
                 crate::keychain::save_secret_key_now,
             )
+            .map_err(ApiError::from)
         },
     ))
     .await?;
@@ -1662,6 +1669,7 @@ pub async fn server_onboard_complete(
         let http = client::http();
         let code = client::unb64(&oob_code)?;
         onboard::initiator_complete(&core, http, &base, &channel_id, code, secret_key_hex)
+            .map_err(ApiError::from)
     })
     .await
 }
@@ -1699,7 +1707,15 @@ pub async fn server_onboard_join(
         move || {
             let http = client::http();
             let code = client::unb64(&oob_code)?;
-            onboard::responder_join(&core_pake, http, &base, &channel, code, password)?;
+            onboard::responder_join(
+                &core_pake,
+                http,
+                &base,
+                &channel,
+                code,
+                password,
+                crate::keychain::save_secret_key_now,
+            )?;
             Ok(())
         },
     ))
@@ -1729,7 +1745,7 @@ pub async fn server_onboard_join(
     // 3) Sign in (the shared keyset, now installed, signs the challenge).
     let session = blocking_api(move || {
         let http = client::http();
-        identity::login(http, &base_url, &core, &account_id, &device_id)
+        identity::login(http, &base_url, &core, &account_id, &device_id).map_err(ApiError::from)
     })
     .await?;
     state
@@ -1754,7 +1770,7 @@ pub async fn server_audit_query(
     let access = require_access(&state, server_id.as_deref())?;
     blocking_api(move || {
         let http = client::http();
-        identity::audit_query(http, &cfg.base_url, &access, since_seq)
+        identity::audit_query(http, &cfg.base_url, &access, since_seq).map_err(ApiError::from)
     })
     .await
 }

@@ -2,8 +2,8 @@
 //!
 //! Ignored by default (they need the server binary built + free TCP ports). Run:
 //! ```text
-//! cargo build -p unissh-server            # from the workspace root (../../)
-//! cd client/src-tauri && cargo test cloud::tests -- --ignored --nocapture
+//! cargo build -p unissh-server            # from the repository root
+//! cargo test -p unissh-cloud --test live_e2e -- --ignored --nocapture
 //! ```
 //! They exercise the real HTTP/crypto/sync chain the cloud client drives, on the
 //! instance-scoped server (v2): claim (owner + first space) → auth → cloud vault →
@@ -19,8 +19,8 @@ use std::time::{Duration, Instant};
 
 use unissh_ffi::{Core, FfiMemberRole};
 
-use crate::cloud::transport::HttpSyncTransport;
-use crate::cloud::{client, identity};
+use unissh_cloud::transport::HttpSyncTransport;
+use unissh_cloud::{client, identity, onboard};
 
 /// The fixed setup code the spawned server boots with (`[setup] code`). Any stable
 /// value works — the test sets it in the config and presents it verbatim on claim.
@@ -47,13 +47,13 @@ impl Drop for ServerProc {
 
 /// Path to the workspace-built server binary (sibling workspace `target/`).
 fn server_binary() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/unissh-server")
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/unissh-server")
 }
 
 /// The server crate dir — its CWD when running, so it can resolve the relative
 /// `./migrations/sqlite` path.
 fn server_dir() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../server")
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../server")
 }
 
 fn free_port() -> u16 {
@@ -158,7 +158,10 @@ fn new_core(dir: &std::path::Path, name: &str) -> Arc<Core> {
 /// Locate an account (by server id) in the owner's `/v1/accounts` listing and return
 /// its `(ed25519_pub_hex, x25519_pub_hex)` — the hex public material that feeds
 /// `add_member` / `pin_vault_genesis_owner`.
-fn account_pubkeys(accounts: &[crate::dto::AccountInfo], account_id: &str) -> (String, String) {
+fn account_pubkeys(
+    accounts: &[unissh_cloud::dto::AccountInfo],
+    account_id: &str,
+) -> (String, String) {
     let a = accounts
         .iter()
         .find(|a| a.account_id == account_id)
@@ -401,29 +404,32 @@ fn live_e2e_path_b_pake_onboarding_shares_account_secret_key() {
         let oob = oob.clone();
         let secret_a = secret_a.clone();
         std::thread::spawn(move || {
-            crate::cloud::onboard::initiator_complete(
-                &core_a,
-                client::http(),
-                &base,
-                &channel_id,
-                oob,
-                secret_a,
-            )
+            onboard::initiator_complete(&core_a, client::http(), &base, &channel_id, oob, secret_a)
         })
     };
 
     // ── Device B (responder): no prior local state ────────────────────────────
     let dir_b = tempfile::tempdir().unwrap();
     let core_b = new_core(dir_b.path(), "b");
-    crate::cloud::onboard::responder_join(
+    let mut remembered = None;
+    onboard::responder_join(
         &core_b,
         http,
         &base,
         &channel_id,
         oob,
         Some("pw-b".into()),
+        |key| {
+            remembered = Some(key.to_owned());
+            Ok::<(), unissh_cloud::CloudError>(())
+        },
     )
     .expect("B responder_join should succeed");
+    assert_eq!(
+        remembered.as_deref(),
+        Some(secret_a.as_str()),
+        "B is handed the SHARED account Secret Key to remember"
+    );
     initiator
         .join()
         .unwrap()

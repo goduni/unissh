@@ -1,26 +1,21 @@
 //! Cloud server integration.
 //!
-//! The core (`unissh_ffi`) is deliberately network-less: it supplies every crypto
-//! primitive and the sync engine, but the HTTP/relay client must be provided by
-//! the caller. This module is that client — the Tauri backend's bridge to a
-//! self-hosted UniSSH server (`/v1`, JSON over TLS).
+//! The wire — HTTP client, API calls, sync transport, pairing relay — is the
+//! shared `unissh-cloud` crate, re-exported here under the module names the app
+//! has always used. What stays in the app is what only the app has: the Tauri
+//! commands, the multi-server link set with its refresh tokens in the OS
+//! keychain, and the browser-based SSO flow.
 //!
 //! Server access is **optional and additive**: local mode (offline Secret
 //! Key unlock) works without it. All identifiers/blobs on the wire are base64
 //! STANDARD, as on the server. The Bearer token is held in-process (access — in memory,
 //! refresh — in the OS keychain); raw keyset/signature blobs are built exclusively by the core.
 
-pub mod client;
+pub use unissh_cloud::{client, identity, onboard, recovery, transport};
+
 pub mod commands;
 pub mod config;
-pub mod identity;
 pub mod oidc;
-pub mod onboard;
-mod recovery;
 pub mod tokens;
-pub mod transport;
-
-#[cfg(test)]
-mod tests;
 
 pub use config::{CloudState, ServerList, ServerStatus};

@@ -9,9 +9,9 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use unissh_ffi as ffi;
 
-use crate::cloud::client;
+use crate::client;
 use crate::dto;
-use crate::error::{ApiError, ApiResult};
+use crate::{CloudError, CloudResult};
 
 /// Client-chosen key identifier echoed in the auth challenge. The server stores
 /// and echoes it verbatim (it never interprets it), and the device signs over the
@@ -21,7 +21,9 @@ const KEY_ID: &[u8] = b"unissh-keyset-v1";
 /// Result of `claim` — the server-assigned identity for a freshly claimed instance.
 /// The claimer becomes the instance owner and gets a first space.
 pub struct ClaimOutcome {
+    /// The owner account (base64).
     pub account_id: String,
+    /// The claiming device (base64).
     pub device_id: String,
     /// The first space created for the owner (cloud-vault binding label).
     pub space_id: String,
@@ -32,7 +34,9 @@ pub struct ClaimOutcome {
 /// Result of `join` — the server-assigned identity plus the spaces the invite
 /// granted (space ids, base64). May reuse an existing account (reattach).
 pub struct JoinOutcome {
+    /// The joined account (base64).
     pub account_id: String,
+    /// The joining device (base64).
     pub device_id: String,
     /// Space ids (base64) this join was granted membership in.
     pub spaces: Vec<String>,
@@ -42,8 +46,11 @@ pub struct JoinOutcome {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JoinPreviewSpace {
+    /// Space id (base64).
     pub space_id: String,
+    /// Human name of the space.
     pub name: String,
+    /// The role the invite grants in it.
     pub role: String,
 }
 
@@ -51,7 +58,9 @@ pub struct JoinPreviewSpace {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JoinPreview {
+    /// Human name of the instance, if set.
     pub instance_name: Option<String>,
+    /// The spaces the invite grants.
     pub spaces: Vec<JoinPreviewSpace>,
 }
 
@@ -61,7 +70,9 @@ pub struct JoinPreview {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OidcInstanceInfo {
+    /// IdP issuer URL.
     pub issuer: String,
+    /// Public OIDC client id.
     pub client_id: String,
 }
 
@@ -87,7 +98,9 @@ pub struct InstanceInfo {
 /// mirroring `join` (a returning SSO identity reuses its account; each login is a
 /// fresh device).
 pub struct OidcOutcome {
+    /// The SSO account (base64).
     pub account_id: String,
+    /// The device this login created (base64).
     pub device_id: String,
     /// Space ids (base64) the group→space mapping provisioned this login into.
     pub spaces: Vec<String>,
@@ -96,12 +109,14 @@ pub struct OidcOutcome {
 /// Session tokens minted by `auth/verify` / `session/refresh`. (Token expiries are
 /// also returned by the server and will be consumed by the Phase-5 auto-refresh.)
 pub struct SessionTokens {
+    /// Short-lived bearer for API calls.
     pub access_token: String,
+    /// Single-use token that rotates the pair.
     pub refresh_token: String,
 }
 
 impl SessionTokens {
-    fn from_value(v: &Value) -> ApiResult<Self> {
+    fn from_value(v: &Value) -> CloudResult<Self> {
         Ok(Self {
             access_token: client::jstr(v, "access_token")?,
             refresh_token: client::jstr(v, "refresh_token")?,
@@ -109,7 +124,7 @@ impl SessionTokens {
     }
 }
 
-fn claim_outcome(v: &Value) -> ApiResult<ClaimOutcome> {
+fn claim_outcome(v: &Value) -> CloudResult<ClaimOutcome> {
     Ok(ClaimOutcome {
         account_id: client::jstr(v, "account_id")?,
         device_id: client::jstr(v, "device_id")?,
@@ -118,7 +133,7 @@ fn claim_outcome(v: &Value) -> ApiResult<ClaimOutcome> {
     })
 }
 
-fn join_outcome(v: &Value) -> ApiResult<JoinOutcome> {
+fn join_outcome(v: &Value) -> CloudResult<JoinOutcome> {
     let spaces = v
         .get("spaces")
         .and_then(Value::as_array)
@@ -146,7 +161,7 @@ pub fn claim(
     display_name: Option<String>,
     handle: Option<String>,
     space_name: Option<String>,
-) -> ApiResult<ClaimOutcome> {
+) -> CloudResult<ClaimOutcome> {
     let body = json!({
         "setup_code": setup_code,
         "registration_payload": client::b64(&reg.payload),
@@ -173,7 +188,7 @@ pub fn join(
     binding_mac: Option<&[u8]>,
     display_name: Option<String>,
     handle: Option<String>,
-) -> ApiResult<JoinOutcome> {
+) -> CloudResult<JoinOutcome> {
     let body = json!({
         "invite_token": invite_token,
         "registration_payload": client::b64(&reg.payload),
@@ -190,7 +205,7 @@ pub fn join(
 
 /// `POST /v1/join/preview` — resolve an invite's spaces (with names) WITHOUT
 /// consuming it. POST (not GET) so the secret token never lands in a URL/query log.
-pub fn join_preview(http: &Client, base_url: &str, token: &str) -> ApiResult<JoinPreview> {
+pub fn join_preview(http: &Client, base_url: &str, token: &str) -> CloudResult<JoinPreview> {
     let body = json!({ "token": token });
     let v = client::send_json(
         client::headers(http.post(client::url(base_url, "/v1/join/preview")), None).json(&body),
@@ -222,7 +237,7 @@ pub fn join_preview(http: &Client, base_url: &str, token: &str) -> ApiResult<Joi
 /// `GET /v1/instance` — public instance descriptor (claimed?, name, version,
 /// instance_id, auth methods). No auth. Used to learn the opaque `instance_id`
 /// on a join (the join response carries only account/device/spaces).
-pub fn instance_info(http: &Client, base_url: &str) -> ApiResult<InstanceInfo> {
+pub fn instance_info(http: &Client, base_url: &str) -> CloudResult<InstanceInfo> {
     let v = client::send_json(client::headers(
         http.get(client::url(base_url, "/v1/instance")),
         None,
@@ -277,7 +292,7 @@ pub fn oidc_callback(
     base_url: &str,
     id_token: &str,
     reg: ffi::RegistrationRequest,
-) -> ApiResult<(OidcOutcome, SessionTokens)> {
+) -> CloudResult<(OidcOutcome, SessionTokens)> {
     let body = json!({
         "id_token": id_token,
         "registration_payload": client::b64(&reg.payload),
@@ -314,7 +329,7 @@ pub fn login(
     core: &ffi::Core,
     account_id_b64: &str,
     device_id_b64: &str,
-) -> ApiResult<SessionTokens> {
+) -> CloudResult<SessionTokens> {
     let chal_body = json!({
         "account_id": account_id_b64,
         "device_id": device_id_b64,
@@ -335,7 +350,7 @@ pub fn login(
     let expiry = client::ju64(&chal, "expiry")?;
     let sig = core
         .sign_server_challenge_raw(host, account_id, device_id, key_id, nonce, expiry)
-        .map_err(ApiError::from)?;
+        .map_err(CloudError::from)?;
 
     // Echo the challenge object verbatim — its field names/values must match what
     // the server issued, byte-for-byte, or verification fails.
@@ -348,7 +363,7 @@ pub fn login(
 }
 
 /// `POST /v1/session/refresh` — rotate access+refresh (same session). No Bearer.
-pub fn refresh(http: &Client, base_url: &str, refresh_token: &str) -> ApiResult<SessionTokens> {
+pub fn refresh(http: &Client, base_url: &str, refresh_token: &str) -> CloudResult<SessionTokens> {
     let body = json!({ "refresh_token": refresh_token });
     let v = client::send_json(
         client::headers(
@@ -361,7 +376,7 @@ pub fn refresh(http: &Client, base_url: &str, refresh_token: &str) -> ApiResult<
 }
 
 /// `POST /v1/session/logout` (Bearer) — revoke the calling session. 204.
-pub fn logout(http: &Client, base_url: &str, access: &str) -> ApiResult<()> {
+pub fn logout(http: &Client, base_url: &str, access: &str) -> CloudResult<()> {
     client::send_json(client::headers(
         http.post(client::url(base_url, "/v1/session/logout")),
         Some(access),
@@ -375,7 +390,7 @@ pub fn device_revoke(
     base_url: &str,
     access: &str,
     device_id_b64: &str,
-) -> ApiResult<()> {
+) -> CloudResult<()> {
     let body = json!({ "device_id": device_id_b64 });
     client::send_json(
         client::headers(
@@ -389,7 +404,7 @@ pub fn device_revoke(
 
 /// `POST /v1/devices/add` (Bearer) — add a sibling device under the caller's
 /// account (shared keyset). Returns the new `device_id` (base64).
-pub fn device_add(http: &Client, base_url: &str, access: &str) -> ApiResult<String> {
+pub fn device_add(http: &Client, base_url: &str, access: &str) -> CloudResult<String> {
     let v = client::send_json(client::headers(
         http.post(client::url(base_url, "/v1/devices/add")),
         Some(access),
@@ -398,7 +413,11 @@ pub fn device_add(http: &Client, base_url: &str, access: &str) -> ApiResult<Stri
 }
 
 /// `GET /v1/devices` (Bearer) — list the caller's own account devices.
-pub fn device_list(http: &Client, base_url: &str, access: &str) -> ApiResult<Vec<dto::DeviceInfo>> {
+pub fn device_list(
+    http: &Client,
+    base_url: &str,
+    access: &str,
+) -> CloudResult<Vec<dto::DeviceInfo>> {
     let v = client::send_json(client::headers(
         http.get(client::url(base_url, "/v1/devices")),
         Some(access),
@@ -406,7 +425,7 @@ pub fn device_list(http: &Client, base_url: &str, access: &str) -> ApiResult<Vec
     let devices = v
         .get("devices")
         .and_then(Value::as_array)
-        .ok_or_else(|| ApiError::Server {
+        .ok_or_else(|| CloudError::Server {
             code: "malformed".into(),
             message: "devices response missing 'devices'".into(),
         })?;
@@ -436,7 +455,7 @@ pub fn account_profile(
     access: &str,
     display_name: Option<String>,
     handle: Option<String>,
-) -> ApiResult<()> {
+) -> CloudResult<()> {
     let body = json!({ "display_name": display_name, "handle": handle });
     client::send_json(
         client::headers(
@@ -455,18 +474,18 @@ pub fn list_accounts(
     http: &Client,
     base_url: &str,
     access: &str,
-) -> ApiResult<Vec<dto::AccountInfo>> {
+) -> CloudResult<Vec<dto::AccountInfo>> {
     let v = client::send_json(client::headers(
         http.get(client::url(base_url, "/v1/accounts")),
         Some(access),
     ))?;
-    let accounts = v
-        .get("accounts")
-        .and_then(Value::as_array)
-        .ok_or_else(|| ApiError::Server {
-            code: "malformed".into(),
-            message: "accounts response missing 'accounts'".into(),
-        })?;
+    let accounts =
+        v.get("accounts")
+            .and_then(Value::as_array)
+            .ok_or_else(|| CloudError::Server {
+                code: "malformed".into(),
+                message: "accounts response missing 'accounts'".into(),
+            })?;
     let to_hex_field = |a: &Value, key: &str| -> Option<String> {
         a.get(key)
             .and_then(|x| x.as_str())
@@ -504,10 +523,15 @@ pub fn list_accounts(
 /// — so a fresh device holding just the password + Secret Key can re-derive `K_auth`
 /// (via `escrow_params` + `Core::derive_escrow_auth_with_params`) and fetch the blob.
 pub struct EscrowEnroll {
+    /// The escrow retrieval credential (the server keeps only its hash).
     pub k_auth: Vec<u8>,
+    /// Argon2id salt `k_auth` was derived with.
     pub argon_salt: Vec<u8>,
+    /// Argon2id memory cost, KiB.
     pub argon_mem_kib: u32,
+    /// Argon2id iterations.
     pub argon_iterations: u32,
+    /// Argon2id lanes.
     pub argon_parallelism: u32,
 }
 
@@ -523,7 +547,7 @@ pub fn keyset_put(
     access: &str,
     keyset_blob: &[u8],
     escrow: Option<&EscrowEnroll>,
-) -> ApiResult<i64> {
+) -> CloudResult<i64> {
     let mut body = json!({ "keyset_blob": client::b64(keyset_blob) });
     if let Some(e) = escrow {
         if let Some(fields) = body.as_object_mut() {
@@ -546,7 +570,7 @@ pub fn keyset_put(
 }
 
 /// `GET /v1/keyset` (Bearer) — pull the escrowed keyset blob. Returns `(blob, generation)`.
-pub fn keyset_get(http: &Client, base_url: &str, access: &str) -> ApiResult<(Vec<u8>, i64)> {
+pub fn keyset_get(http: &Client, base_url: &str, access: &str) -> CloudResult<(Vec<u8>, i64)> {
     let v = client::send_json(client::headers(
         http.get(client::url(base_url, "/v1/keyset")),
         Some(access),
@@ -560,7 +584,7 @@ pub fn keyset_get(http: &Client, base_url: &str, access: &str) -> ApiResult<(Vec
 
 /// `POST /v1/relay/open` (Bearer) — open a device-to-device PAKE relay channel.
 /// Returns the channel id (base64).
-pub fn relay_open(http: &Client, base_url: &str, access: &str) -> ApiResult<String> {
+pub fn relay_open(http: &Client, base_url: &str, access: &str) -> CloudResult<String> {
     let v = client::send_json(client::headers(
         http.post(client::url(base_url, "/v1/relay/open")),
         Some(access),
@@ -576,7 +600,7 @@ pub fn relay_post(
     channel_id_b64: &str,
     slot: &str,
     msg: &[u8],
-) -> ApiResult<()> {
+) -> CloudResult<()> {
     let mut body = serde_json::Map::new();
     body.insert(
         "channel_id".to_owned(),
@@ -600,7 +624,7 @@ pub fn relay_poll(
     base_url: &str,
     channel_id_b64: &str,
     want: &str,
-) -> ApiResult<Option<Vec<u8>>> {
+) -> CloudResult<Option<Vec<u8>>> {
     let path = format!(
         "/v1/relay/poll?channel_id={}&want={}",
         client::enc_query(channel_id_b64),
@@ -626,7 +650,7 @@ pub fn audit_query(
     base_url: &str,
     access: &str,
     since_seq: Option<i64>,
-) -> ApiResult<Vec<dto::AuditEntry>> {
+) -> CloudResult<Vec<dto::AuditEntry>> {
     let path = match since_seq {
         Some(s) => format!("/v1/audit?since_seq={s}"),
         None => "/v1/audit".to_owned(),
@@ -638,7 +662,7 @@ pub fn audit_query(
     let entries = v
         .get("entries")
         .and_then(Value::as_array)
-        .ok_or_else(|| ApiError::Server {
+        .ok_or_else(|| CloudError::Server {
             code: "malformed".into(),
             message: "audit response missing 'entries'".into(),
         })?;
@@ -665,10 +689,10 @@ pub fn audit_query(
 
 /// Extract a named array from a response, mapping a missing key to a 'malformed'
 /// server error (the fixed contract guarantees the field on 2xx).
-fn arr<'a>(v: &'a Value, key: &str) -> ApiResult<&'a Vec<Value>> {
+fn arr<'a>(v: &'a Value, key: &str) -> CloudResult<&'a Vec<Value>> {
     v.get(key)
         .and_then(Value::as_array)
-        .ok_or_else(|| ApiError::Server {
+        .ok_or_else(|| CloudError::Server {
             code: "malformed".into(),
             message: format!("server response missing '{key}'"),
         })
@@ -685,7 +709,7 @@ pub fn invite(
     space_id: &str,
     role: &str,
     ttl_seconds: Option<i64>,
-) -> ApiResult<dto::InviteInfo> {
+) -> CloudResult<dto::InviteInfo> {
     let body = json!({
         "space_intents": [{ "space_id": space_id, "role": role }],
         "ttl_seconds": ttl_seconds,
@@ -703,7 +727,11 @@ pub fn invite(
 
 /// `GET /v1/spaces` (Bearer) — the caller's own space memberships, each tagged with
 /// the caller's server-trusted role.
-pub fn list_spaces(http: &Client, base_url: &str, access: &str) -> ApiResult<Vec<dto::SpaceInfo>> {
+pub fn list_spaces(
+    http: &Client,
+    base_url: &str,
+    access: &str,
+) -> CloudResult<Vec<dto::SpaceInfo>> {
     let v = client::send_json(client::headers(
         http.get(client::url(base_url, "/v1/spaces")),
         Some(access),
@@ -743,7 +771,7 @@ pub fn claim_vault(
     access: &str,
     vault_id_b64: &str,
     space_id: &str,
-) -> ApiResult<bool> {
+) -> CloudResult<bool> {
     let body = json!({ "vault_id": vault_id_b64, "space_id": space_id });
     let resp = client::send_json(
         client::headers(
@@ -759,7 +787,12 @@ pub fn claim_vault(
 
 /// `POST /v1/spaces` (Bearer, owner) — create a space; the creator becomes its admin.
 /// Returns the new space id (base64).
-pub fn create_space(http: &Client, base_url: &str, access: &str, name: &str) -> ApiResult<String> {
+pub fn create_space(
+    http: &Client,
+    base_url: &str,
+    access: &str,
+    name: &str,
+) -> CloudResult<String> {
     let body = json!({ "name": name });
     let v = client::send_json(
         client::headers(http.post(client::url(base_url, "/v1/spaces")), Some(access)).json(&body),
@@ -776,7 +809,7 @@ pub fn add_space_member(
     space_id: &str,
     account_id: &str,
     role: &str,
-) -> ApiResult<()> {
+) -> CloudResult<()> {
     let body = json!({ "space_id": space_id, "account_id": account_id, "role": role });
     client::send_json(
         client::headers(
@@ -795,7 +828,7 @@ pub fn directory(
     http: &Client,
     base_url: &str,
     access: &str,
-) -> ApiResult<Vec<dto::DirectoryEntry>> {
+) -> CloudResult<Vec<dto::DirectoryEntry>> {
     let v = client::send_json(client::headers(
         http.get(client::url(base_url, "/v1/directory")),
         Some(access),
@@ -825,7 +858,11 @@ pub fn directory(
 /// `GET /v1/pending` (Bearer) — the caller's outstanding vault-admin crypto actions
 /// (`grant`/`revoke`). `vault_id` and the target pubkeys are converted to hex to feed
 /// `add_member` / `rotate_vk`; the server ids and the opaque `proof` stay base64.
-pub fn pending(http: &Client, base_url: &str, access: &str) -> ApiResult<Vec<dto::PendingAction>> {
+pub fn pending(
+    http: &Client,
+    base_url: &str,
+    access: &str,
+) -> CloudResult<Vec<dto::PendingAction>> {
     let v = client::send_json(client::headers(
         http.get(client::url(base_url, "/v1/pending")),
         Some(access),
@@ -869,7 +906,7 @@ pub fn attestation_put(
     account_id: &str,
     blob: &[u8],
     signature: &[u8],
-) -> ApiResult<()> {
+) -> CloudResult<()> {
     let body = json!({
         "account_id": account_id,
         "blob": client::b64(blob),
@@ -892,7 +929,7 @@ pub fn attestations_list(
     base_url: &str,
     access: &str,
     account_id: &str,
-) -> ApiResult<Vec<dto::AttestationInfo>> {
+) -> CloudResult<Vec<dto::AttestationInfo>> {
     let path = format!(
         "/v1/attestations?account_id={}",
         client::enc_query(account_id)
@@ -920,14 +957,18 @@ pub fn attestations_list(
 /// from `GET /v1/escrow/params`. (An unknown/unenrolled handle returns a shaped decoy,
 /// so a probe cannot tell an enrolled handle from an unenrolled one.)
 pub struct EscrowParams {
+    /// Argon2id salt.
     pub argon_salt: Vec<u8>,
+    /// Argon2id memory cost, KiB (untrusted: the core clamps it before deriving).
     pub argon_mem_kib: u32,
+    /// Argon2id iterations (untrusted, clamped by the core).
     pub argon_iterations: u32,
+    /// Argon2id lanes (untrusted, clamped by the core).
     pub argon_parallelism: u32,
 }
 
 /// `GET /v1/escrow/params?handle=` (PUBLIC) — the salt/params to re-derive `K_auth`.
-pub fn escrow_params(http: &Client, base_url: &str, handle: &str) -> ApiResult<EscrowParams> {
+pub fn escrow_params(http: &Client, base_url: &str, handle: &str) -> CloudResult<EscrowParams> {
     let path = format!("/v1/escrow/params?handle={}", client::enc_query(handle));
     let v = client::send_json(client::headers(
         http.get(client::url(base_url, &path)),
@@ -952,7 +993,7 @@ pub fn escrow_fetch(
     base_url: &str,
     handle: &str,
     k_auth: &[u8],
-) -> ApiResult<(Vec<u8>, String)> {
+) -> CloudResult<(Vec<u8>, String)> {
     let body = json!({ "handle": handle, "k_auth": client::b64(k_auth) });
     let v = client::send_json(
         client::headers(http.post(client::url(base_url, "/v1/escrow/fetch")), None).json(&body),
@@ -976,7 +1017,7 @@ pub fn device_self_enroll(
     http: &Client,
     base_url: &str,
     reg: &ffi::RegistrationRequest,
-) -> ApiResult<(String, String)> {
+) -> CloudResult<(String, String)> {
     // Desktop clients enroll as `kind="app"` (never auto-expires). Label = the OS family
     // only (e.g. "Desktop · macOS") — short, stable, and non-fingerprinty (no hostname),
     // mirroring the panel's "Admin panel · Chrome". `$HOSTNAME` is unreliable (not

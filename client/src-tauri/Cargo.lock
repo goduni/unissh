@@ -7503,7 +7503,6 @@ dependencies = [
  "objc2-app-kit",
  "objc2-foundation",
  "objc2-local-authentication",
- "once_cell",
  "reqwest",
  "rustls",
  "rustls-platform-verifier",
@@ -7531,6 +7530,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "unissh-automation",
+ "unissh-cloud",
  "unissh-ffi",
  "unissh-keychain",
  "unissh-mcp",
@@ -7554,6 +7554,20 @@ dependencies = [
  "unissh-mcp",
  "uuid",
  "zeroize",
+]
+
+[[package]]
+name = "unissh-cloud"
+version = "0.6.1"
+dependencies = [
+ "base64 0.23.1",
+ "log",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
+ "unissh-ffi",
 ]
 
 [[package]]

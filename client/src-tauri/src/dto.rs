@@ -926,30 +926,14 @@ impl From<RemainingMember> for ffi::RemainingMember {
     }
 }
 
-/// An account as seen by an instance-admin via `/v1/accounts`. Pubkeys are hex
-/// (converted from the server's base64) so they feed `add_member` directly.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AccountInfo {
-    pub account_id: String,
-    pub display_name: Option<String>,
-    pub handle: Option<String>,
-    pub is_admin: bool,
-    pub ed25519_pub_hex: Option<String>,
-    pub x25519_pub_hex: Option<String>,
-    pub status: String,
-    pub device_count: i64,
-}
+// ---------- server account / devices / spaces / pairing / audit ----------
 
-/// A device under the caller's own account, from `GET /v1/devices`.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DeviceInfo {
-    pub device_id: String,
-    pub status: String,
-    pub registered_at: i64,
-    pub active_sessions: i64,
-}
+// The server's wire DTOs live with the server client, which both the app and the
+// CLI use; re-exported here so the IPC surface keeps naming them in one place.
+pub use unissh_cloud::dto::{
+    AccountInfo, AttestationInfo, AuditEntry, DeviceInfo, DirectoryEntry, InviteInfo,
+    PairingPayload, PendingAction, SpaceInfo,
+};
 
 /// Public, session-less probe of a server instance (`GET /v1/instance`). Drives the
 /// Add-server flow's branch: `!claimed` → setup-code (claim); claimed → invite/sign-in.
@@ -976,76 +960,6 @@ pub struct OidcInfoDto {
     pub client_id: String,
 }
 
-// ---------- spaces / directory / pending / invites (server-v2) ----------
-
-/// One space the caller is a member of, from `GET /v1/spaces`. `role` is the
-/// caller's server-trusted role in that space (`admin`|`member`).
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SpaceInfo {
-    pub space_id: String,
-    pub name: String,
-    pub role: String,
-}
-
-/// A freshly-minted invite from `POST /v1/invite`. `token` is returned exactly
-/// once (only its hash is stored server-side); `url` is the shareable join link
-/// when the server has a `public_url` configured, else `None`.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InviteInfo {
-    pub invite_id: String,
-    pub token: String,
-    pub url: Option<String>,
-    pub expires_at: i64,
-}
-
-/// One person in the shared directory (`GET /v1/directory`). Pubkeys are hex
-/// (converted from the server's base64) so they feed `server_add_member` /
-/// `server_add_space_member` directly, matching [`AccountInfo`]'s convention.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DirectoryEntry {
-    pub account_id: String,
-    pub handle: Option<String>,
-    pub display_name: Option<String>,
-    pub ed25519_pub_hex: String,
-    pub x25519_pub_hex: String,
-    pub status: String,
-}
-
-/// One outstanding crypto action a vault-admin must fulfil (`GET /v1/pending`):
-/// a `grant` or `revoke` for `account_id` on `vault_id`. `vault_id_hex` and the
-/// target pubkeys are hex (from the server's base64) so they feed `server_add_member`
-/// / `server_rotate_vk`; the server ids (`action_id`, `account_id`) and the opaque
-/// binding `proof` stay base64 as the server sends them.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PendingAction {
-    pub action_id: String,
-    pub kind: String,
-    pub vault_id_hex: String,
-    pub account_id: String,
-    pub ed25519_pub_hex: Option<String>,
-    pub x25519_pub_hex: Option<String>,
-    pub crypto_role: Option<i64>,
-    pub source: String,
-    pub proof: Option<String>,
-    pub created_at: i64,
-}
-
-/// One key-binding attestation about an account (`GET /v1/attestations`). The
-/// `blob` + `signature` are opaque base64 the CLIENT verifies (the server never
-/// interprets them); `attestor_pubkey` is the attesting device's Ed25519 (base64).
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AttestationInfo {
-    pub attestor_pubkey: String,
-    pub blob: String,
-    pub signature: String,
-    pub created_at: i64,
-}
-
 /// The Argon2id params for keyless-escrow `K_auth` re-derivation (`GET /v1/escrow/params`).
 /// `argon_salt` is base64. NOTE: for an unknown/unenrolled handle the server returns a
 /// shaped decoy of the same form — this is NOT an existence oracle.
@@ -1056,40 +970,6 @@ pub struct EscrowParamsInfo {
     pub argon_mem_kib: u32,
     pub argon_iterations: u32,
     pub argon_parallelism: u32,
-}
-
-// ---------- device-to-device onboarding (Path B) ----------
-
-/// Everything a new device needs to join, produced by the existing device. It is
-/// transferred over a TRUSTED side channel (QR / read-aloud) — the `oob_code` is
-/// the PAKE secret, so the relay never sees it.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PairingPayload {
-    pub base_url: String,
-    /// Opaque server-instance id (base64) — used to key the new device's link.
-    pub instance_id: String,
-    /// Cloud-vault binding label (space id, base64) the new device inherits.
-    pub space_id: String,
-    pub account_id: String,
-    /// The new device's id, pre-created on the server by the existing device.
-    pub device_id: String,
-    /// Relay channel for the PAKE message exchange.
-    pub channel_id: String,
-    /// PAKE OOB secret (base64). Transferred only over the trusted side channel.
-    pub oob_code: String,
-}
-
-// ---------- audit (read-only) ----------
-
-/// A server audit-log entry (observed event). Opaque blobs are omitted.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AuditEntry {
-    pub seq: i64,
-    pub source: String,
-    pub recorded_at: i64,
-    pub author_pubkey: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

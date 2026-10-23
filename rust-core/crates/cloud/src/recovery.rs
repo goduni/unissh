@@ -1,26 +1,36 @@
-//! Shared installation for escrow and Emergency-Kit recovery. Call on a blocking thread,
-//! inside `biometric::installing_keyset`: a recovered keyset may be wrapped under another
-//! password, and nothing sealed for the one it replaced may stay behind.
+//! Shared installation for escrow and Emergency-Kit recovery.
+//!
+//! Call on a blocking thread. The desktop app calls it inside its
+//! `biometric::installing_keyset`: a recovered keyset may be wrapped under
+//! another password, and nothing sealed for the one it replaced may stay behind.
 
-use crate::error::{ApiError, ApiResult};
+use crate::{CloudError, CloudResult};
 use unissh_ffi::Core;
 
-pub(super) fn install_keyset(
+/// Installs and unlocks a recovered keyset `blob`, then hands its Secret Key to
+/// `save_secret_key` so the device can unlock again after a restart.
+///
+/// The keyset is authenticated and the storage opened before anything is
+/// remembered: a wrong credential or another identity's keyset never replaces
+/// the Secret Key this device already keeps. A failing `save_secret_key` is
+/// logged and does not undo the install — the user then types the key at the
+/// next unlock.
+pub fn install_keyset<E: std::fmt::Debug>(
     core: &Core,
     blob: Vec<u8>,
     password: Option<String>,
     secret_key_hex: String,
-    save_secret_key: impl FnOnce(&str) -> ApiResult<()>,
-) -> ApiResult<()> {
+    save_secret_key: impl FnOnce(&str) -> Result<(), E>,
+) -> CloudResult<()> {
     // Authenticate and open storage FIRST. A wrong credential or another
     // identity's DB must not replace this device's remembered Secret Key.
     core.unlock_from_server_blob(blob, password, secret_key_hex.clone())
-        .map_err(ApiError::from)?;
+        .map_err(CloudError::from)?;
     // Save before device enrollment/login: a network failure after installation
     // must still leave an instance that can unlock after a restart. As with
-    // pairing, an unavailable keychain requires manual entry, not a DB rollback.
+    // pairing, an unavailable key store requires manual entry, not a DB rollback.
     if let Err(e) = save_secret_key(&secret_key_hex) {
-        log::warn!("recovery: failed to persist Secret Key to keychain: {e:?}");
+        log::warn!("recovery: failed to remember the Secret Key: {e:?}");
     }
     Ok(())
 }
@@ -55,7 +65,7 @@ mod tests {
             |key| {
                 assert!(recovered.is_unlocked());
                 saved = Some(key.to_owned());
-                Ok(())
+                Ok::<(), CloudError>(())
             },
         )
         .unwrap();
@@ -72,7 +82,9 @@ mod tests {
             blob,
             Some("wrong".into()),
             secret,
-            |_| { panic!("must not overwrite keychain on failed authentication") },
+            |_| -> Result<(), CloudError> {
+                panic!("must not overwrite keychain on failed authentication")
+            },
         )
         .is_err());
         assert!(!clean.path().join("instance.db").exists());
@@ -86,7 +98,7 @@ mod tests {
         let target = tempfile::tempdir().unwrap();
         let recovered = core(target.path());
         install_keyset(&recovered, blob, None, secret.clone(), |_| {
-            Err(ApiError::other("unavailable"))
+            Err(CloudError::other("unavailable"))
         })
         .unwrap();
         recovered.lock();

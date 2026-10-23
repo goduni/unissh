@@ -117,7 +117,8 @@
 //! * in `platform_tls.rs`: `mod android;`, the Android `configure` arm,
 //!   `revocation_was_unanswered`, `has_ocsp_responder` and `mod
 //!   ocsp_scan_tests`;
-//! * in `cloud/client.rs`: the `crate::platform_tls::configure(...)` call;
+//! * in `lib.rs`: the `configure: platform_tls::configure` hook handed to
+//!   `unissh_cloud::client::install_platform` (make it the identity function);
 //! * in `Cargo.toml`: the direct `rustls` dependency.
 //!
 //! Desktop and iOS never compile any of this: their verifiers answer revocation
@@ -150,7 +151,7 @@ use super::revocation_was_unanswered;
 /// catch: `tls_backend_preconfigured` takes `impl Any` and downcasts at run
 /// time, so a future rustls major that leaves `reqwest` and this crate on
 /// different copies of the crate still compiles and fails inside
-/// `Client::build()` instead. `cloud/client.rs` logs that one.
+/// `Client::build()` instead. `unissh_cloud::client::http` logs that one.
 ///
 /// Worth knowing, because it is nowhere else in the tree: the private-CA users
 /// this app supports were never hit by the bug at all. With nothing stapled and

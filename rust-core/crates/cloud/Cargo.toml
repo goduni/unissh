@@ -1,0 +1,33 @@
+[package]
+name = "unissh-cloud"
+version.workspace = true
+description = "UniSSH server client: the `/v1` HTTP API, the sync transport and the device-pairing relay, shared by the desktop app and the headless CLI."
+readme = "README.md"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+unissh-ffi = { path = "../ffi" }
+
+# Blocking HTTP client with rustls (no system OpenSSL on the wire) — the same
+# configuration the desktop client has always used for its cloud calls.
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json", "blocking"] }
+# base64 STANDARD: the server's wire encoding for every crypto blob and id.
+base64 = "0.23"
+# Content-stable Idempotency-Key for sync/push (the server replays identical pushes).
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+log = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
+# The live end-to-end tests mint pairing codes the way the app does.
+uuid = { version = "1", features = ["v4"] }
+
+[lints]
+workspace = true
