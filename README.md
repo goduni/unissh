@@ -359,12 +359,12 @@ This is a single monorepo. The four primary components share one `rust-core` fou
 
 | Path           | What it is                          | Stack                                                              |
 | -------------- | ----------------------------------- | ----------------------------------------------------------------- |
-| `rust-core/`   | Shared SSH + crypto + vault core    | Rust (12 crates), UniFFI, SQLCipher, `russh`, desktop MCP         |
+| `rust-core/`   | Shared SSH + crypto + vault core    | Rust (13 crates), UniFFI, SQLCipher, `russh`, desktop MCP         |
 | `client/`      | Cross-platform GUI client           | **Tauri v2** + **React 18** + TypeScript + xterm.js               |
 | `server/`      | Self-hosted zero-knowledge server   | Rust, axum 0.8, sqlx (SQLite/Postgres), rustls (TLS 1.3)          |
 | `server-ui/`   | Self-hosted admin web panel         | React 18 + Vite SPA + real `rust-core` crypto compiled to **wasm**|
 
-Supporting directories: **`deploy/`** (the Docker/Caddy/Prometheus deployment stack), **`website/`** (the Astro + Starlight docs/landing site), and **`rust-core/crates/cli`** (the `unissh` CLI, for scripting and "feel-the-core" use).
+Supporting directories: **`deploy/`** (the Docker/Caddy/Prometheus deployment stack), **`website/`** (the Astro + Starlight docs/landing site), and **`rust-core/crates/cli`** (`unissh`, the command-line client for machines without a GUI, and the `unissh-harness` core harness).
 
 **Cargo layout.** The root `Cargo.toml` is a virtual workspace over `rust-core/crates/*` + `server` (one `Cargo.lock`). `client/src-tauri` and `server-ui/crypto-wasm` are separate, **excluded** workspace roots with their own `Cargo.lock` (a Tauri requirement / a dedicated wasm release profile).
 

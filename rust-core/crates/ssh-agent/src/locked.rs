@@ -80,9 +80,9 @@ fn unlock_pages(data: &[u8]) {
 }
 
 #[cfg(not(unix))]
-fn lock_pages(_data: &[u8]) -> bool {
+const fn lock_pages(_data: &[u8]) -> bool {
     false
 }
 
 #[cfg(not(unix))]
-fn unlock_pages(_data: &[u8]) {}
+const fn unlock_pages(_data: &[u8]) {}

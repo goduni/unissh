@@ -53,6 +53,22 @@ starts with `0.`:
   has it masked on screen and in the recording, and the core clears the line.
   Never offered for hosts with a username template. Settings → Terminal turns
   the offers off.
+- `unissh`, a command-line client for machines without a GUI, most often a
+  server reached over plain SSH. `unissh login` signs the machine in as a device
+  in one of three ways: pairing with a signed-in app, escrow (password and Secret
+  Key), or joining with an invite as a separate account, which is the choice for
+  shared servers (the invite is asked on the terminal). It keeps a synced,
+  encrypted copy of the vaults. `unissh ssh`
+  opens a terminal on a host or runs one command on it (stdin piped, exit code
+  passed through), `unissh cp` copies a file, and `unissh` alone lists the hosts
+  to pick from. Hosts resolve as in the app: personal identities, jump hosts,
+  proxies, two-factor prompts and session recording all apply. Secrets are only
+  ever asked on the terminal or read from an owner-only file; no session token
+  is stored. `unissh logout` revokes the device and deletes its data. The old
+  core harness is now the `unissh-harness` binary.
+- Bindings: `ExecHandleFfi::close_stdin` ends a streaming command's input and
+  keeps its output coming; `Core::wait_for_recordings` waits for session
+  recordings still being written, for a process about to exit.
 
 ### Changed
 

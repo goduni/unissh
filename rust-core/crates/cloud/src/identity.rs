@@ -1012,23 +1012,37 @@ pub fn escrow_fetch(
 /// the keyset possession proof authenticates the enrollment and the account is resolved
 /// BY that keyset. Returns `(account_id_b64, device_id_b64)` for the newly created device.
 /// Errors: 404 unknown keyset, 403 account not active, 401 bad signature, 400 malformed /
-/// key mismatch.
+/// key mismatch. The device is labelled as the desktop app's (`Desktop · <OS>`).
 pub fn device_self_enroll(
     http: &Client,
     base_url: &str,
     reg: &ffi::RegistrationRequest,
 ) -> CloudResult<(String, String)> {
-    // Desktop clients enroll as `kind="app"` (never auto-expires). Label = the OS family
-    // only (e.g. "Desktop · macOS") — short, stable, and non-fingerprinty (no hostname),
-    // mirroring the panel's "Admin panel · Chrome". `$HOSTNAME` is unreliable (not
-    // exported in most desktop process envs → it was almost always just "Desktop").
+    device_self_enroll_as(http, base_url, reg, &device_label("Desktop"))
+}
+
+/// A device label for the Devices list: what kind of client, and the OS family
+/// only (e.g. "Desktop · macOS") — short, stable, and non-fingerprinty (no
+/// hostname), mirroring the panel's "Admin panel · Chrome". `$HOSTNAME` is
+/// unreliable anyway (not exported in most desktop process envs).
+pub fn device_label(client: &str) -> String {
     let os = match std::env::consts::OS {
         "macos" => "macOS",
         "windows" => "Windows",
         "linux" => "Linux",
         other => other,
     };
-    let label = format!("Desktop · {os}");
+    format!("{client} · {os}")
+}
+
+/// [`device_self_enroll`] under a label of the caller's choosing (see
+/// [`device_label`]). The device enrolls as `kind="app"`, which never expires.
+pub fn device_self_enroll_as(
+    http: &Client,
+    base_url: &str,
+    reg: &ffi::RegistrationRequest,
+    label: &str,
+) -> CloudResult<(String, String)> {
     let body = json!({
         "registration_payload": client::b64(&reg.payload),
         "registration_signature": client::b64(&reg.signature),

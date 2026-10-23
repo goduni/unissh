@@ -23,7 +23,8 @@ crates/
   ffi            UniFFI contract for the UI (no plaintext keys)       [SPEC 4]
   cloud          client for a UniSSH server's /v1 API: HTTP, sync transport,
                  device pairing — shared by the desktop app and the CLI
-  cli            temporary CLI harness to "kick the tires" on the core
+  cli            `unissh`, the command-line client (signs a machine in, syncs,
+                 connects), plus the `unissh-harness` core harness
 ```
 
 Every crate ships its own README, a documented public API, and tests
@@ -89,13 +90,13 @@ tests) plus cargo-deny. The lint policy is described in
 ## End-to-end scenario (local, no server)
 
 ```bash
-SK=$(cargo run -p unissh-cli -- init --password pw | tail -1)   # Secret Key (Emergency Kit)
-cargo run -p unissh-cli -- create-vault --secret-key $SK --password pw --id default --name Default
-cargo run -p unissh-cli -- gen-key      --secret-key $SK --password pw --vault default --item id_ed25519
-cargo run -p unissh-cli -- exec --secret-key $SK --password pw --vault default --item id_ed25519 \
+SK=$(cargo run -p unissh-cli --bin unissh-harness -- init --password pw | tail -1)   # Secret Key (Emergency Kit)
+cargo run -p unissh-cli --bin unissh-harness -- create-vault --secret-key $SK --password pw --id default --name Default
+cargo run -p unissh-cli --bin unissh-harness -- gen-key      --secret-key $SK --password pw --vault default --item id_ed25519
+cargo run -p unissh-cli --bin unissh-harness -- exec --secret-key $SK --password pw --vault default --item id_ed25519 \
     --host 10.0.0.5 --user deploy --command "uname -a" --jump bastion:22:admin:id_ed25519
 # interactive terminal (PTY):
-cargo run -p unissh-cli -- shell --secret-key $SK --password pw --vault default --item id_ed25519 \
+cargo run -p unissh-cli --bin unissh-harness -- shell --secret-key $SK --password pw --vault default --item id_ed25519 \
     --host 10.0.0.5 --user deploy
 ```
 
