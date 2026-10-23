@@ -10137,6 +10137,15 @@ impl ExecHandleFfi {
         }
     }
 
+    /// Ends the command's stdin (EOF) and keeps the channel open, so the output
+    /// still to come is delivered — what `cat file | ssh host cmd` needs. Writing
+    /// after this fails.
+    pub fn close_stdin(&self) -> Result<(), FfiError> {
+        self.rt
+            .block_on(self.handle.close_stdin())
+            .map_err(FfiError::ssh)
+    }
+
     /// Closes the channel (EOF stdin + close).
     pub fn close(&self) -> Result<(), FfiError> {
         self.rt.block_on(self.handle.close()).map_err(FfiError::ssh)

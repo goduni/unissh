@@ -1,9 +1,11 @@
 [package]
 name = "unissh-cli"
 version.workspace = true
-description = "Temporary UniSSH CLI harness: poke at the core from a terminal (create a local vault → SSH key → connect)."
+description = "UniSSH in a terminal: sign a machine in as a device, pull the vaults, and connect to their hosts without a GUI."
+readme = "README.md"
 edition.workspace = true
-rust-version.workspace = true
+# `File::lock` (the sync lock between two CLI processes) is 1.89.
+rust-version = "1.89"
 authors.workspace = true
 repository.workspace = true
 license.workspace = true
@@ -12,9 +14,27 @@ license.workspace = true
 name = "unissh"
 path = "src/main.rs"
 
+# The original core harness: secrets as arguments, local vaults only. Kept for
+# the local quickstart and for poking at the facade; not for real use.
+[[bin]]
+name = "unissh-harness"
+path = "src/bin/unissh-harness.rs"
+
 [dependencies]
 unissh-ffi = { path = "../ffi" }
-clap = { version = "4", features = ["derive"] }
+unissh-cloud = { path = "../cloud" }
+clap = { version = "4", features = ["derive", "env"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+zeroize = "1"
+
+# Raw terminal mode, window size and polling the terminal — through safe
+# wrappers, since the workspace denies `unsafe`. Already in the tree (tempfile).
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["termios", "event"] }
+
+[dev-dependencies]
+tempfile = "3"
 
 [lints]
 workspace = true

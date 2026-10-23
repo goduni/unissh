@@ -252,6 +252,56 @@ code-execution surface, so it is stated plainly rather than left implicit.
 Not protected, and not claimed to be: the local terminal does not sandbox,
 restrict or audit what you type into your own shell. It is your machine.
 
+## The command-line client: a device wherever it runs
+
+`unissh` (crate `unissh-cli`) runs the same core without a GUI, typically on a
+server reached over plain SSH. An unlocked `unissh` is a **device of the
+account**: for as long as a command runs, or the interactive host list stays
+unlocked, its process holds the keyset and the vault keys it opened. Whoever
+controls that machine — its root user, or whoever compromises it — can read that
+memory, record the master password as it is typed, or ride the SSH connections it
+opens. That is equally true of a laptop. What is new is where people will put it:
+machines they share with others.
+
+What the design does about it:
+
+- **Scope by account.** `unissh login join` creates a separate account on that
+  machine, and it can decrypt exactly the vaults whose keys a vault admin wraps to
+  it. Pairing (`login pair`) or escrow (`login escrow`) instead gives the machine
+  your whole account. The documentation tells people to use `join` for shared
+  and production servers.
+- **No secret on the command line or in the environment.** Secrets are asked on
+  the controlling terminal (`/dev/tty`), with echo off. For unattended use,
+  `--password-file` / `UNISSH_PASSWORD_FILE` names a file — never the password
+  itself — and a file anyone but its owner can read is refused.
+- **No session at rest.** No access or refresh token is written to disk. Each
+  command that needs the server signs a fresh server challenge with the unlocked
+  keyset and signs out when it ends. A copy of the device directory without the
+  master password (and the Secret Key, when that is not kept there) yields neither
+  vault contents nor a session.
+- **The kept Secret Key is the keychain's equivalent.** By default the Secret Key
+  is kept in an owner-only file, like the app keeps it in the OS keychain. It is
+  refused if its permissions loosen, and `--no-remember` keeps it off the disk
+  altogether. A copy without a master password (`--no-password`) makes that file
+  the whole credential, and the help text says so.
+- **Short-lived unlocks.** A command unlocks for its own run. The interactive host
+  list locks after 15 minutes without input, which zeroizes the keys, and asks
+  for the master password again.
+- **Revocation.** `unissh logout` revokes the device on the server, then deletes
+  its local data. It warns first when a joined account has no other device, since
+  deleting that data loses the account. Revoking the device from elsewhere stops
+  its sync and sessions; that is server-trusted and protects the future only (see
+  the limitations below). A machine that may have been compromised calls for
+  rotating the keys of the vaults it could open.
+- **Host keys stay per machine.** Trust on first use is announced with the
+  fingerprint. A changed key stops the connection and prints the presented
+  fingerprint, and accepting it takes an explicit `unissh known-hosts trust`.
+- **No agent forwarding.** The CLI never forwards an agent. Approving each
+  signature needs a prompt that a raw terminal cannot show safely.
+
+Not protected, and not claimed: the CLI cannot keep a machine's own
+administrator out of what runs on that machine.
+
 ## Saved password at interactive prompts
 
 When a host was logged into with a saved vault password, the terminal can offer

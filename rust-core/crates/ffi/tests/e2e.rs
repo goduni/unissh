@@ -3505,6 +3505,54 @@ fn ssh_exec_stream_streams_and_reports_exit() {
     handle.close().unwrap();
 }
 
+/// Piped input (`cat file | unissh ssh host -- cmd`): stdin ends with EOF while
+/// the channel stays open, so the command sees the end of its input and its
+/// output still arrives in full.
+#[test]
+fn ssh_exec_stream_close_stdin_ends_input_and_keeps_output() {
+    use std::sync::Arc;
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
+    let pubkey = core
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
+        .unwrap();
+    let sshd = TestSshd::start(&pubkey);
+
+    let obs = Arc::new(StreamObs {
+        out: std::sync::Mutex::new(Vec::new()),
+        err: std::sync::Mutex::new(Vec::new()),
+        exit: std::sync::Mutex::new(None),
+    });
+    let handle = core
+        .ssh_exec_stream(
+            "127.0.0.1".to_owned(),
+            sshd.port,
+            "root".to_owned(),
+            agent_auth("v", "key"),
+            "wc -l".to_owned(),
+            vec![],
+            None,
+            obs.clone(),
+        )
+        .unwrap();
+    handle.write_stdin(b"one\ntwo\nthree\n".to_vec()).unwrap();
+    handle.close_stdin().unwrap();
+
+    assert!(
+        handle.wait_exit(4000).unwrap(),
+        "the command must see EOF and exit"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&obs.out.lock().unwrap()).trim(),
+        "3",
+        "all input arrived and all output came back"
+    );
+    assert_eq!(*obs.exit.lock().unwrap(), Some(0));
+    handle.close().unwrap();
+}
+
 // --- resumable SFTP with progress and cancellation ---
 
 #[derive(Default)]
