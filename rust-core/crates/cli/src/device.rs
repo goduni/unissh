@@ -205,7 +205,7 @@ impl AuthPrompter for TtyPrompter {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_secret_key, master_password, normalize_secret_key, Credentials, Device};
+    use super::{format_secret_key, normalize_secret_key, Device};
     use crate::home::Home;
 
     /// A sign-in cut short leaves files without a link (or a link without
@@ -231,6 +231,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_password_file_loses_exactly_one_line_ending() {
+        use super::{master_password, Credentials};
         use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
         let dir = tempfile::tempdir().unwrap();

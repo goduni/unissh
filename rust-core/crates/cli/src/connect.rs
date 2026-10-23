@@ -243,18 +243,22 @@ pub fn shell(core: &Core, host: &Host, mut target: Target) -> Res<i32> {
     })?;
     forget_password(&mut target);
 
-    let raw = RawMode::enter()?;
-    let stop = Arc::new(AtomicBool::new(false));
-    let input = {
-        let session = Arc::clone(&session);
-        let stop = Arc::clone(&stop);
-        let ended = Arc::clone(&ended);
-        thread::spawn(move || pump_keys(&session, &stop, &ended, size))
+    let (status, hung_up) = {
+        // Raw only while the session runs: the terminal is back to normal
+        // before anything below prints.
+        let _raw = RawMode::enter()?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let input = {
+            let session = Arc::clone(&session);
+            let stop = Arc::clone(&stop);
+            let ended = Arc::clone(&ended);
+            thread::spawn(move || pump_keys(&session, &stop, &ended, size))
+        };
+        let end = ended.wait();
+        stop.store(true, Ordering::SeqCst);
+        best_effort(input.join());
+        end
     };
-    let (status, hung_up) = ended.wait();
-    stop.store(true, Ordering::SeqCst);
-    best_effort(input.join());
-    drop(raw);
     if hung_up {
         // `~.` is the way out of a remote that stopped answering, so the close
         // runs on a thread of its own and gets a few seconds to come through —

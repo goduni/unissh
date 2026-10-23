@@ -267,16 +267,16 @@ mod imp {
         }
 
         /// Never called: there is no `Tty` to call it on.
-        pub fn say(&mut self, _text: &str) -> io::Result<()> {
+        pub const fn say(&mut self, _text: &str) -> io::Result<()> {
             match *self {}
         }
 
         /// Never called: there is no `Tty` to call it on.
-        pub fn wait(&self, _timeout: Duration) -> io::Result<bool> {
+        pub const fn wait(&self, _timeout: Duration) -> io::Result<bool> {
             match *self {}
         }
 
-        pub(super) fn read_line(&self, _quiet: bool) -> io::Result<Zeroizing<Vec<u8>>> {
+        pub(super) const fn read_line(&self, _quiet: bool) -> io::Result<Zeroizing<Vec<u8>>> {
             match *self {}
         }
     }
