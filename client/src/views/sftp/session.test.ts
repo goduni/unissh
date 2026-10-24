@@ -3,7 +3,7 @@ import type { ConnectionProfile } from "@/bridge/types";
 const { state, api, epoch } = vi.hoisted(() => ({
   state: { vaultId: "vault", unlocked: true, sftpParallelism: 8, addSftpSession: vi.fn() },
   epoch: { value: 0 },
-  api: { resolveConnectAuth: vi.fn(), sftpOpen: vi.fn(), sftpClose: vi.fn(), sftpRealpath: vi.fn() },
+  api: { resolveConnection: vi.fn(), sftpOpen: vi.fn(), sftpClose: vi.fn(), sftpRealpath: vi.fn() },
 }));
 vi.mock("@/store/app", () => ({ useApp: { getState: () => ({ ...state }) } }));
 vi.mock("@/bridge/api", () => api);
@@ -12,7 +12,7 @@ vi.mock("@/store/toast", () => ({ toast: vi.fn() }));
 import { openSession } from "./session";
 beforeEach(() => {
   vi.resetAllMocks(); state.unlocked = true; state.vaultId = "vault"; epoch.value = 0;
-  api.resolveConnectAuth.mockResolvedValue({ user: "u", auth: {} });
+  api.resolveConnection.mockResolvedValue({ host: "server", port: 22, user: "u", auth: {}, jumps: [] });
   api.sftpRealpath.mockResolvedValue("/"); api.sftpClose.mockResolvedValue(undefined);
 });
 it.each(["lock", "switch", "epoch"])("closes a late session after %s", async (kind) => {

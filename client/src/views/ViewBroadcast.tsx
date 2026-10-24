@@ -321,11 +321,7 @@ export function ViewBroadcast() {
     const failedHosts: { profile: ConnectionProfile; error: string }[] = [];
     for (const h of usable) {
       try {
-        const { user, auth } = await api.resolveConnectAuth(h, vaultId);
-        resolvedHosts.push({
-          profile: h,
-          target: { host: h.host, port: h.port, user, auth, jumps: h.jumps, proxy: h.proxy },
-        });
+        resolvedHosts.push({ profile: h, target: await api.resolveConnection(h, vaultId) });
       } catch (e) {
         failedHosts.push({ profile: h, error: apiErrorMessage(e) });
       }

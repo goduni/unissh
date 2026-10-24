@@ -980,24 +980,20 @@ async function runStartupSnippets(
           localRecordingRequest(target.spec, vaultId).then((recording) =>
             api.localSessionOpen(target.spec, cols, rows, events.onEvent, recording),
           )
-        : // Personal profiles resolve their credential in-core (binding +
-          // anti-redirect) before connecting; everything else uses the stored
-          // ProfileAuth.
+        : // The core resolves the saved host (Personal: binding + anti-redirect)
+          // and the session opens to the destination it read from the vault —
+          // never to `target.profile`, which a pane keeps from when it opened
+          // and which may have changed since.
           api
-            .resolveConnectAuth(target.profile, vaultId, pw ?? undefined)
-            .then(({ user, auth }) => {
-              void fillCredentialLabel(target.profile, auth).then((label) => {
+            .resolveConnection(target.profile, vaultId, pw ?? undefined)
+            .then((dest) => {
+              void fillCredentialLabel(target.profile, dest.auth).then((label) => {
                 if (!cancelled) setFillCredential(label);
               });
               const fill = useApp.getState();
               return api.sessionOpen(
                 {
-                  host: target.profile.host,
-                  port: target.profile.port,
-                  user,
-                  auth,
-                  jumps: target.profile.jumps,
-                  proxy: target.profile.proxy,
+                  ...dest,
                   term: "xterm-256color",
                   cols,
                   rows,

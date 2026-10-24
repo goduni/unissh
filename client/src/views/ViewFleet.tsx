@@ -548,15 +548,7 @@ export function ViewFleet() {
           // Resolve connect auth per host (Personal → in-core binding + anti-
           // redirect). An unbound/redirected personal host is reported as a
           // per-host error, never run silently.
-          const { user, auth } = await api.resolveConnectAuth(h, vaultId);
-          const target: MultiExecTarget = {
-            host: h.host,
-            port: h.port,
-            user,
-            auth,
-            jumps: h.jumps,
-            proxy: h.proxy,
-          };
+          const target: MultiExecTarget = await api.resolveConnection(h, vaultId);
           const out = await api.sshExecMulti([target], commands[h.profileId], 0, EXEC_TIMEOUT_SECS);
           r = out[0] ?? {
             host: h.host,

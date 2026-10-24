@@ -79,11 +79,36 @@ starts with `0.`:
 
 ### Changed
 
+- One resolver for saved hosts, in the core (`Core::resolve_connection`): the
+  app, the CLI and local automation now work out a host's user and credential
+  the same way. For the app this means a host that names no user logs in as the
+  account's default user (as automation already did) instead of with an empty
+  one.
+
 - Bindings: `SessionObserver::on_fill` is a new required method for
   implementors of the observer, and `Core::open_session` gained a trailing
   `password_fill: PasswordFillMode` parameter (pass `Off` for no fill).
   Observer callbacks (`on_fill`, and to be safe `on_data`) must not call back
   into the session synchronously from the calling thread.
+
+### Fixed
+
+- The app's sync keeps working when its session token expires during a sync:
+  the sync transport now signs in again on a rejected token, as every other
+  server call already did. Before, the sync after an expiry reported "version 0
+  below the trusted cursor", a rollback warning for a server that had done
+  nothing wrong.
+
+### Security
+
+- A server link may use plain `http://` only to a loopback host, and the check
+  now reads the host the way the HTTP stack connects to it. It used to compare
+  the start of the text, so links such as `http://localhost.attacker.example`
+  or `http://localhost@attacker.example` passed it and sent the session tokens
+  unencrypted to another machine — a pasted invite or pairing link was enough.
+  The check runs when a server is added, so a server added by an earlier
+  version is not checked again: one whose address starts with `http://` and is
+  not this machine should be removed and added again over `https://`.
 
 ### Compatibility
 
