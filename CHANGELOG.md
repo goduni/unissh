@@ -109,6 +109,10 @@ starts with `0.`:
 
 ### Fixed
 
+- The admin panel's sign-in says that the password is optional: it is the
+  account's master password from the UniSSH app (or the one set when the
+  instance was set up); an account without one signs in with it empty.
+  A refused sign-in with an empty password says the account may have one.
 - The app's sync keeps working when its session token expires during a sync:
   the sync transport now signs in again on a rejected token, as every other
   server call already did. Before, the sync after an expiry reported "version 0
