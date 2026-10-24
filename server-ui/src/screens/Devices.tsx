@@ -15,7 +15,7 @@ interface DeviceRow {
   device_id: string;
   kind: "app" | "web";
   label: string | null;
-  status: "active" | "revoked";
+  status: "active" | "revoked" | "expired";
   registered_at: number;
   active_sessions: number;
 }

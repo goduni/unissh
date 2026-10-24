@@ -3930,6 +3930,8 @@ function CloudConnectForm({
 
 // Lists the account's own devices (GET /v1/devices), with revoke. The current
 // device is badged and can't revoke itself (that would kill this session).
+// Only devices that can still sign in: a revoked one is gone from here at once
+// (older servers still list them; newer ones no longer do).
 function CloudDevicesList({ currentDeviceId }: { currentDeviceId: string | null }) {
   const p = usePalette();
   const { t } = useTranslation();
@@ -3940,7 +3942,7 @@ function CloudDevicesList({ currentDeviceId }: { currentDeviceId: string | null 
 
   const load = async () => {
     try {
-      setDevices(await api.serverListDevices());
+      setDevices((await api.serverListDevices()).filter((d) => d.status === "active"));
     } catch {
       // Additive + tolerant: a server that predates GET /v1/devices (not yet
       // redeployed), or an offline/locked instance, just yields no list — never a
@@ -3976,7 +3978,6 @@ function CloudDevicesList({ currentDeviceId }: { currentDeviceId: string | null 
     <div style={{ marginTop: rem(4) }}>
       {devices.map((d) => {
         const isCurrent = !!currentDeviceId && d.deviceId === currentDeviceId;
-        const revoked = d.status !== "active";
         return (
           <div
             key={d.deviceId}
@@ -3986,7 +3987,6 @@ function CloudDevicesList({ currentDeviceId }: { currentDeviceId: string | null 
               gap: rem(10),
               padding: `${rem(11)} 0`,
               borderBottom: `1px solid ${p.line}`,
-              opacity: revoked ? 0.55 : 1,
             }}
           >
             <Icon name="server" size={16} color={isCurrent ? p.accentText : p.txt3} />
@@ -4013,10 +4013,9 @@ function CloudDevicesList({ currentDeviceId }: { currentDeviceId: string | null 
                 {t("serverCloud.deviceRegistered", { date: fmtDate(d.registeredAt) })}
                 {" · "}
                 {t("serverCloud.deviceSessions", { n: d.activeSessions })}
-                {revoked ? ` · ${t("serverCloud.deviceRevoked")}` : ""}
               </div>
             </div>
-            {!isCurrent && !revoked && (
+            {!isCurrent && (
               <Btn
                 variant="ghost"
                 size="sm"

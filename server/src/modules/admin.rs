@@ -49,7 +49,7 @@ struct AccountQuery {
 // ---- overview ----
 
 async fn overview(_owner: OwnerCtx, State(state): State<AppState>) -> AppResult<Json<Value>> {
-    let c = state.store.admin_overview().await?;
+    let c = state.store.admin_overview(state.now()).await?;
     let inst = state.store.instance().await?;
     Ok(Json(json!({
         "instance_id": ids::b64(&inst.instance_id),
@@ -160,14 +160,15 @@ async fn devices_list(
         None => owner.account_id().to_vec(),
     };
     let rows = state.store.admin_list_devices(&acc).await?;
+    let now = state.now();
     let out: Vec<Value> = rows
-        .into_iter()
+        .iter()
         .map(|d| {
             json!({
                 "device_id": ids::b64(&d.device_id),
                 "kind": d.kind,
                 "label": d.label,
-                "status": d.status,
+                "status": d.shown_status(now),
                 "registered_at": d.registered_at,
                 "active_sessions": d.session_count,
             })

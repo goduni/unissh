@@ -9,6 +9,10 @@ use crate::store::models::{DecoySecretRow, InstanceRow};
 const SEL: &str = "SELECT instance_id, name, claimed, owner_account_id, setup_code_hash, \
                    next_seq, created_at FROM instance WHERE id = 1";
 
+/// How long a revoked or expired device stays listed for the owner before the
+/// janitor deletes it.
+pub const DEAD_DEVICE_RETENTION_SECONDS: i64 = 30 * 86_400;
+
 impl Store {
     /// Create the singleton on first boot (race-safe via ON CONFLICT DO NOTHING).
     pub async fn ensure_instance(&self, now: i64) -> AppResult<InstanceRow> {
@@ -144,7 +148,8 @@ impl Store {
 
     /// Background TTL cleanup (§13): stale nonce/relay/sessions are deleted, pending
     /// invites are marked expired, old idempotency keys (older than `idem_cutoff`)
-    /// are deleted. Expiry is also enforced at use-time — this is hygiene.
+    /// are deleted, and so are dead devices (see `cleanup_dead_devices`). Expiry is
+    /// also enforced at use-time — this is hygiene.
     pub async fn cleanup_expired(&self, now: i64, idem_cutoff: i64) -> AppResult<()> {
         self.exec(
             "DELETE FROM auth_nonces WHERE expires_at < ?",
@@ -169,6 +174,39 @@ impl Store {
         self.exec(
             "DELETE FROM idempotency_keys WHERE created_at < ?",
             vec![Val::I(idem_cutoff)],
+        )
+        .await?;
+        self.cleanup_dead_devices(now).await
+    }
+
+    /// Devices nobody can sign in as any more leave the tables, so an account's
+    /// Devices list does not fill up with them. A pairing that never signed in
+    /// goes as soon as it expires: it never was a device. Revoked and expired
+    /// devices stay for [`DEAD_DEVICE_RETENTION_SECONDS`] after they stopped
+    /// working, for the owner to see, then go with their sessions. The audit
+    /// log keeps their history.
+    async fn cleanup_dead_devices(&self, now: i64) -> AppResult<()> {
+        self.exec(
+            "DELETE FROM devices WHERE status = 'pending' AND expires_at < ?",
+            vec![Val::I(now)],
+        )
+        .await?;
+        // Revoked before revocation stamped `expires_at`: retention starts now.
+        self.exec(
+            "UPDATE devices SET expires_at = ? WHERE status = 'revoked' AND expires_at IS NULL",
+            vec![Val::I(now)],
+        )
+        .await?;
+        let cutoff = now - DEAD_DEVICE_RETENTION_SECONDS;
+        self.exec(
+            "DELETE FROM sessions WHERE device_id IN \
+             (SELECT device_id FROM devices WHERE expires_at < ?)",
+            vec![Val::I(cutoff)],
+        )
+        .await?;
+        self.exec(
+            "DELETE FROM devices WHERE expires_at < ?",
+            vec![Val::I(cutoff)],
         )
         .await?;
         Ok(())

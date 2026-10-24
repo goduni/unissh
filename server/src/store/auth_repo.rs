@@ -10,6 +10,11 @@ const SESSION_COLS: &str = "session_id, account_id, device_id, access_hash, refr
 const DEVICE_COLS: &str = "account_id, device_id, ed25519_pub, x25519_pub, \
                            registered_at, status, expires_at";
 
+/// A device that can sign in, as a condition on `devices d` with one bind: now.
+/// Pending, revoked and expired devices are not counted as an account's devices.
+pub(super) const LIVE_DEVICE: &str =
+    "d.status = 'active' AND (d.expires_at IS NULL OR d.expires_at > ?)";
+
 impl Store {
     pub async fn find_session_by_access_hash(
         &self,

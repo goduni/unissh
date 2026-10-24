@@ -101,6 +101,23 @@ starts with `0.`:
   server call already did. Before, the sync after an expiry reported "version 0
   below the trusted cursor", a rollback warning for a server that had done
   nothing wrong.
+- A cancelled or failed "Add device" no longer leaves a device on the account.
+  The server registers the device before the pairing runs; it now stays pending
+  until its first sign-in, is never listed, and is deleted a week later if the
+  pairing never finished. Devices left by earlier failed pairings stay listed
+  until revoked.
+- Devices nobody can sign in as no longer pile up in the Devices lists:
+  - A revoked or expired device (an admin panel sign-in expires after 30 days)
+    drops out of the account's own list at once. The admin panel shows it as
+    revoked or expired for 30 days, then the server deletes it with its
+    sessions. Device counts leave such devices out.
+  - Signing in again on a server the app is already linked to enrolls a fresh
+    device: every SSO sign-in does, a weekly reassertion included, and so do
+    escrow, a new pairing and a repeat join. The app now revokes the device it
+    replaced, where it used to stay active for good.
+  - Removing a server in the app revokes this device on it, since nothing
+    could sign in as it again. Both are best effort: a server the app cannot
+    reach keeps the device until it is revoked by hand.
 
 ### Security
 
@@ -117,7 +134,13 @@ starts with `0.`:
 
 **Vault format unchanged. Server protocol changed additively** —
 `POST /v1/devices/label`; an older server leaves the device unnamed, and an
-older client never calls it.
+older client never calls it. `GET /v1/devices` now lists only devices that can
+sign in, and `/v1/admin/devices` gains the status `expired`; the app hides
+revoked devices itself on an older server. No database migration: the server
+reuses the devices table's expiry column. Rolling the server back after this
+one leaves devices whose pairing was still pending: the older server refuses
+them, lists them as `pending` (an older app shows them as revoked) and never
+deletes them; revoke them by hand.
 
 Colour and icon are new optional fields inside the existing encrypted host and
 group bodies, stored as

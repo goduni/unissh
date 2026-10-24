@@ -56,7 +56,7 @@ Every server-observed event has `event` (a string discriminator) and `ts` (unix 
 | `logout` | `account_id`, `device_id` | `POST /v1/session/logout` |
 | `join` | `account_id`, `device_id` | `POST /v1/join` redeems an invite → new account |
 | `oidc_login` | `account_id`, `device_id` | `POST /v1/oidc/callback` (SSO) |
-| `device_add` | `account_id`, `device_id` | A new sibling device is registered (`POST /v1/devices/add`) |
+| `device_add` | `account_id`, `device_id` | A sibling device is registered for a pairing (`POST /v1/devices/add`); it counts once it signs in |
 | `device_self_enroll` | `account_id`, `device_id` | An account self-enrolls a further device (`POST /v1/devices/self-enroll`) |
 | `device_remove` | `account_id`, `device_id` | `POST /v1/session/device-revoke` |
 | `device_label` | `account_id`, `device_id` | A device names itself (`POST /v1/devices/label`) |

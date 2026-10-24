@@ -170,7 +170,21 @@ pub struct AdminDeviceRow {
     pub label: Option<String>,
     pub status: String,
     pub registered_at: i64,
+    /// Web/panel devices expire; a revoked device's is when it was revoked.
+    pub expires_at: Option<i64>,
     pub session_count: i64,
+}
+
+impl AdminDeviceRow {
+    /// The status a listing shows: `"expired"` for a device past its expiry
+    /// that was not revoked, else the stored one.
+    pub fn shown_status(&self, now: i64) -> &str {
+        if self.status == "active" && self.expires_at.is_some_and(|e| e <= now) {
+            "expired"
+        } else {
+            &self.status
+        }
+    }
 }
 
 /// An active session (admin session listing). Token hashes are NOT exported.
