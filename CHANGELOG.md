@@ -113,6 +113,9 @@ starts with `0.`:
   account's master password from the UniSSH app (or the one set when the
   instance was set up); an account without one signs in with it empty.
   A refused sign-in with an empty password says the account may have one.
+- On a server older than audit delivery and export, the admin panel's Audit
+  screen says the server is too old for them instead of "Couldn't load this"
+  with "HTTP 404".
 - The app's sync keeps working when its session token expires during a sync:
   the sync transport now signs in again on a rejected token, as every other
   server call already did. Before, the sync after an expiry reported "version 0
