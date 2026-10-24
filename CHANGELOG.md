@@ -69,6 +69,9 @@ starts with `0.`:
 - Bindings: `ExecHandleFfi::close_stdin` ends a streaming command's input and
   keeps its output coming; `Core::wait_for_recordings` waits for session
   recordings still being written, for a process about to exit.
+- Releases carry the command-line client as a static Linux binary for x86-64
+  and ARM64 (`unissh-cli_<version>_linux-<arch>`, musl), in the signed
+  `SHA256SUMS` with everything else.
 
 ### Changed
 

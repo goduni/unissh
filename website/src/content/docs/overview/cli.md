@@ -12,7 +12,27 @@ verify-before-apply sync, and it never takes a secret on the command line.
 
 ## Install
 
-Build it from source (see [Build from source](../../operations/build/) for the
+Each [release](https://github.com/goduni/unissh/releases) carries the client as
+one static Linux binary per architecture, so it runs on any distribution,
+however old its libc: `unissh-cli_<version>_linux-x86_64` and
+`unissh-cli_<version>_linux-aarch64`. Check it against the release's signed
+`SHA256SUMS` before installing it:
+
+```bash
+V=0.7.0 A=x86_64   # the release you want; A=aarch64 on ARM
+curl -fLO https://github.com/goduni/unissh/releases/download/v$V/unissh-cli_${V}_linux-$A
+curl -fLO https://github.com/goduni/unissh/releases/download/v$V/SHA256SUMS
+curl -fLO https://github.com/goduni/unissh/releases/download/v$V/SHA256SUMS.minisig
+minisign -Vm SHA256SUMS -P 'RWQvV7DIid665aUPiJiN5NXimAehmWEjgRS9uLgi2nSWIUiiBY7ZKCAs'
+sha256sum -c SHA256SUMS --ignore-missing
+sudo install -m 755 unissh-cli_${V}_linux-$A /usr/local/bin/unissh
+```
+
+The desktop app's own binary on Linux is also called `unissh`. On a machine that
+has the app installed, give the command-line client another name, for example
+`/usr/local/bin/unissh-cli`, so the app's launcher keeps starting the app.
+
+Or build it from source (see [Build from source](../../operations/build/) for the
 prerequisites):
 
 ```bash
