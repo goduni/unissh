@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { useUi } from "../store/ui";
 import { useAsync } from "../util/useAsync";
-import { Btn, Spinner, Tag, TextInput, Toggle } from "../ui/primitives";
+import { Btn, Card, EmptyState, ErrorCard, Missing, Skeleton, Tag, TextInput, Toggle, ToneBadge } from "../ui/primitives";
 import { Screen } from "./Screen";
 import type { ConfigResp } from "../api/types";
 import { MONO } from "../theme/tokens";
@@ -23,6 +23,52 @@ const SECTION_ORDER: (keyof ConfigResp)[] = [
 const HOT_LIMIT_KEYS = ["max_object_bytes", "max_objects_per_push"] as const;
 type HotLimitKey = (typeof HOT_LIMIT_KEYS)[number];
 
+/** A line of the ruled list: the key in muted mono, the value beside it; at least 32 px. */
+const ROW: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "minmax(140px, 280px) minmax(0, 1fr)",
+  columnGap: 16,
+  alignItems: "center",
+  minHeight: 32,
+  padding: "4px 16px",
+  borderTop: "1px solid var(--rule)",
+};
+const KEY: CSSProperties = {
+  minWidth: 0,
+  fontFamily: MONO,
+  fontSize: 12,
+  lineHeight: "16px",
+  color: "var(--muted-foreground)",
+  overflowWrap: "anywhere",
+};
+const VALUE: CSSProperties = {
+  margin: 0,
+  minWidth: 0,
+  display: "flex",
+  flexWrap: "wrap",
+  alignItems: "center",
+  gap: "4px 12px",
+  fontFamily: MONO,
+  fontSize: 12,
+  lineHeight: "16px",
+  color: "var(--foreground)",
+  overflowWrap: "anywhere",
+};
+/** The head of a section: a 28 px row on --elevated at 40 %, the TOML table's name in mono. */
+const GROUP_HEAD: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  minHeight: 28,
+  margin: 0,
+  padding: "0 16px",
+  background: "color-mix(in oklch, var(--elevated) 40%, transparent)",
+  fontFamily: MONO,
+  fontSize: 12,
+  fontWeight: 500,
+  lineHeight: "16px",
+  color: "var(--muted-foreground)",
+};
+
 export function Config() {
   const { t } = useTranslation();
   return (
@@ -41,13 +87,23 @@ function ConfigBody() {
 
   if (cfg.loading && !cfg.data) {
     return (
-      <div style={{ display: "flex", justifyContent: "center", padding: 40 }}>
-        <Spinner />
-      </div>
+      <Card pad={false}>
+        <div style={{ ...GROUP_HEAD, borderTop: 0 }}>
+          <Skeleton width={64} height={12} />
+        </div>
+        {Array.from({ length: 6 }, (_, i) => (
+          <div key={i} style={ROW}>
+            <Skeleton width="60%" height={12} />
+            <Skeleton width="40%" height={12} />
+          </div>
+        ))}
+      </Card>
     );
   }
 
-  if (!cfg.data) return null;
+  if (!cfg.data) {
+    return cfg.error ? <ErrorCard message={cfg.error} onRetry={cfg.reload} retrying={cfg.loading} /> : null;
+  }
   const data = cfg.data;
 
   const onToggleValidate = (next: boolean) => {
@@ -75,100 +131,80 @@ function ConfigBody() {
     return JSON.stringify(v);
   };
 
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      {SECTION_ORDER.map((name) => {
-        const section = data[name];
-        const entries = Object.entries(section);
-        return (
-          <div
-            key={name}
-            style={{
-              background: "var(--bg1)",
-              border: "1px solid var(--line)",
-              borderRadius: 14,
-              overflow: "hidden",
-            }}
-          >
-            <div
-              style={{
-                padding: "12px 18px",
-                borderBottom: "1px solid var(--line)",
-                fontFamily: MONO,
-                fontSize: 13,
-                fontWeight: 700,
-                color: "var(--accent)",
-              }}
-            >
-              [{name}]
-            </div>
-            {entries.map(([key, value]) => {
-              const isValidate = name === "sync" && key === "validate_signatures";
-              const isHotLimit =
-                name === "limits" && (HOT_LIMIT_KEYS as readonly string[]).includes(key);
-              return (
-                <div
-                  key={key}
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "2fr 1fr",
-                    alignItems: "center",
-                    padding: "11px 18px",
-                    borderBottom: "1px solid var(--line)",
-                  }}
-                >
-                  <span
-                    style={{
-                      fontFamily: MONO,
-                      fontSize: 12.5,
-                      color: "var(--txt2)",
-                    }}
-                  >
-                    {key}
-                  </span>
-                  <span
-                    style={{
-                      display: "flex",
-                      justifyContent: "flex-end",
-                      fontFamily: MONO,
-                      fontSize: 12.5,
-                      color: "var(--txt)",
-                      fontWeight: 600,
-                    }}
-                  >
-                    {isValidate ? (
-                      <Toggle
-                        checked={Boolean(data.sync.validate_signatures)}
-                        onChange={onToggleValidate}
-                        label="validate_signatures"
-                      />
-                    ) : isHotLimit ? (
-                      <HotLimitEditor
-                        field={key as HotLimitKey}
-                        initial={value}
-                        onApplied={() => {
-                          toast("success", t("screen.config.applied"));
-                          cfg.reload();
-                        }}
-                        onError={(msg) => toast("error", msg)}
-                      />
-                    ) : value === "***" ? (
-                      <Tag tone="neutral">***</Tag>
-                    ) : (
-                      stringify(value)
-                    )}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        );
-      })}
+  const validating = Boolean(data.sync.validate_signatures);
 
-      <div style={{ fontSize: 12, color: "var(--txt3)" }}>
+  return (
+    <>
+      {/* What a change does, said before the click. */}
+      <p style={{ margin: 0, maxWidth: "72ch", fontSize: 14, lineHeight: "20px", color: "var(--muted-foreground)" }}>
         {t("screen.config.hotReloadNote")}
-      </div>
-    </div>
+      </p>
+
+      <Card pad={false}>
+        {SECTION_ORDER.map((name, si) => {
+          const section = data[name];
+          const entries = Object.entries(section);
+          const headId = `config-section-${name}`;
+          return (
+            <section key={name} aria-labelledby={headId}>
+              <h2 id={headId} style={{ ...GROUP_HEAD, borderTop: si > 0 ? "1px solid var(--rule)" : undefined }}>
+                [{name}]
+              </h2>
+              {entries.length === 0 ? (
+                <div style={{ borderTop: "1px solid var(--rule)" }}>
+                  <EmptyState compact flat title={t("common.empty")} />
+                </div>
+              ) : (
+                <dl style={{ margin: 0 }}>
+                  {entries.map(([key, value]) => {
+                    const isValidate = name === "sync" && key === "validate_signatures";
+                    const isHotLimit =
+                      name === "limits" && (HOT_LIMIT_KEYS as readonly string[]).includes(key);
+                    return (
+                      <div key={key} style={ROW}>
+                        <dt style={KEY}>{key}</dt>
+                        <dd style={VALUE}>
+                          {isValidate ? (
+                            <>
+                              <Toggle checked={validating} onChange={onToggleValidate} label="validate_signatures" />
+                              <span>{String(validating)}</span>
+                              {/* Trust is visible: a write the server no longer verifies is said in a word. */}
+                              {!validating ? (
+                                <ToneBadge tone="warning">{t("screen.config.validateOffBadge")}</ToneBadge>
+                              ) : null}
+                            </>
+                          ) : isHotLimit ? (
+                            <HotLimitEditor
+                              field={key as HotLimitKey}
+                              initial={value}
+                              onApplied={() => {
+                                toast("success", t("screen.config.applied"));
+                                cfg.reload();
+                              }}
+                              onError={(msg) => toast("error", msg)}
+                            />
+                          ) : value === "***" ? (
+                            <Tag tone="neutral" mono>
+                              ***
+                            </Tag>
+                          ) : value === null || value === undefined || (typeof value === "string" && value.trim() === "") ? (
+                            // Not set: an absent value (null, or an empty string such as an unset tls_cert) is the
+                            // muted em dash, never a blank.
+                            <Missing />
+                          ) : (
+                            stringify(value)
+                          )}
+                        </dd>
+                      </div>
+                    );
+                  })}
+                </dl>
+              )}
+            </section>
+          );
+        })}
+      </Card>
+    </>
   );
 }
 
@@ -212,9 +248,9 @@ function HotLimitEditor({
   };
 
   return (
-    <span style={{ display: "flex", alignItems: "center", gap: 8, width: 200 }}>
-      <TextInput value={raw} onChange={setRaw} mono />
-      <Btn size="sm" variant="soft" loading={busy} onClick={apply}>
+    <span style={{ display: "flex", alignItems: "center", gap: 8, width: 240, maxWidth: "100%" }}>
+      <TextInput value={raw} onChange={setRaw} mono inputMode="numeric" ariaLabel={field} style={{ height: 28 }} />
+      <Btn size="sm" variant="outline" loading={busy} onClick={apply}>
         {t("common.apply")}
       </Btn>
     </span>

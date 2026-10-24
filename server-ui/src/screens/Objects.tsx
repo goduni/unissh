@@ -2,13 +2,13 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { truncId } from "../util/bytes";
-import { fmtBytes, fmtRelative } from "../util/format";
-import { OBJECT_TAG_LABEL } from "../api/types";
+import { fmtBytes, fmtEpoch, fmtNum, fmtRelative } from "../util/format";
 import type { ObjectMeta } from "../api/types";
 import { DataTable, type Column } from "../ui/DataTable";
-import { PubkeyChip, Tag, ZkBanner, type TagTone } from "../ui/primitives";
+import { PubkeyChip, Segmented, SummaryCount, Tag, ToneBadge, ZkBanner } from "../ui/primitives";
 import { Screen } from "./Screen";
 import { MONO } from "../theme/tokens";
+import "./data.css";
 
 const TAG_FILTERS: { label: string; tag: number | undefined }[] = [
   { label: "common.all", tag: undefined },
@@ -20,24 +20,12 @@ const TAG_FILTERS: { label: string; tag: number | undefined }[] = [
   { label: "screen.objects.tagKeyset", tag: 6 },
 ];
 
-function tagTone(tag: number): TagTone {
-  switch (tag) {
-    case 1:
-      return "accent";
-    case 2:
-      return "green";
-    case 3:
-      return "purple";
-    case 4:
-      return "amber";
-    case 5:
-      return "neutral";
-    case 6:
-      return "red";
-    default:
-      return "neutral";
-  }
-}
+/** The kind of an object in the reader's words, as the filter names it. */
+const TAG_WORD = new Map(TAG_FILTERS.flatMap((f) => (f.tag === undefined ? [] : [[f.tag, f.label] as const])));
+
+/** The toggle group speaks strings: "all" stands for no tag. */
+const ALL = "all";
+const filterValue = (tag: number | undefined) => (tag === undefined ? ALL : String(tag));
 
 export function Objects() {
   const { t } = useTranslation();
@@ -77,122 +65,112 @@ function ObjectsBody() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tag]);
 
+  const muted = { color: "var(--muted-foreground)" } as const;
+
   const columns: Column<ObjectMeta>[] = [
     {
       key: "server_seq",
-      label: "seq",
-      width: "84px",
-      render: (row) => (
-        <span style={{ fontFamily: MONO, fontSize: 12 }}>
-          {row.server_seq}
-        </span>
-      ),
+      // The server's sequence number, as the audit log names it: an identifier, so mono and lowercase.
+      label: <span className="data-head-mono">seq</span>,
+      width: "80px",
+      numeric: true,
+      render: (row) => row.server_seq,
     },
     {
       key: "object_tag",
-      label: "tag",
-      width: "94px",
-      render: (row) => (
-        <Tag tone={tagTone(row.object_tag)}>
-          {OBJECT_TAG_LABEL[row.object_tag] ?? row.object_tag}
-        </Tag>
-      ),
+      label: t("screen.objects.colType"),
+      width: "112px",
+      // The kind of an object is a fact, not a state: one neutral chip for every kind,
+      // in the filter's words; a tag the panel does not know stays its number, in mono.
+      render: (row) => {
+        const word = TAG_WORD.get(row.object_tag);
+        return word ? <Tag>{t(word)}</Tag> : <Tag mono>{row.object_tag}</Tag>;
+      },
     },
     {
       key: "vault_id",
-      label: "vault_id",
+      label: t("screen.objects.colVault"),
       width: "1.1fr",
-      render: (row) => (
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 7, minWidth: 0 }}>
-          <span
-            style={{
-              fontFamily: MONO,
-              fontSize: 12,
-              color: "var(--txt2)",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {truncId(row.vault_id)}
+      render: (row) =>
+        row.vault_id || row.tombstone ? (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 8, minWidth: 0, maxWidth: "100%" }}>
+            <span
+              title={row.vault_id ?? undefined}
+              style={{
+                ...muted,
+                fontFamily: MONO,
+                fontSize: 12,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {truncId(row.vault_id)}
+            </span>
+            {row.tombstone ? <ToneBadge tone="absent">{t("common.tombstone")}</ToneBadge> : null}
           </span>
-          {row.tombstone ? <Tag tone="red">TOMB</Tag> : null}
-        </span>
-      ),
+        ) : null,
     },
     {
       key: "obj_version",
-      label: "ver",
+      label: t("screen.objects.colVersion"),
       width: "64px",
-      render: (row) => (
-        <span style={{ fontFamily: MONO, fontSize: 12, color: "var(--txt3)" }}>
-          {row.obj_version ?? "—"}
-        </span>
-      ),
+      numeric: true,
+      render: (row) => row.obj_version,
     },
     {
       key: "key_epoch",
-      label: "epoch",
+      label: t("screen.objects.colEpoch"),
       width: "64px",
-      render: (row) => (
-        <span style={{ fontFamily: MONO, fontSize: 12, color: "var(--txt3)" }}>
-          {row.key_epoch ?? "—"}
-        </span>
-      ),
+      numeric: true,
+      render: (row) => row.key_epoch,
     },
     {
       key: "author_pubkey",
-      label: "author",
+      label: t("screen.objects.colAuthor"),
       width: "1fr",
       render: (row) => <PubkeyChip value={row.author_pubkey} />,
     },
     {
       key: "received_at",
       label: t("screen.objects.colReceived"),
-      width: "84px",
+      width: "96px",
       render: (row) => (
-        <span style={{ fontSize: 12, color: "var(--txt2)" }}>{fmtRelative(row.received_at)}</span>
+        <span title={fmtEpoch(row.received_at)} style={muted}>
+          {fmtRelative(row.received_at)}
+        </span>
       ),
     },
     {
       key: "blob_len",
       label: t("screen.objects.colSize"),
-      width: "78px",
-      render: (row) => (
-        <span style={{ fontFamily: MONO, fontSize: 12 }}>
-          {fmtBytes(row.blob_len)}
-        </span>
-      ),
+      width: "84px",
+      numeric: true,
+      render: (row) => fmtBytes(row.blob_len),
     },
   ];
+
+  // How many: the whole list, or what a narrowed one found; a page with more behind it says so.
+  // While the first page is read, the summary line holds a skeleton in the count's place.
+  const n = fmtNum(rows.length);
+  const count = hasMore
+    ? t("common.shownMore", { n })
+    : tag !== undefined
+      ? t("common.found", { n })
+      : t("common.inAll", { n });
 
   return (
     <>
       <ZkBanner>{t("zk.objects")}</ZkBanner>
 
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginBottom: 14 }}>
-        {TAG_FILTERS.map((f) => {
-          const on = f.tag === tag;
-          return (
-            <button
-              key={f.label}
-              onClick={() => setTag(f.tag)}
-              style={{
-                padding: "6px 13px",
-                borderRadius: 8,
-                cursor: "pointer",
-                fontFamily: "inherit",
-                fontSize: 12.5,
-                fontWeight: on ? 700 : 600,
-                background: on ? "var(--accentSoft)" : "var(--bg1)",
-                color: on ? "var(--accent)" : "var(--txt2)",
-                border: on ? "1px solid var(--accentLine)" : "1px solid var(--line)",
-              }}
-            >
-              {t(f.label)}
-            </button>
-          );
-        })}
+      {/* Long labels in some languages: the group scrolls sideways on a phone instead of breaking. */}
+      <div style={{ maxWidth: "100%", overflowX: "auto" }}>
+        <Segmented
+          ariaLabel={t("screen.objects.filterTag")}
+          options={TAG_FILTERS.map((f) => ({ value: filterValue(f.tag), label: t(f.label) }))}
+          value={filterValue(tag)}
+          onChange={(v) => setTag(v === ALL ? undefined : Number(v))}
+        />
       </div>
 
       <DataTable<ObjectMeta>
@@ -202,8 +180,20 @@ function ObjectsBody() {
         loading={loading}
         error={error}
         onRetry={() => load(true)}
-        empty={{ title: t("screen.objects.empty"), icon: "layers" }}
+        empty={
+          tag !== undefined
+            ? {
+                title: t("screen.objects.empty"),
+                icon: "layers",
+                actionLabel: t("common.resetFilters"),
+                onAction: () => setTag(undefined),
+              }
+            : { title: t("screen.objects.empty"), icon: "layers" }
+        }
         more={{ hasMore, loading, onMore: () => load(false) }}
+        summary={loading && rows.length === 0 ? true : <SummaryCount>{count}</SummaryCount>}
+        minWidth={760}
+        ariaLabel={t("screen.objects.title")}
       />
     </>
   );

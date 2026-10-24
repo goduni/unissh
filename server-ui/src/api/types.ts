@@ -12,14 +12,6 @@ export enum ObjectTag {
   Audit = 5,
   Keyset = 6,
 }
-export const OBJECT_TAG_LABEL: Record<number, string> = {
-  1: "Vault",
-  2: "Item",
-  3: "Manifest",
-  4: "Grant",
-  5: "Audit",
-  6: "Keyset",
-};
 
 export type VaultRole = "viewer" | "editor" | "admin";
 export const ROLE_BY_CODE: Record<number, VaultRole> = {

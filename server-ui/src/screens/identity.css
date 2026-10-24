@@ -1,0 +1,162 @@
+/*
+ * The identity screens (Spaces, Accounts, Directory, Devices, Sessions, Invites): what their inline styles cannot
+ * say. Every value is a token.
+ */
+
+/* A filter field with its search icon inside, 32 px like every control beside it; it stands in a flex row. */
+.id-filter {
+  position: relative;
+  flex: 1 1 240px;
+  min-width: 0;
+  max-width: 460px;
+}
+.id-filter > svg {
+  position: absolute;
+  top: 50%;
+  left: 10px;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+/*
+ * An account as a card (DESIGN.md: Cards): --card on a --border hairline, 10 px corners, the whisper of --elev-card
+ * at rest and nothing more on hover; under the pointer only its edge steps to --input. The name is the card's one
+ * control, and its ::after stretches the press over the whole card; what must stay pressable on its own (the copy
+ * button) stands above it in `.id-card__over`.
+ */
+.id-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 16px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--elev-card);
+  transition: border-color var(--duration-fast) var(--ease-out-soft);
+}
+.id-card:hover {
+  border-color: var(--input);
+}
+.id-card__open {
+  min-width: 0;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.id-card__open::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-lg);
+}
+.id-card__over {
+  position: relative;
+  z-index: 1;
+}
+/* The focus is drawn on the whole card where the browser can tell it; elsewhere the name keeps the ring. */
+@supports selector(:has(*)) {
+  .id-card__open:focus-visible {
+    outline: none;
+  }
+  .id-card:has(.id-card__open:focus-visible) {
+    border-color: var(--ring);
+    box-shadow:
+      var(--elev-card),
+      0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);
+  }
+}
+
+/*
+ * The row menu (DESIGN.md: Menus and popovers; Tables, "the last cell holds a ghost icon menu"): RowMenu.tsx. The
+ * trigger is the kit's 28 px ghost icon button, lit while its menu is open. The menu floats fixed in a portal (placed
+ * by script): --popover on a --border hairline, 7 px corners, 4 px of padding, the popover's whisper; items 5 px
+ * corners, --elevated on focus (the pointer moves the focus), the destructive one in red; an unavailable one at 50 %.
+ */
+.id-rowmenu-trigger[aria-expanded="true"] {
+  color: var(--foreground);
+}
+.id-rowmenu {
+  position: fixed;
+  z-index: 60;
+  min-width: 160px;
+  max-width: calc(100vw - 16px);
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--popover);
+  color: var(--foreground);
+  box-shadow: var(--elev-popover);
+  outline: none;
+  animation: id-pop-in var(--duration-base) var(--ease-out-soft);
+}
+.id-rowmenu__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 28px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--foreground);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 16px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: default;
+  outline: none;
+}
+.id-rowmenu__item:focus {
+  background: var(--elevated);
+}
+.id-rowmenu__item > svg {
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+}
+.id-rowmenu__item--destructive,
+.id-rowmenu__item--destructive > svg {
+  color: var(--destructive);
+}
+.id-rowmenu__item[aria-disabled="true"] {
+  opacity: 0.5;
+}
+@keyframes id-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* An account card's name has the whole line: two lines at most, then an ellipsis. */
+.id-card__name {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+/* Motion is a response only, and none at all when the reader asks for none. */
+@media (prefers-reduced-motion: reduce) {
+  .id-card,
+  .id-rowmenu {
+    transition: none !important;
+    animation: none !important;
+  }
+}

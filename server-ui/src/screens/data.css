@@ -1,0 +1,71 @@
+/*
+ * The data screens (vaults, grants, relay, objects, audit): what inline styles
+ * cannot say. Tokens only; global.css holds the kit's own classes.
+ */
+
+/*
+ * A column head that is an identifier the reader types or greps (`seq`): mono
+ * and lowercase inside the label-style head row, which sets the rest uppercase.
+ */
+.data-head-mono {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/*
+ * A choice among the instance's vaults (Grants): an outline control per vault
+ * id in mono, wrapping; the chosen one --elevated at 600, never blue.
+ */
+.u-btn.data-pick {
+  height: 28px;
+  padding: 0 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.u-btn.data-pick:hover:not(:disabled) {
+  color: var(--foreground);
+}
+.u-btn.data-pick[aria-pressed="true"],
+.u-btn.data-pick[aria-pressed="true"]:hover:not(:disabled) {
+  background: var(--elevated);
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+/* Grants: the key epoch beside its members from 1024 px up; stacked below. */
+.data-grants-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 16px;
+}
+@media (min-width: 1024px) {
+  .data-grants-split {
+    grid-template-columns: 300px minmax(0, 1fr);
+  }
+}
+
+/* A member in the rotation dialog: identity, role, expiry, remove. Two lines on a phone. */
+.data-member {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 136px 136px auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--rule);
+}
+.data-member:last-child {
+  border-bottom: 0;
+}
+@media (max-width: 599px) {
+  .data-member {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  }
+  .data-member > :first-child {
+    grid-column: 1 / -1;
+  }
+}

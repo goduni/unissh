@@ -1,14 +1,13 @@
+import type { CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import type { InviteRow } from "../api/types";
 import { useUi } from "../store/ui";
 import { useAsync } from "../util/useAsync";
-import { truncId } from "../util/bytes";
 import { fmtDate, fmtRelative } from "../util/format";
 import { DataTable, type Column } from "../ui/DataTable";
-import { Btn, StateBadge } from "../ui/primitives";
+import { Btn, Missing, PubkeyChip, StateBadge } from "../ui/primitives";
 import { Screen } from "./Screen";
-import { MONO } from "../theme/tokens";
 
 export function Invites() {
   const { t } = useTranslation();
@@ -38,7 +37,13 @@ function InvitesBody() {
   // NOTE: v2 invite create/revoke land server-side in Task 8. The admin listing is
   // read-only lifecycle metadata; there is no revoke route yet, so no revoke action.
   const columns: Column<InviteRow>[] = [
-    { key: "id", label: "invite_id", width: "1.6fr", render: (v) => <span style={mono}>{truncId(v.invite_id, 10, 4)}</span> },
+    {
+      key: "id",
+      label: t("screen.invites.colInvite"),
+      width: "1.6fr",
+      render: (v) => <PubkeyChip value={v.invite_id} head={10} tail={4} />,
+    },
+    // The badge says the state in the reader's words («Использовано», "Redeemed").
     { key: "state", label: t("common.state"), width: "120px", render: (v) => <StateBadge state={v.state} /> },
     {
       key: "exp",
@@ -46,12 +51,22 @@ function InvitesBody() {
       width: "1fr",
       render: (v) => (
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 12.5, color: "var(--txt2)" }}>{fmtRelative(v.expires_at)}</div>
-          <div style={{ fontSize: 11, color: "var(--txt3)" }}>{fmtDate(v.created_at)}</div>
+          <div style={LINE}>{v.expires_at ? fmtRelative(v.expires_at) : <Missing />}</div>
+          {v.created_at ? (
+            <div style={{ ...LINE, fontSize: 12, lineHeight: "16px", color: "var(--muted-foreground)" }}>
+              {fmtDate(v.created_at)}
+            </div>
+          ) : null}
         </div>
       ),
     },
-    { key: "redeemed", label: t("screen.invites.colRedeemed"), width: "120px", render: (v) => <span style={{ fontSize: 12, color: "var(--txt3)" }}>{v.redeemed_at ? fmtRelative(v.redeemed_at) : "—"}</span> },
+    {
+      key: "redeemed",
+      label: t("screen.invites.colRedeemed"),
+      width: "120px",
+      render: (v) =>
+        v.redeemed_at ? <span style={{ ...LINE, color: "var(--muted-foreground)" }}>{fmtRelative(v.redeemed_at)}</span> : null,
+    },
   ];
 
   return (
@@ -62,9 +77,24 @@ function InvitesBody() {
       loading={data.loading}
       error={data.error}
       onRetry={data.reload}
-      empty={{ title: t("screen.invites.emptyTitle"), hint: t("screen.invites.emptyHint"), icon: "tag", actionLabel: t("screen.invites.emptyAction"), onAction: openInvite }}
+      summary
+      minWidth={560}
+      ariaLabel={t("screen.invites.title")}
+      empty={{
+        title: t("screen.invites.emptyTitle"),
+        hint: t("screen.invites.emptyHint"),
+        icon: "tag",
+        actionLabel: t("screen.invites.emptyAction"),
+        onAction: openInvite,
+      }}
     />
   );
 }
 
-const mono: React.CSSProperties = { fontFamily: MONO, fontSize: 12.5, color: "var(--txt2)" };
+const LINE: CSSProperties = {
+  display: "block",
+  minWidth: 0,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};

@@ -4,11 +4,25 @@ import { api } from "../api";
 import type { KeysetGen, RelayChannel } from "../api/types";
 import { useAsync } from "../util/useAsync";
 import { truncId } from "../util/bytes";
-import { fmtRelative } from "../util/format";
+import { fmtEpoch, fmtRelative } from "../util/format";
 import { DataTable, type Column } from "../ui/DataTable";
-import { Card, StateBadge, TextInput, ZkBanner } from "../ui/primitives";
+import { Card, CardHeader, StateBadge, TextInput, ZkBanner, type Tone } from "../ui/primitives";
 import { Screen } from "./Screen";
 import { MONO } from "../theme/tokens";
+
+/**
+ * A PAKE channel's state as a status badge: amber while the handshake runs
+ * (open, then msg1..msg3), green once done, muted and dashed once expired.
+ * A state the panel does not know stays a plain neutral word.
+ */
+const CHANNEL_TONE: Record<string, Tone> = {
+  open: "warning",
+  msg1: "warning",
+  msg2: "warning",
+  msg3: "warning",
+  done: "success",
+  expired: "absent",
+};
 
 export function Relay() {
   const { t } = useTranslation();
@@ -26,88 +40,113 @@ function RelayBody() {
   const relay = useAsync(() => api.admin.relay(), []);
   const keysets = useAsync(() => api.admin.keysets(acc || undefined), [acc]);
 
+  const muted = { color: "var(--muted-foreground)" } as const;
+
   const channelColumns: Column<RelayChannel>[] = [
     {
       key: "channel_id",
-      label: "channel_id",
-      width: "1fr",
+      label: t("screen.relay.colChannel"),
+      width: "minmax(0, 1fr)",
       render: (r) => (
-        <span style={{ fontFamily: MONO }}>{truncId(r.channel_id)}</span>
+        <span title={r.channel_id} style={{ fontFamily: MONO, fontSize: 12 }}>
+          {truncId(r.channel_id)}
+        </span>
       ),
     },
     {
       key: "state",
-      label: "state",
-      width: "90px",
-      render: (r) => <StateBadge state={r.state} />,
+      label: t("common.state"),
+      // The badge says the state in the reader's words («Шаг 2/3», "Step 2/3").
+      width: "112px",
+      render: (r) => <StateBadge state={r.state} tone={CHANNEL_TONE[r.state] ?? "neutral"} />,
     },
     {
       key: "expires_at",
-      label: "expires_at",
-      width: "1fr",
-      render: (r) => fmtRelative(r.expires_at),
+      label: t("screen.relay.colExpires"),
+      width: "minmax(0, 1fr)",
+      render: (r) => (
+        <span title={fmtEpoch(r.expires_at)} style={muted}>
+          {fmtRelative(r.expires_at)}
+        </span>
+      ),
     },
   ];
 
   const keysetColumns: Column<KeysetGen>[] = [
     {
       key: "generation",
-      label: "generation",
-      width: "1fr",
-      render: (r) => (
-        <span style={{ fontFamily: MONO }}>{r.generation}</span>
-      ),
+      label: t("screen.relay.colGeneration"),
+      width: "96px",
+      numeric: true,
+      render: (r) => r.generation,
     },
     {
       key: "uploaded_at",
-      label: "uploaded_at",
-      width: "1fr",
-      render: (r) => fmtRelative(r.uploaded_at),
+      label: t("screen.relay.colUploaded"),
+      width: "minmax(0, 1fr)",
+      render: (r) => (
+        <span title={fmtEpoch(r.uploaded_at)} style={muted}>
+          {fmtRelative(r.uploaded_at)}
+        </span>
+      ),
     },
   ];
-
-  const headerStyle = {
-    padding: "14px 18px",
-    borderBottom: "1px solid var(--line)",
-    fontWeight: 700,
-    fontSize: 13.5,
-  } as const;
 
   return (
     <>
       <ZkBanner>{t("zk.relay")}</ZkBanner>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 380px), 1fr))",
+          alignItems: "start",
+          gap: 16,
+        }}
+      >
         <Card pad={false}>
-          <div style={headerStyle}>{t("screen.relay.pakeChannels")}</div>
-          <div style={{ padding: 14 }}>
-            <DataTable
-              columns={channelColumns}
-              rows={relay.data?.channels ?? []}
-              rowKey={(r) => r.channel_id}
-              loading={relay.loading}
-              error={relay.error}
-              onRetry={relay.reload}
-              empty={{ title: t("common.empty") }}
-            />
-          </div>
+          <CardHeader title={t("screen.relay.pakeChannels")} />
+          <DataTable
+            bare
+            columns={channelColumns}
+            rows={relay.data?.channels ?? []}
+            rowKey={(r) => r.channel_id}
+            loading={relay.loading}
+            error={relay.error}
+            onRetry={relay.reload}
+            empty={{ title: t("common.empty") }}
+            summary
+            minWidth={360}
+            ariaLabel={t("screen.relay.pakeChannels")}
+          />
         </Card>
 
         <Card pad={false}>
-          <div style={headerStyle}>{t("screen.relay.keysetGenerations")}</div>
-          <div style={{ padding: 14 }}>
-            <div style={{ marginBottom: 14 }}>
-              <TextInput value={acc} onChange={setAcc} placeholder="account_id" mono />
-            </div>
-            <DataTable
-              columns={keysetColumns}
-              rows={keysets.data?.keysets ?? []}
-              rowKey={(r) => String(r.generation)}
-              loading={keysets.loading}
-              error={keysets.error}
-              onRetry={keysets.reload}
-              empty={{ title: t("common.empty") }}
-            />
-          </div>
+          <CardHeader
+            title={t("screen.relay.keysetGenerations")}
+            actions={
+              <TextInput
+                value={acc}
+                onChange={setAcc}
+                placeholder="account_id"
+                ariaLabel={t("screen.relay.accountFilter")}
+                mono
+                style={{ width: 220, height: 28 }}
+              />
+            }
+          />
+          <DataTable
+            bare
+            columns={keysetColumns}
+            rows={keysets.data?.keysets ?? []}
+            rowKey={(r) => String(r.generation)}
+            loading={keysets.loading}
+            error={keysets.error}
+            onRetry={keysets.reload}
+            empty={{ title: t("common.empty") }}
+            summary
+            minWidth={280}
+            ariaLabel={t("screen.relay.keysetGenerations")}
+          />
         </Card>
       </div>
     </>

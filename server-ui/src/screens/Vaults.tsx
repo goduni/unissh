@@ -4,7 +4,7 @@ import { SYNC_TARGET_LABEL, CACHE_POLICY_LABEL, type VaultRow } from "../api/typ
 import { useAsync } from "../util/useAsync";
 import { truncId } from "../util/bytes";
 import { DataTable, type Column } from "../ui/DataTable";
-import { PubkeyChip, Tag, ZkBanner } from "../ui/primitives";
+import { PubkeyChip, Tag, ToneBadge, ZkBanner } from "../ui/primitives";
 import { Screen } from "./Screen";
 import { MONO } from "../theme/tokens";
 
@@ -24,49 +24,62 @@ function VaultsBody() {
   const columns: Column<VaultRow>[] = [
     {
       key: "vault_id",
-      label: "vault_id",
+      label: t("screen.vaults.colVault"),
       width: "1.3fr",
+      // A tombstoned vault stays on the sheet: struck, muted, and said in a word.
       render: (r) => (
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
-          <span style={{ fontFamily: MONO }}>{truncId(r.vault_id)}</span>
-          {r.tombstone ? <Tag tone="red">TOMB</Tag> : null}
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8, minWidth: 0, maxWidth: "100%" }}>
+          <span
+            title={r.vault_id}
+            style={{
+              fontFamily: MONO,
+              fontSize: 12,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              color: r.tombstone ? "var(--muted-foreground)" : undefined,
+              textDecoration: r.tombstone ? "line-through" : undefined,
+            }}
+          >
+            {truncId(r.vault_id)}
+          </span>
+          {r.tombstone ? <ToneBadge tone="absent">{t("common.tombstone")}</ToneBadge> : null}
         </span>
       ),
     },
     {
       key: "owner_pubkey",
-      label: "owner_pubkey",
+      label: t("screen.vaults.colOwner"),
       width: "1.2fr",
       render: (r) => <PubkeyChip value={r.owner_pubkey} />,
     },
     {
       key: "latest_epoch",
-      label: "epoch",
-      width: "70px",
-      render: (r) => (
-        <span style={{ fontFamily: MONO }}>{r.latest_epoch}</span>
-      ),
+      label: t("screen.vaults.colEpoch"),
+      width: "72px",
+      numeric: true,
+      render: (r) => r.latest_epoch,
     },
     {
       key: "latest_version",
-      label: "version",
-      width: "78px",
-      render: (r) => (
-        <span style={{ fontFamily: MONO }}>{r.latest_version}</span>
-      ),
+      label: t("screen.vaults.colVersion"),
+      width: "80px",
+      numeric: true,
+      render: (r) => r.latest_version,
     },
     {
       key: "sync",
-      label: "sync",
-      width: "92px",
-      render: (r) => <Tag tone="accent">{SYNC_TARGET_LABEL[r.sync_target]}</Tag>,
+      label: t("screen.vaults.colSync"),
+      // Wide enough for «Синхронизация» in the head.
+      width: "120px",
+      render: (r) => <Tag mono>{SYNC_TARGET_LABEL[r.sync_target]}</Tag>,
     },
     {
       key: "cache_policy",
-      label: "cache_policy",
+      label: t("screen.vaults.colCache"),
       width: "132px",
       render: (r) => (
-        <span style={{ fontFamily: MONO, color: "var(--txt3)" }}>
+        <span style={{ fontFamily: MONO, fontSize: 12, color: "var(--muted-foreground)" }}>
           {CACHE_POLICY_LABEL[r.cache_policy]}
         </span>
       ),
@@ -84,6 +97,8 @@ function VaultsBody() {
         error={vaults.error}
         onRetry={vaults.reload}
         empty={{ title: t("screen.vaults.empty"), icon: "lock" }}
+        summary
+        ariaLabel={t("screen.vaults.title")}
       />
     </>
   );

@@ -1,7 +1,7 @@
-import { type RefObject, useEffect, useRef, useState } from "react";
+import { type CSSProperties, type RefObject, useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
-import { fmtRelative } from "../util/format";
+import { fmtEpoch, fmtNum, fmtRelative } from "../util/format";
 import type { AuditEntry, AuditSink } from "../api/types";
 import { truncId } from "../util/bytes";
 import { DataTable, type Column } from "../ui/DataTable";
@@ -9,20 +9,29 @@ import { Icon } from "../ui/icons";
 import {
   Btn,
   Card,
+  CardHeader,
+  EmptyState,
   ErrorCard,
   Field,
+  IconBtn,
+  InlineError,
+  Missing,
   PubkeyChip,
-  Spinner,
-  StatusDot,
+  Skeleton,
+  SummaryCount,
+  SummaryLine,
+  SummaryPart,
   Tag,
   TextInput,
+  ToneBadge,
   ZkBanner,
-  type DotStatus,
-  type TagTone,
+  tint,
+  type Tone,
 } from "../ui/primitives";
 import { useAsync } from "../util/useAsync";
 import { Screen } from "./Screen";
 import { MONO } from "../theme/tokens";
+import "./data.css";
 
 interface DecodedEvent {
   /** Event name (server-observed) or a placeholder for opaque/client blobs. */
@@ -101,6 +110,7 @@ export function Audit() {
   // The tamper finding is the panel's headline security result — it must NOT be a
   // 4.5s toast that vanishes. Hold it as a persistent, dismissible card.
   const [result, setResult] = useState<VerifyResult | null>(null);
+  const [verifying, setVerifying] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const exportToggle = useRef<HTMLButtonElement>(null);
   const closeExport = () => {
@@ -109,6 +119,7 @@ export function Audit() {
   };
 
   const verify = async () => {
+    setVerifying(true);
     try {
       const r = await api.admin.auditVerify();
       // Server-side verify CANNOT detect tail-truncation/full-wipe: a truncated
@@ -147,6 +158,8 @@ export function Audit() {
       else setResult({ kind: "broken", msg: t("screen.audit.chainBroken", { seq: r.broken_at }) });
     } catch (e) {
       setResult({ kind: "error", msg: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setVerifying(false);
     }
   };
 
@@ -160,21 +173,27 @@ export function Audit() {
           <Btn
             ref={exportToggle}
             icon="download"
-            size="sm"
             onClick={() => setExportOpen((o) => !o)}
             ariaExpanded={exportOpen}
             ariaControls="audit-export"
           >
             {t("screen.audit.export")}
           </Btn>
-          <Btn icon="shieldcheck" size="sm" onClick={() => void verify()}>
+          <Btn icon="shieldcheck" loading={verifying} onClick={() => void verify()}>
             {t("screen.audit.verifyChain")}
           </Btn>
         </>
       }
     >
       {exportOpen ? <ExportCard onClose={closeExport} toggle={exportToggle} /> : null}
-      {result ? <VerifyResultCard result={result} onDismiss={() => setResult(null)} /> : null}
+      {result ? (
+        <VerifyResultCard
+          result={result}
+          retrying={verifying}
+          onRetry={() => void verify()}
+          onDismiss={() => setResult(null)}
+        />
+      ) : null}
       <SinksCard />
       <AuditBody />
     </Screen>
@@ -208,6 +227,7 @@ async function fallbackName(blob: Blob, from: number): Promise<string> {
 function ExportCard({ onClose, toggle }: { onClose: () => void; toggle: RefObject<HTMLButtonElement | null> }) {
   const { t } = useTranslation();
   const form = useRef<HTMLFormElement>(null);
+  const ids = useId();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented) return;
@@ -232,6 +252,10 @@ function ExportCard({ onClose, toggle }: { onClose: () => void; toggle: RefObjec
     fromSeq === null ||
     toSeq === null ||
     (fromSeq !== undefined && toSeq !== undefined && toSeq < fromSeq);
+  // Which bound the message is about: the red edge goes on that field.
+  const fromBad = fromSeq === null;
+  const toBad = toSeq === null || (fromSeq != null && toSeq !== undefined && toSeq < fromSeq);
+  const invalidId = `${ids}-invalid`;
 
   const download = async () => {
     if (invalid) return;
@@ -254,7 +278,7 @@ function ExportCard({ onClose, toggle }: { onClose: () => void; toggle: RefObjec
   };
 
   return (
-    <Card style={{ marginBottom: 14 }}>
+    <Card pad={false}>
       <form
         id="audit-export"
         ref={form}
@@ -263,50 +287,79 @@ function ExportCard({ onClose, toggle }: { onClose: () => void; toggle: RefObjec
           void download();
         }}
       >
-        <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 4 }}>
-          {t("screen.audit.exportTitle")}
+        <CardHeader title={t("screen.audit.exportTitle")} />
+        <div style={{ padding: 16 }}>
+          <p
+            style={{
+              margin: "0 0 16px",
+              fontSize: 14,
+              lineHeight: "20px",
+              maxWidth: "72ch",
+              color: "var(--muted-foreground)",
+            }}
+          >
+            {t("screen.audit.exportHint")}
+          </p>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            <div style={{ flex: "1 1 160px", maxWidth: 280 }}>
+              <Field label={t("screen.audit.exportFrom")} tag="from_seq" tagMono htmlFor={`${ids}-from`}>
+                <TextInput
+                  id={`${ids}-from`}
+                  value={from}
+                  onChange={setFrom}
+                  placeholder="1"
+                  mono
+                  autoFocus
+                  inputMode="numeric"
+                  ariaLabel={t("screen.audit.exportFrom")}
+                  invalid={fromBad}
+                  describedBy={fromBad ? invalidId : undefined}
+                />
+              </Field>
+            </div>
+            <div style={{ flex: "1 1 160px", maxWidth: 280 }}>
+              <Field label={t("screen.audit.exportTo")} tag="to_seq" tagMono htmlFor={`${ids}-to`}>
+                <TextInput
+                  id={`${ids}-to`}
+                  value={to}
+                  onChange={setTo}
+                  placeholder={t("screen.audit.exportToHead")}
+                  mono
+                  inputMode="numeric"
+                  ariaLabel={t("screen.audit.exportTo")}
+                  invalid={toBad}
+                  describedBy={toBad ? invalidId : undefined}
+                />
+              </Field>
+            </div>
+          </div>
+          {invalid ? (
+            <p
+              id={invalidId}
+              role="alert"
+              style={{
+                margin: "0 0 12px",
+                fontSize: 14,
+                lineHeight: "20px",
+                maxWidth: "72ch",
+                color: "var(--destructive)",
+              }}
+            >
+              {t("screen.audit.exportInvalid")}
+            </p>
+          ) : null}
+          {error ? <InlineError>{error}</InlineError> : null}
         </div>
-        <div style={{ fontSize: 12, color: "var(--txt3)", lineHeight: 1.5, marginBottom: 14 }}>
-          {t("screen.audit.exportHint")}
-        </div>
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-          <div style={{ flex: "1 1 160px" }}>
-            <Field label={t("screen.audit.exportFrom")} tag="from_seq">
-              <TextInput
-                value={from}
-                onChange={setFrom}
-                placeholder="1"
-                mono
-                autoFocus
-                inputMode="numeric"
-                ariaLabel={t("screen.audit.exportFrom")}
-              />
-            </Field>
-          </div>
-          <div style={{ flex: "1 1 160px" }}>
-            <Field label={t("screen.audit.exportTo")} tag="to_seq">
-              <TextInput
-                value={to}
-                onChange={setTo}
-                placeholder={t("screen.audit.exportToHead")}
-                mono
-                inputMode="numeric"
-                ariaLabel={t("screen.audit.exportTo")}
-              />
-            </Field>
-          </div>
-        </div>
-        {invalid ? (
-          <div role="alert" style={{ fontSize: 12, color: "var(--red)", marginBottom: 10 }}>
-            {t("screen.audit.exportInvalid")}
-          </div>
-        ) : null}
-        {error ? (
-          <div role="alert" style={{ fontSize: 12, color: "var(--red)", marginBottom: 10 }}>
-            {error}
-          </div>
-        ) : null}
-        <div style={{ display: "flex", gap: 9, justifyContent: "flex-end" }}>
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 8,
+            justifyContent: "flex-end",
+            padding: "12px 16px",
+            borderTop: "1px solid var(--rule)",
+          }}
+        >
           <Btn size="sm" variant="ghost" onClick={onClose}>
             {t("common.cancel")}
           </Btn>
@@ -339,11 +392,14 @@ function sinkState(s: AuditSink, nowS = Date.now() / 1000): SinkState {
   return s.lag > 0 && stale ? "lagging" : "healthy";
 }
 
-const SINK_TONE: Record<SinkState, { tag: TagTone; dot: DotStatus }> = {
-  healthy: { tag: "green", dot: "online" },
-  lagging: { tag: "amber", dot: "warn" },
-  failing: { tag: "red", dot: "offline" },
+const SINK_TONE: Record<SinkState, Tone> = {
+  healthy: "success",
+  lagging: "warning",
+  failing: "destructive",
 };
+
+const MUTED = { color: "var(--muted-foreground)" } as const;
+const ELLIPSIS: CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
 
 /** Delivery state of each sink configured in the server's `[audit.*]` config. */
 function SinksCard() {
@@ -351,118 +407,279 @@ function SinksCard() {
   const sinks = useAsync(() => api.admin.auditSinks(), []);
   const list = sinks.data?.sinks ?? [];
 
+  const columns: Column<AuditSink>[] = [
+    {
+      key: "sink",
+      label: t("screen.audit.sinkColumn"),
+      width: "minmax(0, 1fr)",
+      render: (s) => (
+        <span title={s.sink} style={{ ...ELLIPSIS, display: "block", fontFamily: MONO, fontSize: 12, fontWeight: 600 }}>
+          {s.sink}
+        </span>
+      ),
+    },
+    {
+      key: "state",
+      label: t("common.state"),
+      width: "136px",
+      render: (s) => {
+        const state = sinkState(s);
+        return <ToneBadge tone={SINK_TONE[state]}>{t(`screen.audit.sinkState.${state}`)}</ToneBadge>;
+      },
+    },
+    {
+      key: "last_seq",
+      label: t("screen.audit.sinkLastSeq"),
+      width: "136px",
+      numeric: true,
+      render: (s) => s.last_seq,
+    },
+    {
+      key: "lag",
+      label: t("screen.audit.sinkLag"),
+      width: "96px",
+      numeric: true,
+      render: (s) => s.lag,
+    },
+    {
+      key: "last_success_at",
+      label: t("screen.audit.sinkLastSuccess"),
+      // Wide enough for the head in full («Последний успех», "Last success").
+      width: "144px",
+      render: (s) =>
+        s.last_success_at != null ? (
+          <span title={fmtEpoch(s.last_success_at)} style={MUTED}>
+            {fmtRelative(s.last_success_at)}
+          </span>
+        ) : null,
+    },
+    {
+      key: "last_error",
+      label: t("screen.audit.sinkLastError"),
+      width: "minmax(0, 1.4fr)",
+      // The error of a failing sink is said in red; an older one, already recovered from, is muted.
+      render: (s) =>
+        s.last_error ? (
+          <span
+            title={`${s.last_error} · ${fmtEpoch(s.last_error_at)}`}
+            style={{ ...ELLIPSIS, display: "block", ...MUTED }}
+          >
+            <span
+              style={{
+                fontFamily: MONO,
+                fontSize: 12,
+                color: sinkState(s) === "failing" ? "var(--destructive)" : undefined,
+              }}
+            >
+              {s.last_error}
+            </span>{" "}
+            · {fmtRelative(s.last_error_at)}
+          </span>
+        ) : null,
+    },
+  ];
+
   return (
-    <Card style={{ marginBottom: 14 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-        <div style={{ flex: 1, fontSize: 13.5, fontWeight: 700 }}>{t("screen.audit.sinksTitle")}</div>
-        <Btn icon="refresh" size="sm" variant="ghost" onClick={sinks.reload} loading={sinks.loading}>
-          {t("common.checkNow")}
-        </Btn>
-      </div>
-      {sinks.error ? (
-        <ErrorCard message={sinks.error} onRetry={sinks.reload} />
-      ) : sinks.data === null ? (
-        <Spinner size={16} />
-      ) : list.length === 0 ? (
-        <div style={{ fontSize: 12, color: "var(--txt3)", lineHeight: 1.5 }}>
-          {t("screen.audit.sinksNone")}
-        </div>
-      ) : (
-        <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 10 }}>
-          {list.map((s) => (
-            <SinkRow key={s.sink} sink={s} />
-          ))}
-        </ul>
-      )}
+    <Card pad={false}>
+      <CardHeader
+        title={t("screen.audit.sinksTitle")}
+        actions={
+          <Btn icon="refresh" size="sm" variant="ghost" onClick={sinks.reload} loading={sinks.loading}>
+            {t("common.checkNow")}
+          </Btn>
+        }
+      />
+      <DataTable
+        bare
+        columns={columns}
+        rows={list}
+        rowKey={(s) => s.sink}
+        loading={sinks.loading}
+        error={sinks.error}
+        onRetry={sinks.reload}
+        empty={{ title: t("screen.audit.sinksNone"), icon: "server" }}
+        summary
+        minWidth={800}
+        ariaLabel={t("screen.audit.sinksTitle")}
+      />
     </Card>
   );
 }
 
-function SinkRow({ sink }: { sink: AuditSink }) {
-  const { t } = useTranslation();
-  const state = sinkState(sink);
-  const tone = SINK_TONE[state];
-  const fact = { fontSize: 12, color: "var(--txt2)" } as const;
-  return (
-    <li style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-      <span style={{ marginTop: 5 }}>
-        <StatusDot status={tone.dot} />
-      </span>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ fontFamily: MONO, fontSize: 12.5, fontWeight: 700 }}>{sink.sink}</span>
-          <Tag tone={tone.tag}>{t(`screen.audit.sinkState.${state}`)}</Tag>
-        </div>
-        <div style={{ display: "flex", gap: "4px 16px", flexWrap: "wrap", marginTop: 4 }}>
-          <span style={fact}>
-            {t("screen.audit.sinkLastSeq")}{" "}
-            <span style={{ fontFamily: MONO }}>{sink.last_seq}</span>
-          </span>
-          <span style={fact}>
-            {t("screen.audit.sinkLag")} <span style={{ fontFamily: MONO }}>{sink.lag}</span>
-          </span>
-          <span style={fact}>
-            {t("screen.audit.sinkLastSuccess")} {fmtRelative(sink.last_success_at)}
-          </span>
-        </div>
-        {sink.last_error ? (
-          <div style={{ ...fact, marginTop: 3 }}>
-            {t("screen.audit.sinkLastError")}{" "}
-            <span style={{ fontFamily: MONO, color: state === "failing" ? "var(--red)" : undefined }}>
-              {sink.last_error}
-            </span>{" "}
-            · {fmtRelative(sink.last_error_at)}
-          </div>
-        ) : null}
-      </div>
-    </li>
-  );
-}
+/** The verdict of a chain check, said in a word beside the colour. */
+const VERDICT_TONE: Record<VerifyResult["kind"], Tone> = {
+  ok: "success",
+  tamper: "destructive",
+  broken: "destructive",
+  error: "absent",
+};
 
 function VerifyResultCard({
   result,
   onDismiss,
+  onRetry,
+  retrying,
 }: {
   result: VerifyResult;
   onDismiss: () => void;
+  /** A check that could not run (kind "error") offers to run again. */
+  onRetry: () => void;
+  retrying: boolean;
 }) {
   const { t } = useTranslation();
   const ok = result.kind === "ok";
-  const color = ok ? "var(--green)" : "var(--red)";
+  const color = ok ? "var(--success)" : "var(--destructive)";
   return (
     <div
       role={ok ? "status" : "alert"}
       style={{
         display: "flex",
-        gap: 10,
-        alignItems: "flex-start",
-        background: `color-mix(in srgb, ${color} 9%, transparent)`,
-        border: `1px solid color-mix(in srgb, ${color} 34%, transparent)`,
-        borderRadius: 11,
-        padding: "12px 14px",
-        marginBottom: 14,
+        flexWrap: "wrap",
+        alignItems: "center",
+        gap: "8px 12px",
+        padding: "10px 12px 10px 16px",
+        background: tint(color, 10),
+        border: `1px solid ${tint(color, 40)}`,
+        borderRadius: "var(--radius-lg)",
       }}
     >
-      <Icon name={ok ? "shieldcheck" : "alert"} size={16} color={color} style={{ marginTop: 1 }} />
-      <span style={{ flex: 1, fontSize: 12.5, color: "var(--txt)", lineHeight: 1.5 }}>
-        {result.msg}
-      </span>
-      <button
-        aria-label={t("common.close")}
-        onClick={onDismiss}
+      <Icon name={ok ? "shieldcheck" : "alert"} size={16} color={color} />
+      <ToneBadge tone={VERDICT_TONE[result.kind]}>{t(`screen.audit.verdict.${result.kind}`)}</ToneBadge>
+      <p
         style={{
-          border: "none",
-          background: "transparent",
-          color: "var(--txt3)",
-          cursor: "pointer",
-          display: "flex",
+          flex: "1 1 16rem",
+          minWidth: 0,
+          margin: 0,
+          fontSize: 14,
+          lineHeight: "20px",
+          maxWidth: "72ch",
+          overflowWrap: "anywhere",
+          color: ok ? "var(--foreground)" : "var(--destructive)",
         }}
       >
-        <Icon name="plus" size={14} style={{ transform: "rotate(45deg)" }} />
-      </button>
+        {result.msg}
+      </p>
+      <div style={{ display: "flex", alignItems: "center", gap: 4, marginLeft: "auto" }}>
+        {result.kind === "error" ? (
+          <Btn size="sm" variant="outline" icon="refresh" loading={retrying} onClick={onRetry}>
+            {t("common.retry")}
+          </Btn>
+        ) : null}
+        <IconBtn icon="x" title={t("common.close")} onClick={onDismiss} />
+      </div>
     </div>
   );
 }
+
+// ── The log, grouped by day ─────────────────────────────────────
+
+/** The reader's local date of an epoch-seconds moment ("2026-10-24"): the key of its day. */
+function localDay(sec: number): string {
+  const d = new Date(sec * 1000);
+  return [d.getFullYear(), d.getMonth() + 1, d.getDate()].map((p) => String(p).padStart(2, "0")).join("-");
+}
+
+/** The log cut into the reader's local days, in the order it came: a new group wherever the day changes. */
+function byLocalDay(entries: AuditEntry[]): { day: string; at: number; items: AuditEntry[] }[] {
+  const days: { day: string; at: number; items: AuditEntry[] }[] = [];
+  for (const entry of entries) {
+    const day = localDay(entry.recorded_at);
+    const last = days[days.length - 1];
+    if (last && last.day === day) last.items.push(entry);
+    else days.push({ day, at: entry.recorded_at, items: [entry] });
+  }
+  return days;
+}
+
+/** Whole calendar days between a moment and now: 0 today, 1 yesterday. */
+function daysAgo(sec: number, nowMs = Date.now()): number {
+  const a = new Date(sec * 1000);
+  const b = new Date(nowMs);
+  return Math.round(
+    (Date.UTC(b.getFullYear(), b.getMonth(), b.getDate()) - Date.UTC(a.getFullYear(), a.getMonth(), a.getDate())) /
+      86_400_000,
+  );
+}
+
+/** A day as the head of its rows says it: "Today · Sat, 24 October 2026", further off the date alone. */
+function DayWords({ day, at }: { day: string; at: number }) {
+  const { t, i18n } = useTranslation();
+  const ago = daysAgo(at);
+  const word = ago === 0 ? t("common.today") : ago === 1 ? t("common.yesterday") : null;
+  return (
+    <>
+      {word ? <span style={{ color: "var(--foreground)" }}>{word} · </span> : null}
+      <time dateTime={day}>
+        {new Date(at * 1000).toLocaleDateString(i18n.language, {
+          weekday: "short",
+          day: "numeric",
+          month: "long",
+          year: "numeric",
+        })}
+      </time>
+    </>
+  );
+}
+
+/** The clock of a row (its day is the group's head); how long ago is its title. */
+function RowClock({ at }: { at: number }) {
+  const { i18n } = useTranslation();
+  const d = new Date(at * 1000);
+  return (
+    <time dateTime={d.toISOString()} title={fmtRelative(at)} style={MUTED}>
+      {d.toLocaleTimeString(i18n.language, { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+    </time>
+  );
+}
+
+/**
+ * What happened, in one line: the event's name in mono in the text colour
+ * (muted for an entry the server cannot read), then its fields muted, cut at
+ * the cell's end; the whole line is the title. An event is a fact, not a
+ * state: a removal is not a failure, so no event name is ever red.
+ */
+function EventCell({ row }: { row: AuditEntry }) {
+  const ev = decodeEvent(row);
+  const unnamed = ev.type.startsWith("(");
+  return (
+    <span
+      title={ev.detail ? `${ev.type} · ${ev.detail}` : ev.type}
+      style={{
+        display: "flex",
+        alignItems: "baseline",
+        gap: 8,
+        minWidth: 0,
+        fontFamily: MONO,
+        fontSize: 12,
+        lineHeight: "16px",
+        whiteSpace: "nowrap",
+      }}
+    >
+      <span
+        style={{
+          flexShrink: 0,
+          fontWeight: 500,
+          color: unnamed ? "var(--muted-foreground)" : "var(--foreground)",
+        }}
+      >
+        {ev.type}
+      </span>
+      {ev.detail ? <span style={{ ...ELLIPSIS, minWidth: 0, ...MUTED }}>{ev.detail}</span> : null}
+    </span>
+  );
+}
+
+/** The head row in the label style, as DataTable draws it. */
+const HEAD: CSSProperties = {
+  height: 28,
+  background: "var(--rail)",
+  borderBottom: "1px solid var(--rule)",
+  fontSize: 11,
+  fontWeight: 600,
+  letterSpacing: "0.05em",
+  textTransform: "uppercase",
+  color: "var(--muted-foreground)",
+};
 
 function AuditBody() {
   const { t } = useTranslation();
@@ -495,89 +712,227 @@ function AuditBody() {
   const columns: Column<AuditEntry>[] = [
     {
       key: "seq",
-      label: "seq",
-      width: "86px",
-      render: (row) => (
-        <span style={{ fontFamily: MONO, fontSize: 12 }}>{row.seq}</span>
-      ),
-    },
-    {
-      key: "event",
-      label: "event",
-      width: "1.6fr",
-      render: (row) => {
-        const ev = decodeEvent(row);
-        return (
-          <div style={{ minWidth: 0 }}>
-            <div
-              style={{
-                fontFamily: MONO,
-                fontSize: 12,
-                fontWeight: 600,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {ev.type}
-            </div>
-            {ev.detail ? (
-              <div
-                style={{
-                  fontSize: 11,
-                  color: "var(--txt3)",
-                  fontFamily: MONO,
-                  marginTop: 1,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {ev.detail}
-              </div>
-            ) : null}
-          </div>
-        );
-      },
-    },
-    {
-      key: "source",
-      label: "source",
-      width: "150px",
-      render: (row) => (
-        <Tag tone={row.source === "client-signed" ? "accent" : "neutral"}>{row.source}</Tag>
-      ),
-    },
-    {
-      key: "author_pubkey",
-      label: "author_pubkey",
-      width: "1fr",
-      render: (row) => <PubkeyChip value={row.author_pubkey} />,
+      // The field the export bounds and the chain's verdicts name: an identifier, so mono and lowercase.
+      label: <span className="data-head-mono">seq</span>,
+      width: "72px",
+      numeric: true,
+      render: (row) => row.seq,
     },
     {
       key: "recorded_at",
       label: t("screen.audit.colWhen"),
-      width: "96px",
-      render: (row) => (
-        <span style={{ fontSize: 12, color: "var(--txt2)" }}>{fmtRelative(row.recorded_at)}</span>
-      ),
+      width: "80px",
+      render: (row) => <RowClock at={row.recorded_at} />,
+    },
+    {
+      key: "event",
+      label: t("screen.audit.colEvent"),
+      width: "minmax(0, 1.6fr)",
+      render: (row) => <EventCell row={row} />,
+    },
+    {
+      key: "source",
+      label: t("screen.audit.colSource"),
+      width: "136px",
+      // Who wrote it down is a fact, not a state: one neutral chip for both sources.
+      render: (row) => <Tag mono>{row.source}</Tag>,
+    },
+    {
+      key: "author_pubkey",
+      label: t("screen.audit.colAuthor"),
+      width: "minmax(0, 1fr)",
+      render: (row) => <PubkeyChip value={row.author_pubkey} />,
     },
   ];
 
   return (
     <>
       <ZkBanner tone="amber">{t("zk.audit")}</ZkBanner>
-
-      <DataTable<AuditEntry>
+      <DayLog
         columns={columns}
         rows={rows}
-        rowKey={(row) => String(row.seq)}
         loading={loading}
         error={error}
+        hasMore={hasMore}
         onRetry={() => load(true)}
-        empty={{ title: t("screen.audit.empty"), icon: "eye" }}
-        more={{ hasMore, loading, onMore: () => load(false) }}
+        onMore={() => load(false)}
       />
     </>
+  );
+}
+
+/**
+ * The log as DataTable draws a table (summary line, the head 28 px on --rail,
+ * rows of 32 px divided by --rule), its rows grouped under the day they were
+ * recorded on: a 28 px head on --elevated at 40 % with the day and, after a
+ * middle dot, how many entries it holds (left out for the last day while more
+ * is to be read, since its rows are not all here).
+ */
+function DayLog({
+  columns,
+  rows,
+  loading,
+  error,
+  hasMore,
+  onRetry,
+  onMore,
+}: {
+  columns: Column<AuditEntry>[];
+  rows: AuditEntry[];
+  loading: boolean;
+  error: string | null;
+  hasMore: boolean;
+  onRetry: () => void;
+  onMore: () => void;
+}) {
+  const { t } = useTranslation();
+  const firstLoad = loading && rows.length === 0;
+
+  if (error && rows.length === 0) {
+    return <ErrorCard message={error} onRetry={onRetry} retrying={loading} />;
+  }
+  if (!loading && rows.length === 0) {
+    return <EmptyState icon="eye" title={t("screen.audit.empty")} />;
+  }
+
+  const grid: CSSProperties = {
+    display: "grid",
+    gridTemplateColumns: columns.map((c) => c.width).join(" "),
+    columnGap: 12,
+    alignItems: "center",
+    padding: "0 16px",
+  };
+  const rowStyle: CSSProperties = {
+    ...grid,
+    minHeight: 32,
+    paddingTop: 4,
+    paddingBottom: 4,
+    borderBottom: "1px solid var(--rule)",
+  };
+  const cellStyle = (c: Column<AuditEntry>): CSSProperties => ({
+    minWidth: 0,
+    overflow: "hidden",
+    padding: 3,
+    margin: -3,
+    textAlign: c.numeric ? "right" : "left",
+    fontFamily: c.numeric ? MONO : undefined,
+    fontSize: c.numeric ? 12 : undefined,
+  });
+
+  const days = byLocalDay(rows);
+  const n = fmtNum(rows.length);
+  const signed = rows.filter((r) => r.source === "client-signed").length;
+
+  return (
+    <div
+      style={{
+        background: "var(--card)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius-lg)",
+        boxShadow: "var(--elev-card)",
+        overflow: "hidden",
+      }}
+    >
+      <SummaryLine loading={firstLoad}>
+        {firstLoad ? null : (
+          <>
+            <SummaryCount>{hasMore ? t("common.shownMore", { n }) : t("common.inAll", { n })}</SummaryCount>
+            <SummaryPart label={<span style={{ fontFamily: MONO }}>client-signed</span>} value={fmtNum(signed)} />
+            <SummaryPart
+              label={<span style={{ fontFamily: MONO }}>server-observed</span>}
+              value={fmtNum(rows.length - signed)}
+            />
+          </>
+        )}
+      </SummaryLine>
+
+      {error ? (
+        <div style={{ borderBottom: "1px solid var(--rule)" }}>
+          <ErrorCard message={error} onRetry={onRetry} retrying={loading} band />
+        </div>
+      ) : null}
+
+      <div style={{ overflowX: "auto" }}>
+        <div role="table" aria-label={t("screen.audit.title")} aria-busy={loading || undefined} style={{ minWidth: 760 }}>
+          <div role="row" style={{ ...grid, ...HEAD }}>
+            {columns.map((c) => (
+              <span key={c.key} role="columnheader" style={{ ...ELLIPSIS, minWidth: 0, textAlign: c.numeric ? "right" : "left" }}>
+                {c.label}
+              </span>
+            ))}
+          </div>
+
+          {firstLoad ? (
+            <div role="rowgroup">
+              {Array.from({ length: 5 }, (_, i) => (
+                <div key={i} role="row" className="dt-row dt-skeleton-row" style={rowStyle}>
+                  {columns.map((c) => (
+                    <span key={c.key} role="cell" style={cellStyle(c)}>
+                      <Skeleton width="75%" height={14} style={c.numeric ? { marginLeft: "auto" } : undefined} />
+                    </span>
+                  ))}
+                </div>
+              ))}
+            </div>
+          ) : (
+            days.map((group, index) => {
+              const whole = !(hasMore && index === days.length - 1);
+              return (
+                <div key={group.day} role="rowgroup">
+                  <div
+                    role="row"
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      height: 28,
+                      padding: "0 16px",
+                      background: tint("var(--elevated)", 40),
+                      borderTop: index > 0 ? "1px solid var(--rule)" : undefined,
+                      borderBottom: "1px solid var(--rule)",
+                      fontSize: 12,
+                      fontWeight: 500,
+                      lineHeight: "16px",
+                      color: "var(--muted-foreground)",
+                    }}
+                  >
+                    <span role="rowheader" aria-colspan={columns.length} style={ELLIPSIS}>
+                      <DayWords day={group.day} at={group.at} />
+                      {whole ? <span style={{ fontWeight: 400 }}> · {fmtNum(group.items.length)}</span> : null}
+                    </span>
+                  </div>
+                  {group.items.map((row) => (
+                    <div key={String(row.seq)} role="row" className="dt-row" style={rowStyle}>
+                      {columns.map((c) => {
+                        const v = c.render(row);
+                        return (
+                          <span key={c.key} role="cell" style={cellStyle(c)}>
+                            {v === null || v === undefined || v === "" ? <Missing /> : v}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  ))}
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+
+      {hasMore ? (
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "center",
+            padding: "8px 16px",
+            borderTop: "1px solid var(--rule)",
+          }}
+        >
+          <Btn size="sm" variant="outline" loading={loading} onClick={onMore}>
+            {t("common.more")}
+          </Btn>
+        </div>
+      ) : null}
+    </div>
   );
 }
