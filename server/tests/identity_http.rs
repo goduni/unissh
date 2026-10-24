@@ -713,7 +713,7 @@ async fn add_device(app: &common::TestApp, access: &str) -> String {
         .send()
         .await
         .unwrap();
-    assert_eq!(r.status(), 201);
+    assert_eq!(r.status(), 201, "devices/add should succeed");
     let v: Value = r.json().await.unwrap();
     v["device_id"].as_str().unwrap().to_owned()
 }
