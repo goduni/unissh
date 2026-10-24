@@ -49,6 +49,7 @@ function eventDetail(ev: EventBlob): string | null {
     case "login":
     case "logout":
     case "device_add":
+    case "device_label":
     case "device_remove":
     case "keyset_publish":
       return `acct ${truncId(ev.account_id)} · dev ${truncId(ev.device_id)}`;

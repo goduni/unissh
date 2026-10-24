@@ -371,6 +371,26 @@ async fn device_revoke(
 /// shown in every device listing, so a keyset holder must not bloat it.
 const MAX_DEVICE_LABEL_CHARS: usize = 128;
 
+/// Refuses a device label the Devices lists could not show as it is: too long,
+/// or with control or bidirectional-formatting characters, which can make one
+/// device's label read as another's — and the label is what an owner goes by
+/// when deciding which device to revoke.
+fn check_device_label(label: &str) -> AppResult<()> {
+    if label.chars().count() > MAX_DEVICE_LABEL_CHARS {
+        return Err(AppError::malformed("device label too long (max 128 chars)"));
+    }
+    let hidden = |c: char| {
+        c.is_control()
+            || matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+    };
+    if label.chars().any(hidden) {
+        return Err(AppError::malformed(
+            "device label has control or bidirectional-formatting characters",
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Deserialize)]
 struct DeviceLabelReq {
     /// The new label; absent, empty or blank clears it.
@@ -382,7 +402,9 @@ struct DeviceLabelReq {
 /// list. A device that joined by invite or by pairing was created without a
 /// label (the pairing device does not know what kind of client joins), and the
 /// owner looking for the one to revoke deserves better than an id. Only ever
-/// the caller's own device; open metadata, like the self-enroll label. 204.
+/// the caller's own device; open metadata, like the self-enroll label, and
+/// audited, since a stolen session could otherwise rename its device after
+/// another one unseen. 204.
 async fn device_label_self(
     auth: AuthCtx,
     State(state): State<AppState>,
@@ -393,13 +415,20 @@ async fn device_label_self(
         .as_deref()
         .map(str::trim)
         .filter(|l| !l.is_empty());
-    if label.is_some_and(|l| l.chars().count() > MAX_DEVICE_LABEL_CHARS) {
-        return Err(AppError::malformed("device label too long (max 128 chars)"));
+    if let Some(label) = label {
+        check_device_label(label)?;
     }
     state
         .store
         .set_device_label(&auth.device.device_id, label)
         .await?;
+    audit_observed(
+        &state,
+        "device_label",
+        auth.account_id(),
+        &auth.device.device_id,
+    )
+    .await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -858,13 +887,9 @@ async fn device_self_enroll(
         return Err(AppError::malformed("device kind must be 'app' or 'web'"));
     }
     // Bound the open-metadata label so a keyset holder can't bloat the devices table
-    // (and every device listing) with a multi-MB value.
-    if req
-        .label
-        .as_deref()
-        .is_some_and(|l| l.chars().count() > MAX_DEVICE_LABEL_CHARS)
-    {
-        return Err(AppError::malformed("device label too long (max 128 chars)"));
+    // (and every device listing) with a multi-MB value, or make it read as another's.
+    if let Some(label) = req.label.as_deref() {
+        check_device_label(label)?;
     }
 
     // 1. Verify the self-attested registration signature (proves keyset possession).

@@ -69,9 +69,12 @@ starts with `0.`:
 - Bindings: `ExecHandleFfi::close_stdin` ends a streaming command's input and
   keeps its output coming; `Core::wait_for_recordings` waits for session
   recordings still being written, for a process about to exit.
-- A device can name itself in the Devices list (`POST /v1/devices/label`); the
-  CLI does so after pairing or joining (`CLI · Linux`), so the owner can tell
-  which device to revoke. A server without the call leaves the device unnamed.
+- A device can name itself in the Devices list (`POST /v1/devices/label`,
+  audited as `device_label`); the CLI does so after pairing or joining
+  (`CLI · Linux`), and the app's Settings → Devices now shows these labels, so
+  the owner can tell which device to revoke. A server without the call leaves
+  the device unnamed. Labels with control or bidirectional-formatting
+  characters are refused, at self-enroll too.
 
 ### Changed
 
@@ -83,8 +86,12 @@ starts with `0.`:
 
 ### Compatibility
 
-**Vault format and server protocol are unchanged.** Colour and icon are new
-optional fields inside the existing encrypted host and group bodies, stored as
+**Vault format unchanged. Server protocol changed additively** —
+`POST /v1/devices/label`; an older server leaves the device unnamed, and an
+older client never calls it.
+
+Colour and icon are new optional fields inside the existing encrypted host and
+group bodies, stored as
 ids rather than colour values; hosts without them serialize byte-for-byte as
 before, and so do groups. Groups now also keep fields a newer client adds, as
 hosts already did.

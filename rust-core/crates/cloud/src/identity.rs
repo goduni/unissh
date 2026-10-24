@@ -452,6 +452,11 @@ pub fn device_list(
     for d in devices {
         out.push(dto::DeviceInfo {
             device_id: client::jstr(d, "device_id")?,
+            label: d
+                .get("label")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .filter(|l| !l.is_empty()),
             status: d
                 .get("status")
                 .and_then(|x| x.as_str())

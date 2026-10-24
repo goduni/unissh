@@ -675,3 +675,24 @@ async fn a_device_label_over_128_chars_is_refused() {
         "nothing was written"
     );
 }
+
+/// A label is what the owner goes by when revoking: characters that would hide
+/// or reorder its text are refused, so one device cannot pass for another.
+#[tokio::test]
+async fn a_device_label_that_could_pass_for_another_is_refused() {
+    let app = spawn().await;
+    let id = make_identity();
+    let c = claim(&app, &id).await;
+    let access = login_v2(
+        &app,
+        &id,
+        c["account_id"].as_str().unwrap(),
+        c["device_id"].as_str().unwrap(),
+    )
+    .await;
+    for label in ["Desktop \u{202E}soScam", "CLI\x1b[2J", "Lap\u{2066}top"] {
+        let r = label_device(&app, &access, json!({ "label": label })).await;
+        assert_eq!(r.status(), 400, "{label:?} is refused");
+    }
+    assert_eq!(own_labels(&app, &access).await, [Value::Null]);
+}
