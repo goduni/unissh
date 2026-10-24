@@ -1219,6 +1219,9 @@ jobs:
             echo "::error::unissh links shared libraries"; ldd "$BIN"; exit 1
           fi
           "$BIN" --version
+          VERSION=$("$BIN" --version | cut -d' ' -f2)
+          cp "$BIN" "unissh-cli_${VERSION}_linux-${{ matrix.arch }}"
+          echo "ASSET=unissh-cli_${VERSION}_linux-${{ matrix.arch }}" >> "$GITHUB_ENV"
 
       # `--version` touches none of what musl could break at run time. The
       # harness is the same core built the same way: an account (Argon2id),
@@ -1231,9 +1234,6 @@ jobs:
           "$H" --db "$D/u.db" --keyset "$D/k.bin" create-vault --secret-key "$KEY" --id v --name V
           "$H" --db "$D/u.db" --keyset "$D/k.bin" gen-key --secret-key "$KEY" --vault v --item k | grep -q '^ssh-ed25519 '
           rm -rf "$D"
-          VERSION=$("$BIN" --version | cut -d' ' -f2)
-          cp "$BIN" "unissh-cli_${VERSION}_linux-${{ matrix.arch }}"
-          echo "ASSET=unissh-cli_${VERSION}_linux-${{ matrix.arch }}" >> "$GITHUB_ENV"
 
       - uses: actions/upload-artifact@v7
         with:
