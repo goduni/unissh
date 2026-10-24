@@ -7,12 +7,14 @@
 //! nothing and lets the engine re-verify what it did receive. Ported from the
 //! server's byte-compat oracle (`server/tests/oracle_sync.rs::HttpTransport`).
 
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 
+use reqwest::blocking::{RequestBuilder, Response};
+use reqwest::StatusCode;
 use serde_json::{json, Value};
 use unissh_ffi::{FfiError, FfiSyncTransport, SyncDeltaItem};
 
-use crate::client;
+use crate::client::{self, Reauth};
 
 /// Page size for `/v1/sync/delta` (server clamps to its max, default 1000).
 const DELTA_LIMIT: u64 = 1000;
@@ -34,7 +36,10 @@ fn idempotency_key(objects: &[Vec<u8>]) -> String {
 /// One instance serves one sync (see `drained_at`).
 pub struct HttpSyncTransport {
     base_url: String,
-    bearer: String,
+    /// The bearer, replaced when the server rejects it and a fresh one is had
+    /// (see [`HttpSyncTransport::send`]).
+    bearer: Mutex<String>,
+    reauth: Option<Reauth>,
     /// Set once the server answered a delta request with "nothing follows":
     /// the `server_seq` its answer ended at. The core asks again after every
     /// page that moved its cursor; asked from exactly this point, the answer is
@@ -53,13 +58,53 @@ pub struct CatalogEntry {
 }
 
 impl HttpSyncTransport {
-    /// A transport for one sync against `base_url`, authenticated with `bearer`.
-    pub const fn new(base_url: String, bearer: String) -> Self {
+    /// A transport for one sync against `base_url`, authenticated with
+    /// `bearer`, rotated through the refresher of [`client::set_reauth`].
+    pub fn new(base_url: String, bearer: String) -> Self {
+        Self::with_reauth(base_url, bearer, client::installed_reauth())
+    }
+
+    /// [`Self::new`] with the refresher given rather than the installed one.
+    fn with_reauth(base_url: String, bearer: String, reauth: Option<Reauth>) -> Self {
         Self {
             base_url,
-            bearer,
+            bearer: Mutex::new(bearer),
+            reauth,
             drained_at: Mutex::new(None),
         }
+    }
+
+    /// Sends the request `build` makes for the current bearer. A `401` rotates
+    /// the bearer once and sends again, and every later request of this
+    /// transport carries the fresh one.
+    ///
+    /// An access token is short-lived and a sync runs on a timer, so meeting an
+    /// expired one is routine. Without this the first call of a sync — the
+    /// version probe — came back 401, read as version 0, and the engine
+    /// reported a rollback below its trusted cursor instead of signing in
+    /// again. Replaying is safe: the server authenticates before any handler
+    /// runs, and a push is idempotent on its key anyway.
+    fn send(&self, build: impl Fn(&str) -> RequestBuilder) -> reqwest::Result<Response> {
+        let stale = self.bearer();
+        let resp = build(&stale).send()?;
+        if resp.status() != StatusCode::UNAUTHORIZED {
+            return Ok(resp);
+        }
+        let Some(fresh) = self.reauth.as_ref().and_then(|rotate| rotate(&stale)) else {
+            return Ok(resp);
+        };
+        self.bearer
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone_from(&fresh);
+        build(&fresh).send()
+    }
+
+    fn bearer(&self) -> String {
+        self.bearer
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// `GET /v1/vaults` — the member-facing catalog of vaults this caller can access.
@@ -67,14 +112,12 @@ impl HttpSyncTransport {
     /// verify loop); a non-2xx is surfaced as an error so the UI can report it.
     pub fn list_vaults(&self) -> Result<Vec<CatalogEntry>, FfiError> {
         let http = client::http();
-        let resp = client::headers(
-            http.get(client::url(&self.base_url, "/v1/vaults")),
-            Some(&self.bearer),
-        )
-        .send()
-        .map_err(|e| FfiError::Other {
-            msg: format!("list vaults: {e}"),
-        })?;
+        let url = client::url(&self.base_url, "/v1/vaults");
+        let resp = self
+            .send(|bearer| client::headers(http.get(&url), Some(bearer)))
+            .map_err(|e| FfiError::Other {
+                msg: format!("list vaults: {e}"),
+            })?;
         if !resp.status().is_success() {
             return Err(FfiError::Other {
                 msg: format!("list vaults: http {}", resp.status().as_u16()),
@@ -117,11 +160,8 @@ impl HttpSyncTransport {
     pub fn vault_delta_page(&self, vault_id_hex: &str, cursor: u64) -> (Vec<Vec<u8>>, Option<u64>) {
         let path =
             format!("/v1/sync/delta?cursor={cursor}&limit={DELTA_LIMIT}&vault={vault_id_hex}");
-        let resp = match client::headers(
-            client::http().get(client::url(&self.base_url, &path)),
-            Some(&self.bearer),
-        )
-        .send()
+        let url = client::url(&self.base_url, &path);
+        let resp = match self.send(|bearer| client::headers(client::http().get(&url), Some(bearer)))
         {
             Ok(r) if r.status().is_success() => r,
             _ => return (Vec::new(), None),
@@ -148,16 +188,17 @@ impl FfiSyncTransport for HttpSyncTransport {
         // The core cuts a large push into several calls of this function: each
         // call is one request with the key of exactly its own objects.
         let idem = idempotency_key(&objects);
-        let resp = client::headers(
-            http.post(client::url(&self.base_url, "/v1/sync/push")),
-            Some(&self.bearer),
-        )
-        .header("Idempotency-Key", idem)
-        .json(&json!({ "objects": objs }))
-        .send()
-        .map_err(|e| FfiError::Other {
-            msg: format!("sync push: {e}"),
-        })?;
+        let url = client::url(&self.base_url, "/v1/sync/push");
+        let body = json!({ "objects": objs });
+        let resp = self
+            .send(|bearer| {
+                client::headers(http.post(&url), Some(bearer))
+                    .header("Idempotency-Key", &idem)
+                    .json(&body)
+            })
+            .map_err(|e| FfiError::Other {
+                msg: format!("sync push: {e}"),
+            })?;
 
         let status = resp.status();
         let bytes = resp.bytes().map_err(|e| FfiError::Other {
@@ -167,7 +208,7 @@ impl FfiSyncTransport for HttpSyncTransport {
         // `limits.max_object_bytes`, too many objects) or a body limit — its own
         // or a reverse proxy's, which answers without the JSON error body. The
         // core splits the request on it and singles out an item that cannot fit.
-        if status == reqwest::StatusCode::PAYLOAD_TOO_LARGE {
+        if status == StatusCode::PAYLOAD_TOO_LARGE {
             return Err(FfiError::PayloadTooLarge {
                 msg: push_error_message(status, &bytes),
             });
@@ -202,13 +243,11 @@ impl FfiSyncTransport for HttpSyncTransport {
         let http = client::http();
         let mut cur = cursor;
         loop {
-            let path = format!("/v1/sync/delta?cursor={cur}&limit={DELTA_LIMIT}");
-            let resp = match client::headers(
-                http.get(client::url(&self.base_url, &path)),
-                Some(&self.bearer),
-            )
-            .send()
-            {
+            let url = client::url(
+                &self.base_url,
+                &format!("/v1/sync/delta?cursor={cur}&limit={DELTA_LIMIT}"),
+            );
+            let resp = match self.send(|bearer| client::headers(http.get(&url), Some(bearer))) {
                 Ok(r) if r.status().is_success() => r,
                 // Untrusted transport: stop on any error; the engine verified
                 // what it got and the next sync resumes from the persisted cursor.
@@ -251,12 +290,9 @@ impl FfiSyncTransport for HttpSyncTransport {
         // transient network blip here must not masquerade as one — retry a few
         // times. On total failure it returns 0, which surfaces as a recoverable
         // per-sync error (cursor untouched), never data corruption.
+        let url = client::url(&self.base_url, "/v1/sync/version");
         for attempt in 0..3 {
-            let resp = client::headers(
-                http.get(client::url(&self.base_url, "/v1/sync/version")),
-                Some(&self.bearer),
-            )
-            .send();
+            let resp = self.send(|bearer| client::headers(http.get(&url), Some(bearer)));
             if let Ok(r) = resp {
                 if let Some(v) = r
                     .json::<Value>()
@@ -313,7 +349,7 @@ fn next_page(page: &Value, cur: u64) -> Option<u64> {
 }
 
 /// Extract the server error code/message for a failed push (best-effort).
-fn push_error_message(status: reqwest::StatusCode, body: &[u8]) -> String {
+fn push_error_message(status: StatusCode, body: &[u8]) -> String {
     if let Ok(v) = serde_json::from_slice::<Value>(body) {
         if let Some(err) = v.get("error") {
             let code = err.get("code").and_then(|c| c.as_str()).unwrap_or("error");
@@ -326,9 +362,46 @@ fn push_error_message(status: reqwest::StatusCode, body: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use std::sync::Arc;
 
-    use super::next_page;
+    use serde_json::json;
+    use unissh_ffi::FfiSyncTransport;
+
+    use super::{next_page, HttpSyncTransport};
+    use crate::client::Reauth;
+    use crate::test_server::{serve, UNAUTH};
+
+    /// A sync that starts with (or runs into) an expired access token signs in
+    /// again instead of failing — and keeps the fresh token for the rest of
+    /// the sync, so the refresher is asked once, not per request.
+    #[test]
+    fn an_expired_bearer_is_rotated_once_and_kept_for_the_rest_of_the_sync() {
+        let (base, seen) = serve(vec![
+            UNAUTH,
+            ("200 OK", r#"{"report_version":5}"#),
+            ("200 OK", r#"{"items":[],"has_more":false}"#),
+        ]);
+        let asked = Arc::new(std::sync::Mutex::new(0_u32));
+        let counter = Arc::clone(&asked);
+        let reauth: Reauth = Arc::new(move |stale: &str| {
+            *counter.lock().unwrap() += 1;
+            (stale == "stale").then(|| "fresh".to_owned())
+        });
+        let transport = HttpSyncTransport::with_reauth(base, "stale".to_owned(), Some(reauth));
+
+        assert_eq!(
+            transport.report_version(),
+            5,
+            "not a 0 that reads as a rollback"
+        );
+        assert!(transport.delta_since(0).is_empty());
+        assert_eq!(
+            seen.lock().unwrap().as_slice(),
+            ["bearer stale", "bearer fresh", "bearer fresh"],
+            "the rejected request is retried with the fresh token, and so is the next one"
+        );
+        assert_eq!(*asked.lock().unwrap(), 1, "one rotation for the whole sync");
+    }
 
     #[test]
     fn next_page_stops_unless_more_pages_come_with_a_cursor() {

@@ -177,39 +177,34 @@ pub fn url(base_url: &str, path: &str) -> String {
 /// `http://` is permitted ONLY for loopback hosts (localhost / 127.x / [::1]),
 /// which the integration tests and the local-eval stack use.
 pub fn validate_base_url(base_url: &str) -> CloudResult<()> {
+    // Parsed by the HTTP stack's own URL parser, so the host checked is the one
+    // it will connect to. A hand-rolled split can read a URL one way where the
+    // parser reads it another: `http://attacker.example\@127.0.0.1` looks like
+    // userinfo before a loopback host, but `\` ends the host for http(s).
+    let scheme_error = || {
+        CloudError::other(
+            "server URL must start with https:// (http:// allowed for localhost only)",
+        )
+    };
     let s = base_url.trim();
-    if let Some(rest) = s.strip_prefix("https://") {
-        return if rest.is_empty() {
-            Err(CloudError::other("server URL is missing a host"))
+    let parsed = reqwest::Url::parse(s).map_err(|e| {
+        if s.starts_with("https://") || s.starts_with("http://") {
+            CloudError::other(format!("server URL is not valid: {e}"))
         } else {
-            Ok(())
-        };
+            scheme_error()
+        }
+    })?;
+    let host = parsed.host_str().unwrap_or("");
+    match parsed.scheme() {
+        "https" if host.is_empty() => Err(CloudError::other("server URL is missing a host")),
+        "https" => Ok(()),
+        "http" if is_loopback_host(host.trim_start_matches('[').trim_end_matches(']')) => Ok(()),
+        "http" => Err(CloudError::other(format!(
+            "refusing plaintext http:// to non-loopback host \"{host}\": \
+             use https:// so tokens and data are encrypted in transit"
+        ))),
+        _ => Err(scheme_error()),
     }
-    if let Some(rest) = s.strip_prefix("http://") {
-        let host = url_host(rest).to_ascii_lowercase();
-        return if is_loopback_host(&host) {
-            Ok(())
-        } else {
-            Err(CloudError::other(format!(
-                "refusing plaintext http:// to non-loopback host \"{host}\": \
-                 use https:// so tokens and data are encrypted in transit"
-            )))
-        };
-    }
-    Err(CloudError::other(
-        "server URL must start with https:// (http:// allowed for localhost only)",
-    ))
-}
-
-/// The host of an URL's remainder after `scheme://`: no path, query or
-/// fragment, no `user@`, no port, no brackets around an IPv6 address.
-fn url_host(rest: &str) -> &str {
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let host_port = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
-    if let Some(v6) = host_port.strip_prefix('[') {
-        return v6.split_once(']').map_or(v6, |(h, _)| h);
-    }
-    host_port.split_once(':').map_or(host_port, |(h, _)| h)
 }
 
 /// `localhost`, or a loopback IP address — the name compared whole, so
@@ -235,6 +230,11 @@ pub fn headers(rb: RequestBuilder, bearer: Option<&str>) -> RequestBuilder {
 /// came back 401 and which bearer it sent.
 pub type Reauth = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 static REAUTH: OnceLock<Reauth> = OnceLock::new();
+
+/// The refresher installed with [`set_reauth`], if any.
+pub(crate) fn installed_reauth() -> Option<Reauth> {
+    REAUTH.get().cloned()
+}
 
 /// Wire up token rotation. Called once during setup; later calls are ignored.
 pub fn set_reauth(f: Reauth) {
@@ -527,6 +527,17 @@ mod base_url_tests {
         assert!(validate_base_url("http://localhost:8080/v1").is_ok());
         assert!(validate_base_url("http://127.0.0.2:8443").is_ok());
     }
+
+    /// The HTTP stack ends the host at a backslash; a check that split only
+    /// on `/` would see userinfo and a loopback host where the request goes to
+    /// the attacker's — in plaintext, with the bearer.
+    #[test]
+    fn a_host_hidden_behind_a_backslash_is_the_one_checked() {
+        assert!(validate_base_url("http://attacker.example\\@127.0.0.1").is_err());
+        assert!(validate_base_url("http://attacker.example\\@localhost:8080/").is_err());
+        assert!(validate_base_url("HTTP://LOCALHOST:8080").is_ok());
+        assert!(validate_base_url("http://127.1").is_ok());
+    }
 }
 
 #[cfg(test)]
@@ -605,62 +616,10 @@ mod tls_hint_tests {
 #[cfg(test)]
 mod reauth_tests {
     use super::*;
-    use std::io::{BufRead, BufReader, Write};
-    use std::net::TcpListener;
+    use crate::test_server::{serve, UNAUTH};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
 
-    /// A throwaway HTTP server that answers each connection from a canned script
-    /// and records the Authorization header it was given.
-    ///
-    /// `replies` are (status line, JSON body) — the Content-Length is COMPUTED.
-    /// It was hand-written first, was wrong by two bytes, and reqwest then failed
-    /// to read the body: three tests failed asserting on the error code because
-    /// the envelope never parsed. A fixture that can lie about its own length is
-    /// a fixture that tests the fixture.
-    fn serve(replies: Vec<(&'static str, &'static str)>) -> (String, Arc<Mutex<Vec<String>>>) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-        let seen2 = Arc::clone(&seen);
-        std::thread::spawn(move || {
-            for (status, body) in replies {
-                let Ok((stream, _)) = listener.accept() else {
-                    return;
-                };
-                let mut reader = BufReader::new(&stream);
-                let mut auth = String::new();
-                loop {
-                    let mut line = String::new();
-                    if reader.read_line(&mut line).unwrap_or(0) == 0 {
-                        break;
-                    }
-                    if let Some(v) = line.to_ascii_lowercase().strip_prefix("authorization:") {
-                        auth = v.trim().to_owned();
-                    }
-                    if line == "\r\n" || line == "\n" {
-                        break;
-                    }
-                }
-                seen2.lock().unwrap().push(auth);
-                let reply = format!(
-                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
-                     Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                let mut w = &stream;
-                w.write_all(reply.as_bytes())
-                    .expect("the test client reads the reply");
-                w.flush().expect("the test client reads the reply");
-            }
-        });
-        (format!("http://127.0.0.1:{port}"), seen)
-    }
-
-    const UNAUTH: (&str, &str) = (
-        "401 Unauthorized",
-        r#"{"error":{"code":"unauthenticated","message":"access token expired"}}"#,
-    );
     const OK: (&str, &str) = ("200 OK", r#"{"ok":true}"#);
 
     fn get(base: &str, bearer: &str, reauth: Option<Reauth>) -> CloudResult<Value> {

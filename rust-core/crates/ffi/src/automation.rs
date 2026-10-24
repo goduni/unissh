@@ -190,25 +190,7 @@ impl Core {
             .filter(|g| included.contains(&g.group_id))
             .map(|g| g.label)
             .collect();
-        let prompt_password = matches!(p.auth, ProfileAuth::PromptPassword);
-        let (user, auth) = if matches!(p.auth, ProfileAuth::Personal) {
-            let destination = self.personal_destination(
-                p.host.clone(),
-                p.port,
-                p.username_template.clone(),
-                p.jumps.clone(),
-                p.proxy.clone(),
-            );
-            let personal =
-                self.resolve_personal_auth(vault_id.clone(), p.uid, destination, p.user.clone())?;
-            (personal.user, personal.auth)
-        } else {
-            let default = self.get_account_default_username()?;
-            (
-                pick_username("", &p.user, default.as_deref()),
-                profile_auth_to_method(&vault_id, p.auth),
-            )
-        };
+        let resolved = self.resolve_profile(&vault_id, &p)?;
         if self.automation_revision()? != revision {
             return Err(FfiError::Locked);
         }
@@ -219,15 +201,15 @@ impl Core {
             groups,
             tags: p.tags,
             label: p.label,
-            host: p.host,
-            port: p.port,
-            user: apply_username_template(&user, p.username_template.as_deref()),
+            host: resolved.host,
+            port: resolved.port,
+            user: resolved.user,
             revision,
             record_sessions: p.record_sessions,
-            auth,
-            prompt_password,
-            jumps: p.jumps,
-            proxy: p.proxy,
+            auth: resolved.auth,
+            prompt_password: resolved.ask_password,
+            jumps: resolved.jumps,
+            proxy: resolved.proxy,
         })
     }
 

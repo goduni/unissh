@@ -16,6 +16,7 @@ import type {
   IdentityBinding,
   BindingResolution,
   PersonalAuth,
+  ResolvedConnect,
   DbConsistencyReport,
   DeviceInfo,
   ExecEvent,
@@ -64,7 +65,6 @@ import type {
   VaultInfo,
   VaultIntegrityReport,
 } from "./types";
-import { profileToAuth } from "./types";
 
 // After a vault-content mutation succeeds, notify the auto-sync hook so cloud
 // vaults push to their server immediately (no manual "Sync now"). The original
@@ -306,30 +306,33 @@ export const personalDestination = (
 export const applyUsernameTemplate = (baseUser: string, usernameTemplate?: string | null) =>
   invoke<string>("apply_username_template", { baseUser, usernameTemplate: usernameTemplate ?? null });
 
-/** Resolve a profile's connect {user, auth} for an INTERACTIVE connection.
- *  Personal profiles are resolved in-core (binding → identity + anti-redirect,
- *  rejecting on Unbound/Redirected) and get the resolved connect username;
- *  everything else uses the stored ProfileAuth. `vaultId` is the profile's vault
- *  (the team vault for a Personal host). Throws on a Personal resolution error —
- *  callers surface it. Not for fan-out (Personal is excluded there — B6). */
-export async function resolveConnectAuth(
+/** Resolve a saved profile for a connect in the core — the resolver the CLI
+ *  and local automation use too, so every client logs in the same way.
+ *  Personal profiles go through the binding (identity + anti-redirect,
+ *  rejecting on Unbound/Redirected); others use the stored credential, with the
+ *  account's default user when the profile names none; the username template
+ *  applies to both. A profile that wants its password typed gets
+ *  `promptedPassword`. `vaultId` is the profile's vault (the team vault for a
+ *  Personal host). Throws on a resolution error — callers surface it.
+ *
+ *  The result is the whole destination as the core read it from the vault, and
+ *  callers connect to exactly that: the anti-redirect check was made against
+ *  it, and `profile` may be a stale copy (a pane keeps the profile it opened
+ *  with), so connecting to `profile.host` could send a personal credential
+ *  somewhere the check never saw. */
+export async function resolveConnection(
   profile: ConnectionProfile,
   vaultId: string,
   promptedPassword?: string,
-): Promise<{ user: string; auth: AuthMethod }> {
-  if (profile.auth.type === "personal") {
-    const dest = await personalDestination(
-      profile.host,
-      profile.port,
-      profile.usernameTemplate,
-      profile.jumps,
-      profile.proxy,
-    );
-    const pa = await resolvePersonalAuth(vaultId, profile.uid, dest, profile.user);
-    const user = await applyUsernameTemplate(pa.user, profile.usernameTemplate);
-    return { user, auth: pa.auth };
-  }
-  return { user: profile.user, auth: profileToAuth(profile.auth, vaultId, promptedPassword) };
+): Promise<ConnectArgs> {
+  const r = await invoke<ResolvedConnect>("resolve_connection", {
+    vaultId,
+    profileId: profile.profileId,
+  });
+  const auth: AuthMethod = r.askPassword
+    ? { type: "password", password: promptedPassword ?? "" }
+    : r.auth;
+  return { host: r.host, port: r.port, user: r.user, auth, jumps: r.jumps, proxy: r.proxy };
 }
 export interface SkippedDirective {
   line: number;

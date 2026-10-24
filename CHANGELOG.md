@@ -69,11 +69,23 @@ starts with `0.`:
 - Bindings: `ExecHandleFfi::close_stdin` ends a streaming command's input and
   keeps its output coming; `Core::wait_for_recordings` waits for session
   recordings still being written, for a process about to exit.
+- A device can name itself in the Devices list (`POST /v1/devices/label`,
+  audited as `device_label`); the CLI does so after pairing or joining
+  (`CLI · Linux`), and the app's Settings → Devices now shows these labels, so
+  the owner can tell which device to revoke. A server without the call leaves
+  the device unnamed. Labels with control or bidirectional-formatting
+  characters are refused, at self-enroll too.
 - Releases carry the command-line client as a static Linux binary for x86-64
   and ARM64 (`unissh-cli_<version>_linux-<arch>`, musl), in the signed
   `SHA256SUMS` with everything else.
 
 ### Changed
+
+- One resolver for saved hosts, in the core (`Core::resolve_connection`): the
+  app, the CLI and local automation now work out a host's user and credential
+  the same way. For the app this means a host that names no user logs in as the
+  account's default user (as automation already did) instead of with an empty
+  one.
 
 - Bindings: `SessionObserver::on_fill` is a new required method for
   implementors of the observer, and `Core::open_session` gained a trailing
@@ -81,10 +93,33 @@ starts with `0.`:
   Observer callbacks (`on_fill`, and to be safe `on_data`) must not call back
   into the session synchronously from the calling thread.
 
+### Fixed
+
+- The app's sync keeps working when its session token expires during a sync:
+  the sync transport now signs in again on a rejected token, as every other
+  server call already did. Before, the sync after an expiry reported "version 0
+  below the trusted cursor", a rollback warning for a server that had done
+  nothing wrong.
+
+### Security
+
+- A server link may use plain `http://` only to a loopback host, and the check
+  now reads the host the way the HTTP stack connects to it. It used to compare
+  the start of the text, so links such as `http://localhost.attacker.example`
+  or `http://localhost@attacker.example` passed it and sent the session tokens
+  unencrypted to another machine — a pasted invite or pairing link was enough.
+  The check runs when a server is added, so a server added by an earlier
+  version is not checked again: one whose address starts with `http://` and is
+  not this machine should be removed and added again over `https://`.
+
 ### Compatibility
 
-**Vault format and server protocol are unchanged.** Colour and icon are new
-optional fields inside the existing encrypted host and group bodies, stored as
+**Vault format unchanged. Server protocol changed additively** —
+`POST /v1/devices/label`; an older server leaves the device unnamed, and an
+older client never calls it.
+
+Colour and icon are new optional fields inside the existing encrypted host and
+group bodies, stored as
 ids rather than colour values; hosts without them serialize byte-for-byte as
 before, and so do groups. Groups now also keep fields a newer client adds, as
 hosts already did.

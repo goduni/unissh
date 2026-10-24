@@ -18,8 +18,8 @@ export type ProfileAuth =
   | { type: "vaultPassword"; passwordItemId: string }
   | { type: "promptPassword" }
   // Shared host with no stored creds — log in with a personal identity via a
-  // binding (B4). Resolved at connect via `api.resolvePersonalAuth`, not
-  // `profileToAuth` (needs an in-core binding lookup + anti-redirect check).
+  // binding (B4). Resolved at connect in the core (`api.resolveConnection`:
+  // binding lookup + anti-redirect check).
   | { type: "personal" }
   /** A key in the OS ssh-agent. The public key is a handle, not a secret. */
   | { type: "systemAgent"; publicKey: string };
@@ -144,6 +144,20 @@ export type BindingResolution =
 export interface PersonalAuth {
   user: string;
   auth: AuthMethod;
+}
+
+/** A saved host resolved for a connect by the core (`resolve_connection`): the
+ *  destination read from the vault, which a Personal host's anti-redirect check
+ *  was made against — connect to this, not to a cached profile. */
+export interface ResolvedConnect {
+  host: string;
+  port: number;
+  user: string;
+  /** An empty password when `askPassword`: the caller fills in what was typed. */
+  auth: AuthMethod;
+  jumps: JumpHost[];
+  proxy: ProxyConfig | null;
+  askPassword: boolean;
 }
 
 export type SyncTarget = "local" | "cloud";
@@ -544,33 +558,6 @@ export function mismatchFromError(
   return m ? { host: m[1], port: Number(m[2]), fingerprint: m[3] } : null;
 }
 
-/** Resolve a stored ProfileAuth into a connect-time AuthMethod. `vaultId` is the
- *  vault the profile lives in (where its key/password items are). PromptPassword
- *  becomes an inline password the UI must have collected first. */
-export function profileToAuth(
-  a: ProfileAuth,
-  vaultId: string,
-  promptedPassword?: string,
-): AuthMethod {
-  switch (a.type) {
-    case "key":
-      return { type: "agent", vaultId, keyItemId: a.keyItemId };
-    case "vaultPassword":
-      return { type: "vaultPassword", vaultId, passwordItemId: a.passwordItemId };
-    case "promptPassword":
-      return { type: "password", password: promptedPassword ?? "" };
-    case "personal":
-      // Personal has no cred in this vault — resolve via api.resolvePersonalAuth
-      // (binding → identity + anti-redirect). Callers must branch on this before
-      // calling profileToAuth.
-      throw new Error("personal profiles must be resolved via resolvePersonalAuth");
-    case "systemAgent":
-      // Nothing to resolve from the vault: the OS agent holds the key and all we
-      // pass along is which identity to ask it for.
-      return { type: "systemAgent", publicKey: a.publicKey };
-  }
-}
-
 /** UI auth-kind from a stored ProfileAuth (matches AuthBadge's AuthKind). */
 export function profileAuthKind(
   a: ProfileAuth,
@@ -739,6 +726,8 @@ export interface AccountInfo {
 
 export interface DeviceInfo {
   deviceId: string;
+  /** The name the device gave itself (e.g. `CLI · Linux`), if any. */
+  label?: string | null;
   status: string;
   registeredAt: number;
   activeSessions: number;

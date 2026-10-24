@@ -598,3 +598,101 @@ async fn keyset_session_refresh_ignores_reassertion() {
         "keyset session refreshes regardless of any reassert window"
     );
 }
+
+/// POST /v1/devices/label as `access`.
+async fn label_device(app: &common::TestApp, access: &str, body: Value) -> reqwest::Response {
+    app.client
+        .post(format!("{}/v1/devices/label", app.base))
+        .bearer_auth(access)
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+}
+
+/// The caller's own devices with their labels, from GET /v1/devices.
+async fn own_labels(app: &common::TestApp, access: &str) -> Vec<Value> {
+    let v: Value = app
+        .client
+        .get(format!("{}/v1/devices", app.base))
+        .bearer_auth(access)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    v["devices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["label"].clone())
+        .collect()
+}
+
+/// A device that joined without a label (invite, pairing) names itself; the
+/// label is trimmed, and an empty one clears it.
+#[tokio::test]
+async fn a_device_labels_itself_and_can_clear_the_label() {
+    let app = spawn().await;
+    let id = make_identity();
+    let c = claim(&app, &id).await;
+    let access = login_v2(
+        &app,
+        &id,
+        c["account_id"].as_str().unwrap(),
+        c["device_id"].as_str().unwrap(),
+    )
+    .await;
+
+    let r = label_device(&app, &access, json!({ "label": "  CLI · Linux " })).await;
+    assert_eq!(r.status(), 204);
+    assert_eq!(own_labels(&app, &access).await, [json!("CLI · Linux")]);
+
+    let r = label_device(&app, &access, json!({ "label": "" })).await;
+    assert_eq!(r.status(), 204);
+    assert_eq!(own_labels(&app, &access).await, [Value::Null]);
+}
+
+/// The label is open metadata in every listing: bounded like the self-enroll one.
+#[tokio::test]
+async fn a_device_label_over_128_chars_is_refused() {
+    let app = spawn().await;
+    let id = make_identity();
+    let c = claim(&app, &id).await;
+    let access = login_v2(
+        &app,
+        &id,
+        c["account_id"].as_str().unwrap(),
+        c["device_id"].as_str().unwrap(),
+    )
+    .await;
+    let r = label_device(&app, &access, json!({ "label": "x".repeat(129) })).await;
+    assert_eq!(r.status(), 400);
+    assert_eq!(
+        own_labels(&app, &access).await,
+        [Value::Null],
+        "nothing was written"
+    );
+}
+
+/// A label is what the owner goes by when revoking: characters that would hide
+/// or reorder its text are refused, so one device cannot pass for another.
+#[tokio::test]
+async fn a_device_label_that_could_pass_for_another_is_refused() {
+    let app = spawn().await;
+    let id = make_identity();
+    let c = claim(&app, &id).await;
+    let access = login_v2(
+        &app,
+        &id,
+        c["account_id"].as_str().unwrap(),
+        c["device_id"].as_str().unwrap(),
+    )
+    .await;
+    for label in ["Desktop \u{202E}soScam", "CLI\x1b[2J", "Lap\u{2066}top"] {
+        let r = label_device(&app, &access, json!({ "label": label })).await;
+        assert_eq!(r.status(), 400, "{label:?} is refused");
+    }
+    assert_eq!(own_labels(&app, &access).await, [Value::Null]);
+}

@@ -44,7 +44,7 @@ import { useApp } from "@/store/app";
 import { useCtx } from "@/store/ctx";
 import { useIsMobile, useNarrow } from "@/store/responsive";
 import * as api from "@/bridge/api";
-import { apiErrorMessage, ItemType, profileToAuth } from "@/bridge/types";
+import { apiErrorMessage, ItemType } from "@/bridge/types";
 import { cloudVaultServers, isOwnedCloud, serverShortLabel, vaultLoc } from "@/bridge/vaults";
 import type {
   ConnectionProfile,
@@ -59,7 +59,6 @@ import type {
   SyncTarget,
   VaultInfo,
 } from "@/bridge/types";
-import type { ConnectArgs } from "@/bridge/api";
 import type { TunnelType } from "@/store/app";
 import { exportPath } from "@/support/paths";
 import { authorizedKeysAppendCmd } from "@/support/authorizedKeys";
@@ -2298,15 +2297,7 @@ function NewTunnelModal({ onClose }: { onClose: () => void }) {
     }
     try {
       // Personal via-host resolves in-core (binding + anti-redirect) first.
-      const { user, auth } = await api.resolveConnectAuth(via, vault);
-      const args: ConnectArgs = {
-        host: via.host,
-        port: via.port,
-        user,
-        auth,
-        jumps: via.jumps,
-        proxy: via.proxy,
-      };
+      const args = await api.resolveConnection(via, vault);
       let opened: { id: string; bindAddress: string };
       let route: string;
       if (type === "L") {
@@ -3100,14 +3091,9 @@ function CopyKeyToServerModal({
           return;
         }
         try {
-          const args: ConnectArgs = {
-            host: h.host,
-            port: h.port,
-            user: h.user,
-            auth: profileToAuth(h.auth, vault, needsPw(h) ? pw : undefined),
-            jumps: h.jumps,
-            proxy: h.proxy,
-          };
+          // The core's resolver, as a terminal would connect: the account's
+          // default user for a host that names none, the username template.
+          const args = await api.resolveConnection(h, vault, needsPw(h) ? pw : undefined);
           const r = await api.sshExec(args, cmd);
           if (r.exitStatus === 0) ok++;
           else {

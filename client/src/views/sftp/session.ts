@@ -21,20 +21,11 @@ export async function openSession(profile: ConnectionProfile): Promise<string | 
     return null;
   }
   try {
-    // Personal profiles resolve in-core (binding + anti-redirect) first.
-    const { user, auth } = await api.resolveConnectAuth(profile, st.vaultId);
+    // Resolved in-core (Personal: binding + anti-redirect) and opened to the
+    // destination the core checked, not to this possibly stale profile copy.
+    const dest = await api.resolveConnection(profile, st.vaultId);
     if (!current()) return null;
-    const id = await api.sftpOpen(
-      {
-        host: profile.host,
-        port: profile.port,
-        user,
-        auth,
-        jumps: profile.jumps,
-        proxy: profile.proxy,
-      },
-      st.sftpParallelism,
-    );
+    const id = await api.sftpOpen(dest, st.sftpParallelism);
     if (!current()) { await api.sftpClose(id); return null; }
     let home = "/";
     try {
@@ -45,9 +36,9 @@ export async function openSession(profile: ConnectionProfile): Promise<string | 
     const session: SftpSession = {
       id,
       profileId: profile.profileId,
-      host: profile.host,
-      user,
-      port: profile.port,
+      host: dest.host,
+      user: dest.user,
+      port: dest.port,
       label: profile.label, // the host's friendly name (the tab shows this)
       home,
     };

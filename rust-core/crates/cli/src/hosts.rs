@@ -194,87 +194,48 @@ pub struct Target {
     pub ask_password: bool,
 }
 
-/// Resolves `host` into a connection, as the app does: a Personal host takes
-/// its credential and user from the personal identity linked to it (with the
-/// anti-redirect check of the binding), any other host uses the credential it
-/// stores and its user — or the account's default user when it names none.
-/// `user` replaces the user name; a Personal host refuses that, because its
-/// identity decides who logs in.
+/// Resolves `host` into a connection with the core's resolver — the one the
+/// app and local automation use (see `Core::resolve_connection`). `user`
+/// replaces the user name; a Personal host refuses that, because its identity
+/// decides who logs in.
 pub fn resolve(core: &Core, host: &Host, user: Option<&str>) -> Res<Target> {
     let p = &host.profile;
-    let (user, auth) = if matches!(p.auth, ProfileAuth::Personal) {
-        if user.is_some() {
-            return Err(Failure::msg(format!(
-                "{} logs in with your personal identity, which decides the user name",
-                p.label
-            )));
-        }
-        let destination = core.personal_destination(
-            p.host.clone(),
-            p.port,
-            p.username_template.clone(),
-            p.jumps.clone(),
-            p.proxy.clone(),
-        );
-        let personal = core
-            .resolve_personal_auth(
-                host.vault_id.clone(),
-                p.uid.clone(),
-                destination,
-                p.user.clone(),
-            )
-            .map_err(|e| {
+    let personal = matches!(p.auth, ProfileAuth::Personal);
+    if personal && user.is_some() {
+        return Err(Failure::msg(format!(
+            "{} logs in with your personal identity, which decides the user name",
+            one_line(&p.label)
+        )));
+    }
+    let resolved = core
+        .resolve_connection(host.vault_id.clone(), p.profile_id.clone())
+        .map_err(|e| {
+            if personal {
                 Failure::msg(format!(
                     "{} needs your personal identity: {e}. Link one to this host in the UniSSH app",
-                    p.label
+                    one_line(&p.label)
                 ))
-            })?;
-        let user = core.apply_username_template(personal.user, p.username_template.clone());
-        (user, personal.auth)
-    } else {
-        let user = match user {
-            Some(user) => user.to_owned(),
-            None if !p.user.trim().is_empty() => p.user.clone(),
-            None => core.get_account_default_username()?.unwrap_or_default(),
-        };
-        (user, method_for(&host.vault_id, &p.auth))
-    };
+            } else {
+                e.into()
+            }
+        })?;
+    let user = user.map_or(resolved.user, str::to_owned);
     if user.trim().is_empty() {
         return Err(Failure::msg(format!(
             "{} names no user: connect as user@{}",
-            p.label, p.label
+            one_line(&p.label),
+            one_line(&p.label)
         )));
     }
     Ok(Target {
-        host: p.host.clone(),
-        port: p.port,
+        host: resolved.host,
+        port: resolved.port,
         user,
-        auth,
-        jumps: p.jumps.clone(),
-        proxy: p.proxy.clone(),
-        ask_password: matches!(p.auth, ProfileAuth::PromptPassword),
+        auth: resolved.auth,
+        jumps: resolved.jumps,
+        proxy: resolved.proxy,
+        ask_password: resolved.ask_password,
     })
-}
-
-/// A profile's stored credential as a connect method, qualified by its vault.
-fn method_for(vault_id: &str, auth: &ProfileAuth) -> AuthMethod {
-    match auth {
-        ProfileAuth::Key { key_item_id } => AuthMethod::Agent {
-            vault_id: vault_id.to_owned(),
-            key_item_id: key_item_id.clone(),
-        },
-        ProfileAuth::VaultPassword { password_item_id } => AuthMethod::VaultPassword {
-            vault_id: vault_id.to_owned(),
-            password_item_id: password_item_id.clone(),
-        },
-        ProfileAuth::SystemAgent { public_key } => AuthMethod::SystemAgent {
-            public_key: public_key.clone(),
-        },
-        // Asked for at connect time; Personal never gets here (see `resolve`).
-        ProfileAuth::PromptPassword | ProfileAuth::Personal => AuthMethod::Password {
-            password: String::new(),
-        },
-    }
 }
 
 #[cfg(test)]

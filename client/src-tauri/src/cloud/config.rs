@@ -187,6 +187,11 @@ pub struct CloudState {
     servers: Mutex<HashMap<ServerId, ServerConfig>>,
     /// In-memory base64(access_token) per server; never written to disk.
     access_tokens: Mutex<HashMap<ServerId, String>>,
+    /// Each server's access token from before its last rotation. A caller that
+    /// took the token just before someone else rotated it (a sync transport is
+    /// built with one) comes back with a token no longer in `access_tokens`;
+    /// this still names its server, so it gets the current one.
+    superseded_tokens: Mutex<HashMap<ServerId, String>>,
     /// In-memory space list per server (server-v2), refreshed from `GET /v1/spaces`
     /// whenever a session is (re)established. Never persisted; a fresh boot re-fetches
     /// it on `server_login`. Feeds `ServerStatus.spaces`.
@@ -248,6 +253,7 @@ impl CloudState {
             config_path,
             servers: Mutex::new(servers),
             access_tokens: Mutex::new(HashMap::new()),
+            superseded_tokens: Mutex::new(HashMap::new()),
             spaces: Mutex::new(HashMap::new()),
             active: Mutex::new(active),
             refresh_gate: Mutex::new(()),
@@ -381,6 +387,7 @@ impl CloudState {
             servers.clear();
         });
         wipe(&self.access_tokens, HashMap::clear);
+        wipe(&self.superseded_tokens, HashMap::clear);
         wipe(&self.spaces, HashMap::clear);
         wipe(&self.active, |active| *active = None);
         remove_sidecar(&self.config_path);
@@ -452,6 +459,13 @@ impl CloudState {
             .iter()
             .find(|(_, v)| v.as_str() == stale)
             .map(|(k, _)| k.clone());
+        let found = match found {
+            Some(sid) => Some(sid),
+            None => locked(&self.superseded_tokens, "session-token")?
+                .iter()
+                .find(|(_, v)| v.as_str() == stale)
+                .map(|(k, _)| k.clone()),
+        };
         let Some(sid) = found else {
             return Ok(None);
         };
@@ -483,6 +497,7 @@ impl CloudState {
         };
         locked(&self.access_tokens, "session-token")?
             .insert(sid.clone(), session.access_token.clone());
+        locked(&self.superseded_tokens, "session-token")?.insert(sid.clone(), stale.to_owned());
         if let Err(e) = tokens::save_refresh(&sid, &session.refresh_token) {
             // The new refresh token is live on the server either way; failing to
             // store it costs a re-login after restart, not this session.
@@ -542,6 +557,7 @@ impl CloudState {
             servers.keys().next().cloned()
         };
         locked(&self.access_tokens, "session-token")?.remove(id);
+        locked(&self.superseded_tokens, "session-token")?.remove(id);
         locked(&self.spaces, "space")?.remove(id);
         {
             let mut active = locked(&self.active, "active-server")?;
@@ -561,6 +577,7 @@ impl CloudState {
             return Ok(());
         };
         locked(&self.access_tokens, "session-token")?.remove(&key);
+        locked(&self.superseded_tokens, "session-token")?.remove(&key);
         // The cached spaces were session-scoped; a re-login refetches them.
         locked(&self.spaces, "space")?.remove(&key);
         if let Err(e) = tokens::delete_refresh(&key) {
@@ -829,6 +846,31 @@ mod config_tests {
         let list = reloaded.list().unwrap();
         assert_eq!(list.servers.len(), 2);
         assert_eq!(list.active.as_deref(), Some("AAAA"));
+    }
+
+    /// A caller still holding the token from before someone else's rotation is
+    /// handed the current one, not nothing: no second refresh is spent and the
+    /// caller's 401 does not reach the UI.
+    #[test]
+    fn a_token_rotated_by_another_caller_is_answered_with_the_current_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = CloudState::new(dir.path().join("cloud.json"));
+        state
+            .upsert_config(cfg("AAAA", "https://a.example"))
+            .unwrap();
+        state
+            .set_access_token_for(Some("AAAA"), Some("fresh".to_owned()))
+            .unwrap();
+        state
+            .superseded_tokens
+            .lock()
+            .unwrap()
+            .insert("AAAA".to_owned(), "stale".to_owned());
+        assert_eq!(
+            state.rotate_expired_access("stale").as_deref(),
+            Some("fresh")
+        );
+        assert_eq!(state.rotate_expired_access("never-issued"), None);
     }
 
     #[test]
