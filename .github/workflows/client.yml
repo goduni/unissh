@@ -358,6 +358,14 @@ jobs:
         run: cargo test --locked --release --lib commands::local_symlink_tests -- --test-threads=1
         working-directory: client/src-tauri
 
+      # Token rotation's bookkeeping: a caller holding a token someone else
+      # already rotated gets the current one. In-memory only (no keychain, no
+      # network), and the same test binary as the step above.
+      - name: Test token rotation bookkeeping (Tauri crate)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: cargo test --locked --release --lib cloud::config::config_tests::a_token_rotated_by_another_caller
+        working-directory: client/src-tauri
+
       # The platform-independent half of biometric unlock: what the status
       # says, which attempt's answer still counts, and when stored material is
       # wiped around a keyset change. Linux only: there the platform store is

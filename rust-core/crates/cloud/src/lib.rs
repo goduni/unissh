@@ -27,4 +27,7 @@ pub mod onboard;
 pub mod recovery;
 pub mod transport;
 
+#[cfg(test)]
+mod test_server;
+
 pub use error::{CloudError, CloudResult};
