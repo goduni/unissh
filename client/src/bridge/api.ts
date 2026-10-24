@@ -306,19 +306,25 @@ export const personalDestination = (
 export const applyUsernameTemplate = (baseUser: string, usernameTemplate?: string | null) =>
   invoke<string>("apply_username_template", { baseUser, usernameTemplate: usernameTemplate ?? null });
 
-/** Resolve a saved profile's connect {user, auth} in the core — the resolver the
- *  CLI and local automation use too, so every client logs in the same way.
+/** Resolve a saved profile for a connect in the core — the resolver the CLI
+ *  and local automation use too, so every client logs in the same way.
  *  Personal profiles go through the binding (identity + anti-redirect,
  *  rejecting on Unbound/Redirected); others use the stored credential, with the
  *  account's default user when the profile names none; the username template
  *  applies to both. A profile that wants its password typed gets
  *  `promptedPassword`. `vaultId` is the profile's vault (the team vault for a
- *  Personal host). Throws on a resolution error — callers surface it. */
-export async function resolveConnectAuth(
+ *  Personal host). Throws on a resolution error — callers surface it.
+ *
+ *  The result is the whole destination as the core read it from the vault, and
+ *  callers connect to exactly that: the anti-redirect check was made against
+ *  it, and `profile` may be a stale copy (a pane keeps the profile it opened
+ *  with), so connecting to `profile.host` could send a personal credential
+ *  somewhere the check never saw. */
+export async function resolveConnection(
   profile: ConnectionProfile,
   vaultId: string,
   promptedPassword?: string,
-): Promise<{ user: string; auth: AuthMethod }> {
+): Promise<ConnectArgs> {
   const r = await invoke<ResolvedConnect>("resolve_connection", {
     vaultId,
     profileId: profile.profileId,
@@ -326,7 +332,7 @@ export async function resolveConnectAuth(
   const auth: AuthMethod = r.askPassword
     ? { type: "password", password: promptedPassword ?? "" }
     : r.auth;
-  return { user: r.user, auth };
+  return { host: r.host, port: r.port, user: r.user, auth, jumps: r.jumps, proxy: r.proxy };
 }
 export interface SkippedDirective {
   line: number;

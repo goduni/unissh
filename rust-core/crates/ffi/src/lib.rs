@@ -632,8 +632,6 @@ fn binding_item_id(team_vault_id: &str, profile_uid: &str) -> String {
     format!("binding:{}", hex::encode(&digest[..16]))
 }
 
-/// Resolved personal authentication for connecting to a shared host: a concrete
-/// vault-qualified [`AuthMethod`] (a key/password from the PERSONAL vault) plus
 /// Where and how to connect to a saved host, resolved the way every client
 /// connects to it — the app, the CLI and local automation alike
 /// ([`Core::resolve_connection`]).
@@ -658,6 +656,8 @@ pub struct ResolvedConnection {
     pub ask_password: bool,
 }
 
+/// Resolved personal authentication for connecting to a shared host: a concrete
+/// vault-qualified [`AuthMethod`] (a key/password from the PERSONAL vault) plus
 /// the username from the identity. Returned by [`Core::resolve_personal_auth`] only
 /// AFTER the anti-redirect check — i.e. the personal credential is resolved only for
 /// the pinned destination.
@@ -8058,10 +8058,6 @@ fn profile_to_target(vault_id: &str, p: ConnectionProfile) -> MultiExecTarget {
     }
 }
 
-/// Translates a profile's credential reference (`ProfileAuth`, vault-relative) into a
-/// vault-qualified [`AuthMethod`], setting the `vault_id` of the vault where
-/// the profile lives. `PromptPassword` → an empty inline `Password` (in a non-interactive
-/// run it yields an authentication error, not a silent success).
 impl Core {
     /// The body of [`Core::resolve_connection`], for a profile already read.
     pub(crate) fn resolve_profile(
@@ -8103,6 +8099,10 @@ impl Core {
     }
 }
 
+/// Translates a profile's credential reference (`ProfileAuth`, vault-relative) into a
+/// vault-qualified [`AuthMethod`], setting the `vault_id` of the vault where
+/// the profile lives. `PromptPassword` → an empty inline `Password` (in a non-interactive
+/// run it yields an authentication error, not a silent success).
 fn profile_auth_to_method(vault_id: &str, auth: ProfileAuth) -> AuthMethod {
     match auth {
         ProfileAuth::Key { key_item_id } => AuthMethod::Agent {
