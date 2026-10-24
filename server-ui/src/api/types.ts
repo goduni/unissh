@@ -44,7 +44,9 @@ export const CACHE_POLICY_LABEL: Record<number, string> = {
 
 export type InviteState = "pending" | "redeemed" | "expired" | "revoked";
 export type AccountStatus = "active" | "disabled";
-export type DeviceStatus = "active" | "revoked";
+/** `expired`: past its expiry (a 30-day panel device). Revoked and expired devices
+ * are listed for 30 days, then the server drops them. */
+export type DeviceStatus = "active" | "revoked" | "expired";
 export type DeviceKind = "app" | "web";
 export type AuditSource = "client-signed" | "server-observed";
 

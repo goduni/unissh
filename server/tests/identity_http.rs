@@ -10,10 +10,15 @@
 
 mod common;
 
-use common::{Identity, claim_owner, login_tokens_v2, login_v2, make_identity, spawn};
+use common::{
+    Identity, claim_owner, login_tokens_v2, login_v2, make_identity, spawn, spawn_with,
+    try_login_v2,
+};
 use serde_json::{Value, json};
 use unissh_crypto::{ServerAuthChallenge as CoreChal, sign_server_auth};
 use unissh_server::ids::{self, b64, unb64};
+use unissh_server::store::Val;
+use unissh_server::store::instance_repo::DEAD_DEVICE_RETENTION_SECONDS;
 
 async fn claim(app: &common::TestApp, id: &Identity) -> Value {
     claim_owner(app, &id.payload_b64, &id.sig_b64).await
@@ -695,4 +700,347 @@ async fn a_device_label_that_could_pass_for_another_is_refused() {
         assert_eq!(r.status(), 400, "{label:?} is refused");
     }
     assert_eq!(own_labels(&app, &access).await, [Value::Null]);
+}
+
+// ---- devices nobody can sign in as: pairings that never ran, revoked, expired ----
+
+/// POST /v1/devices/add as `access` (what "Add device" does first): the id.
+async fn add_device(app: &common::TestApp, access: &str) -> String {
+    let r = app
+        .client
+        .post(format!("{}/v1/devices/add", app.base))
+        .bearer_auth(access)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 201);
+    let v: Value = r.json().await.unwrap();
+    v["device_id"].as_str().unwrap().to_owned()
+}
+
+/// The ids in the caller's own Devices list (GET /v1/devices), sorted.
+async fn own_devices(app: &common::TestApp, access: &str) -> Vec<String> {
+    let v: Value = app
+        .client
+        .get(format!("{}/v1/devices", app.base))
+        .bearer_auth(access)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let mut ids: Vec<String> = v["devices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["device_id"].as_str().unwrap().to_owned())
+        .collect();
+    ids.sort();
+    ids
+}
+
+/// `(device_id, status)` of an account's devices in the owner's panel, sorted.
+async fn panel_devices(
+    app: &common::TestApp,
+    access: &str,
+    account: &str,
+) -> Vec<(String, String)> {
+    let v: Value = app
+        .client
+        .get(format!("{}/v1/admin/devices", app.base))
+        .query(&[("account_id", account)])
+        .bearer_auth(access)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let mut rows: Vec<(String, String)> = v["devices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| {
+            (
+                d["device_id"].as_str().unwrap().to_owned(),
+                d["status"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    rows.sort();
+    rows
+}
+
+/// One janitor run at the current test time.
+async fn sweep(app: &common::TestApp) {
+    let now = app.now();
+    app.state
+        .store
+        .cleanup_expired(now, now - 86_400)
+        .await
+        .unwrap();
+}
+
+fn sorted(mut v: Vec<String>) -> Vec<String> {
+    v.sort();
+    v
+}
+
+/// The account's device count as the owner sees it: in the accounts list and
+/// on the overview (one account here, so both count the same devices).
+async fn device_counts(app: &common::TestApp, access: &str) -> (i64, i64) {
+    let get = |path: &str| {
+        app.client
+            .get(format!("{}{path}", app.base))
+            .bearer_auth(access)
+            .send()
+    };
+    let accounts: Value = get("/v1/accounts").await.unwrap().json().await.unwrap();
+    let overview: Value = get("/v1/admin/overview")
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    (
+        accounts["accounts"][0]["device_count"].as_i64().unwrap(),
+        overview["devices"].as_i64().unwrap(),
+    )
+}
+
+/// "Add device" creates the device before the pairing runs, so it is not one of
+/// the account's devices until it signs in.
+#[tokio::test]
+async fn a_device_added_for_a_pairing_counts_once_it_signs_in() {
+    let app = spawn().await;
+    let id = make_identity();
+    let c = claim(&app, &id).await;
+    let (acct, dev1) = (
+        c["account_id"].as_str().unwrap(),
+        c["device_id"].as_str().unwrap(),
+    );
+    let access = login_v2(&app, &id, acct, dev1).await;
+
+    let dev2 = add_device(&app, &access).await;
+    assert_eq!(own_devices(&app, &access).await, [dev1]);
+    assert_eq!(
+        panel_devices(&app, &access, acct).await,
+        [(dev1.to_owned(), "active".to_owned())]
+    );
+    assert_eq!(device_counts(&app, &access).await, (1, 1));
+
+    login_v2(&app, &id, acct, &dev2).await;
+    assert_eq!(
+        own_devices(&app, &access).await,
+        sorted(vec![dev1.to_owned(), dev2])
+    );
+    assert_eq!(device_counts(&app, &access).await, (2, 2));
+}
+
+/// Two first sign-ins of one pairing device at once both get in: the one that
+/// finds the device already activated is not refused for it.
+#[tokio::test]
+async fn a_pairing_device_activated_alongside_still_signs_in() {
+    let app = spawn().await;
+    let id = make_identity();
+    let c = claim(&app, &id).await;
+    let (acct, dev1) = (
+        c["account_id"].as_str().unwrap(),
+        c["device_id"].as_str().unwrap(),
+    );
+    let access = login_v2(&app, &id, acct, dev1).await;
+    let dev2 = unb64(&add_device(&app, &access).await).unwrap();
+    let store = &app.state.store;
+    let now = app.now();
+    assert!(store.activate_pending_device(&dev2, now).await.unwrap());
+    assert!(store.activate_pending_device(&dev2, now).await.unwrap());
+}
+
+/// Revoking a device that never signed in deletes it: it never was a device.
+#[tokio::test]
+async fn revoking_a_pairing_device_deletes_it() {
+    let app = spawn().await;
+    let id = make_identity();
+    let c = claim(&app, &id).await;
+    let (acct, dev1) = (
+        c["account_id"].as_str().unwrap(),
+        c["device_id"].as_str().unwrap(),
+    );
+    let access = login_v2(&app, &id, acct, dev1).await;
+    let dev2 = add_device(&app, &access).await;
+    let r = app
+        .client
+        .post(format!("{}/v1/session/device-revoke", app.base))
+        .bearer_auth(&access)
+        .json(&json!({ "device_id": dev2 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 204);
+    assert_eq!(
+        try_login_v2(&app, &id, acct, &dev2).await.status(),
+        404,
+        "the device is gone"
+    );
+    assert_eq!(
+        panel_devices(&app, &access, acct).await,
+        [(dev1.to_owned(), "active".to_owned())]
+    );
+}
+
+/// A pairing that is cancelled or fails leaves nothing behind: its device cannot
+/// sign in after a week, and the next janitor run deletes it.
+#[tokio::test]
+async fn a_pairing_that_never_signs_in_leaves_no_device() {
+    let app = spawn().await;
+    let id = make_identity();
+    let c = claim(&app, &id).await;
+    let (acct, dev1) = (
+        c["account_id"].as_str().unwrap(),
+        c["device_id"].as_str().unwrap(),
+    );
+    let access = login_v2(&app, &id, acct, dev1).await;
+    let dev2 = add_device(&app, &access).await;
+
+    app.clock.advance(7 * 86_400 + 1);
+    assert_eq!(try_login_v2(&app, &id, acct, &dev2).await.status(), 401);
+    sweep(&app).await;
+    assert_eq!(
+        try_login_v2(&app, &id, acct, &dev2).await.status(),
+        404,
+        "the device is gone"
+    );
+    login_v2(&app, &id, acct, dev1).await;
+}
+
+/// A revoked device leaves the account's own list at once. The owner's panel
+/// shows it as revoked for the retention; then the janitor deletes it, with the
+/// sessions still pointing at it.
+#[tokio::test]
+async fn a_revoked_device_is_dropped_after_the_retention() {
+    // Sessions outlive the retention here, so deleting the device must take them.
+    let app =
+        spawn_with(|c| c.session.refresh_ttl_seconds = 3 * DEAD_DEVICE_RETENTION_SECONDS).await;
+    let id = make_identity();
+    let c = claim(&app, &id).await;
+    let (acct, dev1) = (
+        c["account_id"].as_str().unwrap(),
+        c["device_id"].as_str().unwrap(),
+    );
+    let access = login_v2(&app, &id, acct, dev1).await;
+    let dev2 = add_device(&app, &access).await;
+    login_v2(&app, &id, acct, &dev2).await;
+
+    let r = app
+        .client
+        .post(format!("{}/v1/session/device-revoke", app.base))
+        .bearer_auth(&access)
+        .json(&json!({ "device_id": dev2 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 204);
+    assert_eq!(own_devices(&app, &access).await, [dev1]);
+    assert!(
+        panel_devices(&app, &access, acct)
+            .await
+            .contains(&(dev2.clone(), "revoked".to_owned()))
+    );
+
+    app.clock.advance(DEAD_DEVICE_RETENTION_SECONDS - 60);
+    sweep(&app).await;
+    let access = login_v2(&app, &id, acct, dev1).await;
+    assert_eq!(panel_devices(&app, &access, acct).await.len(), 2, "kept");
+
+    app.clock.advance(120);
+    sweep(&app).await;
+    assert_eq!(
+        panel_devices(&app, &access, acct).await,
+        [(dev1.to_owned(), "active".to_owned())]
+    );
+}
+
+/// A device past its expiry (a 30-day panel device) shows as expired to the
+/// owner, not at all in the account's own list, and goes after the retention.
+#[tokio::test]
+async fn an_expired_device_shows_as_expired_then_goes() {
+    let app = spawn().await;
+    let id = make_identity();
+    let c = claim(&app, &id).await;
+    let (acct, dev1) = (
+        c["account_id"].as_str().unwrap(),
+        c["device_id"].as_str().unwrap(),
+    );
+    let access = login_v2(&app, &id, acct, dev1).await;
+    let web = ids::random_id16().to_vec();
+    let now = app.now();
+    app.state
+        .store
+        .create_device(
+            &unb64(acct).unwrap(),
+            &web,
+            &id.ed,
+            &id.x,
+            "web",
+            Some("Admin panel · Firefox"),
+            Some(now + 60),
+            now,
+        )
+        .await
+        .unwrap();
+    let web = b64(&web);
+
+    app.clock.advance(61);
+    assert_eq!(own_devices(&app, &access).await, [dev1]);
+    assert!(
+        panel_devices(&app, &access, acct)
+            .await
+            .contains(&(web.clone(), "expired".to_owned()))
+    );
+
+    app.clock.advance(DEAD_DEVICE_RETENTION_SECONDS);
+    sweep(&app).await;
+    let access = login_v2(&app, &id, acct, dev1).await;
+    assert_eq!(
+        panel_devices(&app, &access, acct).await,
+        [(dev1.to_owned(), "active".to_owned())]
+    );
+}
+
+/// A device revoked before revocation recorded its time is dropped too: the
+/// retention starts at the first janitor run that sees it.
+#[tokio::test]
+async fn a_device_revoked_before_the_upgrade_is_dropped_after_the_retention() {
+    let app = spawn().await;
+    let id = make_identity();
+    let c = claim(&app, &id).await;
+    let (acct, dev1) = (
+        c["account_id"].as_str().unwrap(),
+        c["device_id"].as_str().unwrap(),
+    );
+    let access = login_v2(&app, &id, acct, dev1).await;
+    let dev2 = add_device(&app, &access).await;
+    login_v2(&app, &id, acct, &dev2).await;
+    app.state
+        .store
+        .exec(
+            "UPDATE devices SET status = 'revoked', expires_at = NULL WHERE device_id = ?",
+            vec![Val::b(unb64(&dev2).unwrap())],
+        )
+        .await
+        .unwrap();
+
+    sweep(&app).await;
+    app.clock.advance(DEAD_DEVICE_RETENTION_SECONDS - 60);
+    sweep(&app).await;
+    let access = login_v2(&app, &id, acct, dev1).await;
+    assert_eq!(panel_devices(&app, &access, acct).await.len(), 2, "kept");
+
+    app.clock.advance(120);
+    sweep(&app).await;
+    assert_eq!(
+        panel_devices(&app, &access, acct).await,
+        [(dev1.to_owned(), "active".to_owned())]
+    );
 }

@@ -16,7 +16,7 @@ use unissh_cloud::transport::HttpSyncTransport;
 use unissh_ffi::{Core, FfiSyncMode, FfiSyncReport, FfiSyncTransport};
 
 use crate::device::Device;
-use crate::failure::{best_effort, Res};
+use crate::failure::{best_effort, Failure, Res};
 use crate::home::Link;
 
 /// How old the local copy may get before a command that reads hosts syncs first.
@@ -54,7 +54,15 @@ impl ServerSession {
             core,
             &link.account_id,
             &link.device_id,
-        )?;
+        )
+        .map_err(|e| {
+            Failure::from(e).hint_for(
+                "not_found",
+                "the server no longer has this machine's device (revoked over 30 days ago, \
+                 or paired but never signed in within a week): `unissh logout --local`, \
+                 then `unissh login` again",
+            )
+        })?;
         let now_unix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));

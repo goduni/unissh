@@ -2327,7 +2327,6 @@ export const en = {
     "thisDevice": "This device",
     "deviceRegistered": "Added {{date}}",
     "deviceSessions": "{{n}} active sessions",
-    "deviceRevoked": "revoked",
     "revokeDevice": "Revoke",
     "revokeDeviceTitle": "Revoke this device?",
     "revokeDeviceBody": "It will be signed out and can no longer access the account. You can pair it again later.",
@@ -2386,7 +2385,7 @@ export const en = {
     "switchTo": "Switch to this space",
     "removeServer": "Remove",
     "removeServerTitle": "Remove this server?",
-    "removeServerBody": "The link to {{server}} will be removed. Cloud vaults synced through it will stop syncing on this device.",
+    "removeServerBody": "The link to {{server}} will be removed, and this device leaves the account's devices there. Cloud vaults synced through it will stop syncing on this device.",
     "removeServerDone": "Server removed"
   },
   support: {

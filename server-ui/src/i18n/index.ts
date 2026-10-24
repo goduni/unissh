@@ -177,7 +177,7 @@ const ru = {
       },
       devices: {
         title: "Устройства",
-        sub: "Устройства аккаунтов и их отзыв",
+        sub: "Устройства аккаунтов и их отзыв · отозванные и истёкшие видны 30 дней",
         accountFilterPlaceholder: "account_id (base64) — пусто = свой аккаунт",
         colDevice: "Устройство",
         colKind: "Тип",
@@ -603,7 +603,7 @@ const en: typeof ru = {
       },
       devices: {
         title: "Devices",
-        sub: "Account devices and revocation",
+        sub: "Account devices and revocation · revoked and expired ones stay listed for 30 days",
         accountFilterPlaceholder: "account_id (base64) — empty = own account",
         colDevice: "Device",
         colKind: "Kind",

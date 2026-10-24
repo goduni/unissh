@@ -1,6 +1,7 @@
 //! Accounts repository (instance-scoped): canonical keyset (= member-id), human
 //! identifiers (display_name/handle), owner flag, admin listing.
 
+use super::auth_repo::LIVE_DEVICE;
 use super::models::{AccountListRow, AccountRow};
 use super::{Store, Val};
 use crate::error::{AppError, AppResult};
@@ -67,13 +68,16 @@ impl Store {
     }
 
     /// Admin listing of the instance's accounts + device count.
-    pub async fn list_accounts(&self) -> AppResult<Vec<AccountListRow>> {
+    pub async fn list_accounts(&self, now: i64) -> AppResult<Vec<AccountListRow>> {
         self.fetch_all_as::<AccountListRow>(
-            "SELECT a.account_id, a.display_name, a.handle, a.is_owner, a.ed25519_pub, a.x25519_pub, a.status, \
-             a.reg_payload, a.reg_signature, \
-             (SELECT COUNT(*) FROM devices d WHERE d.account_id = a.account_id) AS device_count \
-             FROM accounts a ORDER BY a.created_at ASC",
-            vec![],
+            &format!(
+                "SELECT a.account_id, a.display_name, a.handle, a.is_owner, a.ed25519_pub, a.x25519_pub, a.status, \
+                 a.reg_payload, a.reg_signature, \
+                 (SELECT COUNT(*) FROM devices d WHERE d.account_id = a.account_id AND {LIVE_DEVICE}) \
+                    AS device_count \
+                 FROM accounts a ORDER BY a.created_at ASC"
+            ),
+            vec![Val::I(now)],
         )
         .await
     }

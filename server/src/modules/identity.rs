@@ -198,7 +198,8 @@ async fn auth_verify(
         .get_device(&device_id)
         .await?
         .ok_or_else(|| AppError::unauthenticated("device not found"))?;
-    if device.status != "active" {
+    // A pending device (added for a pairing) signs in for the first time here.
+    if device.status != "active" && device.status != "pending" {
         return Err(AppError::unauthenticated("device not active"));
     }
     // A device past its expiry (30-day `web` devices) must not mint a session — else
@@ -231,6 +232,11 @@ async fn auth_verify(
         return Err(AppError::unauthenticated(
             "nonce already used, expired, or not issued for this device",
         ));
+    }
+    // The pairing worked: the device becomes one. It proves no more than any
+    // sign-in does (the keyset signature), which could self-enroll a device anyway.
+    if device.status == "pending" && !state.store.activate_pending_device(&device_id, now).await? {
+        return Err(AppError::unauthenticated("device expired"));
     }
 
     let tokens = mint_session(&state, &account_id, &device_id, "keyset", None).await?;
@@ -361,7 +367,7 @@ async fn device_revoke(
     if dev.account_id != auth.account_id() {
         auth.require_owner(&state.store).await?;
     }
-    state.store.set_device_status(&target, "revoked").await?;
+    state.store.revoke_device(&target, state.now()).await?;
     state.store.revoke_device_sessions(&target).await?;
     audit_observed(&state, "device_remove", &dev.account_id, &target).await;
     Ok(StatusCode::NO_CONTENT)
@@ -735,7 +741,7 @@ async fn accounts_list(
     State(state): State<AppState>,
 ) -> AppResult<Json<serde_json::Value>> {
     auth.require_owner(&state.store).await?;
-    let rows = state.store.list_accounts().await?;
+    let rows = state.store.list_accounts(state.now()).await?;
     let accounts: Vec<AccountInfo> = rows
         .into_iter()
         .map(|r| AccountInfo {
@@ -801,8 +807,18 @@ struct DeviceAddResp {
     device_id: String,
 }
 
+/// How long a device added for a pairing waits for its first sign-in. The pairing
+/// itself must finish within the relay's two minutes; the rest is for a new device
+/// whose sign-in right after it failed and is retried later. Unused, the device
+/// is never listed, so the long wait costs nothing.
+const PENDING_DEVICE_TTL_SECONDS: i64 = 7 * 86_400;
+
 /// `POST /v1/devices/add` (Bearer, existing device): register another device under
-/// the SAME account — it shares the canonical keyset (member-id).
+/// the SAME account — it shares the canonical keyset (member-id). The device is
+/// `pending` until its first sign-in: "Add device" creates it before the pairing
+/// runs, and a pairing that is cancelled or fails must not leave a device behind.
+/// Unused, it expires after [`PENDING_DEVICE_TTL_SECONDS`] and the janitor
+/// deletes it; listings never show it.
 async fn device_add(
     auth: AuthCtx,
     State(state): State<AppState>,
@@ -819,17 +835,16 @@ async fn device_add(
         .x25519_pub
         .ok_or_else(|| AppError::internal("account missing canonical keyset"))?;
     let device_id = ids::random_id16().to_vec();
+    let now = state.now();
     state
         .store
-        .create_device(
+        .create_pending_device(
             auth.account_id(),
             &device_id,
             &ed,
             &x,
-            "app",
-            None,
-            None,
-            state.now(),
+            now + PENDING_DEVICE_TTL_SECONDS,
+            now,
         )
         .await?;
     audit_observed(&state, "device_add", auth.account_id(), &device_id).await;
@@ -1504,14 +1519,18 @@ async fn attestations_list(
     Ok(Json(serde_json::json!({ "attestations": attestations })))
 }
 
-/// `GET /v1/devices` (Bearer): list the CALLER'S OWN account devices.
+/// `GET /v1/devices` (Bearer): list the CALLER'S OWN account devices — the ones
+/// that can sign in. A revoked or expired device is no longer one of them, and
+/// the owner's panel still shows it until the janitor drops it.
 async fn devices_list_self(
     auth: AuthCtx,
     State(state): State<AppState>,
 ) -> AppResult<Json<serde_json::Value>> {
     let rows = state.store.admin_list_devices(auth.account_id()).await?;
+    let now = state.now();
     let out: Vec<serde_json::Value> = rows
         .into_iter()
+        .filter(|d| d.shown_status(now) == "active")
         .map(|d| {
             serde_json::json!({
                 "device_id": ids::b64(&d.device_id),

@@ -114,6 +114,78 @@ async fn best_effort_logout(cfg: ServerConfig, access: String) {
     }
 }
 
+/// Best-effort server-side goodbye before a link is forgotten: this device is
+/// revoked, its sessions with it. Nothing here can sign in as it again once its
+/// id is forgotten, and an active device left behind would only clutter the
+/// account's Devices list. A server that will not revoke still gets the logout.
+async fn best_effort_leave(cfg: ServerConfig, access: String) {
+    let sid = cfg.server_id.clone();
+    let result = blocking_api(move || {
+        let http = client::http();
+        identity::device_revoke(http, &cfg.base_url, &access, &cfg.device_id)
+            .or_else(|_| identity::logout(http, &cfg.base_url, &access))
+            .map_err(ApiError::from)
+    })
+    .await;
+    if let Err(e) = result {
+        log::debug!("cloud: best-effort device revoke failed for server {sid}: {e:?}");
+    }
+}
+
+/// A session to say goodbye with: the one in memory, else a fresh one from the
+/// stored refresh token, since a link not used since the app started has none
+/// in memory. None when neither works: the goodbye is best effort.
+async fn goodbye_access(state: &AppState, cfg: &ServerConfig) -> Option<String> {
+    if let Ok(Some(access)) = state.cloud.access_token_for(Some(&cfg.server_id)) {
+        return Some(access);
+    }
+    let refresh_token = tokens::load_refresh(&cfg.server_id)?;
+    let base = cfg.base_url.clone();
+    let session = blocking_api(move || {
+        identity::refresh(client::http(), &base, &refresh_token).map_err(ApiError::from)
+    })
+    .await
+    .ok()?;
+    persist_refresh(&cfg.server_id, &session.refresh_token);
+    Some(session.access_token)
+}
+
+/// Saves a link, returning the device it held before when the new config names
+/// another one. Signing in again on a linked server enrolls a fresh device (an
+/// SSO reassertion, escrow, a new pairing, a repeat join), and the link then
+/// forgets the old one.
+fn upsert_link(state: &AppState, cfg: ServerConfig) -> ApiResult<Option<String>> {
+    let replaced = state
+        .cloud
+        .config_for(Some(&cfg.server_id))?
+        .map(|old| old.device_id)
+        .filter(|old| *old != cfg.device_id);
+    state.cloud.upsert_config(cfg)?;
+    Ok(replaced)
+}
+
+/// Best effort, once the new device is signed in: revokes the device a sign-in
+/// replaced on this link, with the new session (the same account's). Nothing
+/// could sign in as it again, and left active it would sit in the account's
+/// Devices list for good.
+async fn retire_replaced_device(state: &AppState, server_id: &str, replaced: Option<String>) {
+    let Some(old) = replaced else { return };
+    let (Ok(Some(cfg)), Ok(Some(access))) = (
+        state.cloud.config_for(Some(server_id)),
+        state.cloud.access_token_for(Some(server_id)),
+    ) else {
+        return;
+    };
+    let result = blocking_api(move || {
+        identity::device_revoke(client::http(), &cfg.base_url, &access, &old)
+            .map_err(ApiError::from)
+    })
+    .await;
+    if let Err(e) = result {
+        log::debug!("cloud: could not revoke the replaced device on server {server_id}: {e:?}");
+    }
+}
+
 /// Status of one server (defaults to the active server).
 #[tauri::command]
 pub async fn server_status(
@@ -165,8 +237,8 @@ pub async fn server_set_active(
     state.cloud.list()
 }
 
-/// Forget ONE server link (config entry + tokens) after a best-effort logout.
-/// Other servers are untouched. Returns the updated list.
+/// Forget ONE server link (config entry + tokens) after revoking this device on
+/// it (best effort). Other servers are untouched. Returns the updated list.
 #[tauri::command]
 pub async fn server_remove(server_id: String, state: State<'_, AppState>) -> ApiResult<ServerList> {
     // Space of the server being removed — to unbind its cloud vaults so they
@@ -176,11 +248,10 @@ pub async fn server_remove(server_id: String, state: State<'_, AppState>) -> Api
         .cloud
         .config_for(Some(&server_id))?
         .map(|c| c.space_id);
-    if let (Some(cfg), Some(access)) = (
-        state.cloud.config_for(Some(&server_id))?,
-        state.cloud.access_token_for(Some(&server_id))?,
-    ) {
-        best_effort_logout(cfg, access).await;
+    if let Some(cfg) = state.cloud.config_for(Some(&server_id))? {
+        if let Some(access) = goodbye_access(&state, &cfg).await {
+            best_effort_leave(cfg, access).await;
+        }
     }
     state.cloud.remove(&server_id)?;
     if let Some(space) = removed_space {
@@ -247,17 +318,20 @@ pub async fn server_join(
         .unwrap_or_else(new_server_id);
     let account_id = outcome.account_id;
     let device_id = outcome.device_id;
-    state.cloud.upsert_config(ServerConfig {
-        server_id: server_id.clone(),
-        base_url: base_url.clone(),
-        instance_id: instance.instance_id,
-        space_id,
-        account_id: account_id.clone(),
-        device_id: device_id.clone(),
-        handle,
-        // Joiners are never instance owners.
-        owned: false,
-    })?;
+    let replaced = upsert_link(
+        &state,
+        ServerConfig {
+            server_id: server_id.clone(),
+            base_url: base_url.clone(),
+            instance_id: instance.instance_id,
+            space_id,
+            account_id: account_id.clone(),
+            device_id: device_id.clone(),
+            handle,
+            // Joiners are never instance owners.
+            owned: false,
+        },
+    )?;
 
     // Log in. A failure here is now recoverable — the link above is persisted, so
     // server_login (the "Sign in" recovery branch) can re-authenticate against it.
@@ -271,6 +345,7 @@ pub async fn server_join(
         .cloud
         .set_access_token_for(Some(&server_id), Some(session.access_token))?;
     persist_refresh(&server_id, &session.refresh_token);
+    retire_replaced_device(&state, &server_id, replaced).await;
     refresh_spaces_cache(&state, &server_id).await;
     state.cloud.status_for(Some(&server_id))
 }
@@ -426,21 +501,26 @@ pub async fn server_oidc_login(
         .cloud
         .find_by_identity(&base_url, &instance.instance_id, &outcome.account_id)?
         .unwrap_or_else(new_server_id);
-    state.cloud.upsert_config(ServerConfig {
-        server_id: server_id.clone(),
-        base_url,
-        instance_id: instance.instance_id,
-        space_id,
-        account_id: outcome.account_id,
-        device_id: outcome.device_id,
-        handle: None,
-        // SSO sign-in never confers instance ownership.
-        owned: false,
-    })?;
+    let replaced = upsert_link(
+        &state,
+        ServerConfig {
+            server_id: server_id.clone(),
+            base_url,
+            instance_id: instance.instance_id,
+            space_id,
+            account_id: outcome.account_id,
+            device_id: outcome.device_id,
+            handle: None,
+            // SSO sign-in never confers instance ownership.
+            owned: false,
+        },
+    )?;
     state
         .cloud
         .set_access_token_for(Some(&server_id), Some(session.access_token))?;
     persist_refresh(&server_id, &session.refresh_token);
+    // Every SSO sign-in, reassertion included, enrolls a fresh device.
+    retire_replaced_device(&state, &server_id, replaced).await;
     refresh_spaces_cache(&state, &server_id).await;
     state.cloud.status_for(Some(&server_id))
 }
@@ -512,7 +592,7 @@ pub async fn server_logout(
     state.cloud.status_for(Some(&sid))
 }
 
-/// Forget the server link entirely (config + tokens), after a best-effort logout.
+/// Forget the server link entirely (config + tokens), after revoking this device on it.
 /// Back-compat alias of `server_remove` keyed by the active (or given) server.
 #[tauri::command]
 pub async fn server_disconnect(
@@ -520,11 +600,10 @@ pub async fn server_disconnect(
     state: State<'_, AppState>,
 ) -> ApiResult<ServerList> {
     let sid = require_config(&state, server_id.as_deref())?.server_id;
-    if let (Some(cfg), Some(access)) = (
-        state.cloud.config_for(Some(&sid))?,
-        state.cloud.access_token_for(Some(&sid))?,
-    ) {
-        best_effort_logout(cfg, access).await;
+    if let Some(cfg) = state.cloud.config_for(Some(&sid))? {
+        if let Some(access) = goodbye_access(&state, &cfg).await {
+            best_effort_leave(cfg, access).await;
+        }
     }
     state.cloud.remove(&sid)?;
     state.cloud.list()
@@ -1480,20 +1559,24 @@ async fn self_enroll_login_and_persist(
         .config_for(Some(&server_id))?
         .map(|c| c.owned)
         .unwrap_or(false);
-    state.cloud.upsert_config(ServerConfig {
-        server_id: server_id.clone(),
-        base_url,
-        instance_id: instance.instance_id,
-        space_id: primary_space,
-        account_id,
-        device_id,
-        handle,
-        owned,
-    })?;
+    let replaced = upsert_link(
+        state,
+        ServerConfig {
+            server_id: server_id.clone(),
+            base_url,
+            instance_id: instance.instance_id,
+            space_id: primary_space,
+            account_id,
+            device_id,
+            handle,
+            owned,
+        },
+    )?;
     state
         .cloud
         .set_access_token_for(Some(&server_id), Some(session.access_token))?;
     persist_refresh(&server_id, &session.refresh_token);
+    retire_replaced_device(state, &server_id, replaced).await;
     refresh_spaces_cache(state, &server_id).await;
     state.cloud.status_for(Some(&server_id))
 }
@@ -1614,6 +1697,8 @@ pub async fn server_import_keyset_and_unlock(
 
 /// (Existing device) Pre-create the new device + open a relay channel, returning
 /// the pairing payload to hand to the new device. Follow with `server_onboard_complete`.
+/// The server keeps the device pending until the new device first signs in, so a
+/// pairing that is cancelled or fails leaves no device on the account.
 #[tauri::command]
 pub async fn server_onboard_initiate(
     server_id: Option<String>,
@@ -1728,19 +1813,22 @@ pub async fn server_onboard_join(
         .cloud
         .find_by_identity(&base_url, &instance_id, &account_id)?
         .unwrap_or_else(new_server_id);
-    state.cloud.upsert_config(ServerConfig {
-        server_id: server_id.clone(),
-        base_url: base_url.clone(),
-        instance_id: instance_id.clone(),
-        space_id: space_id.clone(),
-        account_id: account_id.clone(),
-        device_id: device_id.clone(),
-        handle: None,
-        // New device joining an existing account via PAKE: ownership is a server-side
-        // account property, not carried in the handoff — default false (the personal
-        // vault is already set via synced account-state; re-designation is rare).
-        owned: false,
-    })?;
+    let replaced = upsert_link(
+        &state,
+        ServerConfig {
+            server_id: server_id.clone(),
+            base_url: base_url.clone(),
+            instance_id: instance_id.clone(),
+            space_id: space_id.clone(),
+            account_id: account_id.clone(),
+            device_id: device_id.clone(),
+            handle: None,
+            // New device joining an existing account via PAKE: ownership is a server-side
+            // account property, not carried in the handoff — default false (the personal
+            // vault is already set via synced account-state; re-designation is rare).
+            owned: false,
+        },
+    )?;
 
     // 3) Sign in (the shared keyset, now installed, signs the challenge).
     let session = blocking_api(move || {
@@ -1752,6 +1840,7 @@ pub async fn server_onboard_join(
         .cloud
         .set_access_token_for(Some(&server_id), Some(session.access_token))?;
     persist_refresh(&server_id, &session.refresh_token);
+    retire_replaced_device(&state, &server_id, replaced).await;
     refresh_spaces_cache(&state, &server_id).await;
     state.cloud.status_for(Some(&server_id))
 }

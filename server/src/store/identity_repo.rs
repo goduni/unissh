@@ -95,20 +95,77 @@ impl Store {
         Ok(())
     }
 
-    /// Sets (or, with `None`, clears) a device's human label.
-    pub async fn set_device_label(&self, device_id: &[u8], label: Option<&str>) -> AppResult<()> {
+    /// Register a device for a pairing that has not happened yet (`devices/add`).
+    /// It is `pending` until its first sign-in activates it; one that never signs
+    /// in is gone at `expires_at`, so a cancelled or failed pairing leaves nothing.
+    pub async fn create_pending_device(
+        &self,
+        account_id: &[u8],
+        device_id: &[u8],
+        ed25519_pub: &[u8],
+        x25519_pub: &[u8],
+        expires_at: i64,
+        now: i64,
+    ) -> AppResult<()> {
         self.exec(
-            "UPDATE devices SET label = ? WHERE device_id = ?",
-            vec![Val::OptT(label.map(str::to_owned)), Val::b(device_id)],
+            "INSERT INTO devices \
+             (account_id, device_id, ed25519_pub, x25519_pub, kind, label, \
+              registered_at, status, expires_at) \
+             VALUES (?, ?, ?, ?, 'app', NULL, ?, 'pending', ?)",
+            vec![
+                Val::b(account_id),
+                Val::b(device_id),
+                Val::b(ed25519_pub),
+                Val::b(x25519_pub),
+                Val::I(now),
+                Val::I(expires_at),
+            ],
         )
         .await?;
         Ok(())
     }
 
-    pub async fn set_device_status(&self, device_id: &[u8], status: &str) -> AppResult<()> {
+    /// Turns a pending device into a device at its first sign-in: active, and no
+    /// longer expiring. True as well when a sign-in running alongside already did.
+    /// False when it was revoked, or its time ran out (the janitor may be
+    /// deleting it this very moment).
+    pub async fn activate_pending_device(&self, device_id: &[u8], now: i64) -> AppResult<bool> {
+        let n = self
+            .exec(
+                "UPDATE devices SET status = 'active', expires_at = NULL \
+                 WHERE device_id = ? \
+                 AND (status = 'active' OR (status = 'pending' AND expires_at > ?))",
+                vec![Val::b(device_id), Val::I(now)],
+            )
+            .await?;
+        Ok(n == 1)
+    }
+
+    /// Revokes a device. Its expiry becomes the moment of revocation (unless it
+    /// expired earlier), which is when the janitor's retention for dead devices
+    /// starts counting. A pending device never was one, so it is deleted (it
+    /// has no sessions yet).
+    pub async fn revoke_device(&self, device_id: &[u8], now: i64) -> AppResult<()> {
         self.exec(
-            "UPDATE devices SET status = ? WHERE device_id = ?",
-            vec![Val::t(status), Val::b(device_id)],
+            "DELETE FROM devices WHERE device_id = ? AND status = 'pending'",
+            vec![Val::b(device_id)],
+        )
+        .await?;
+        self.exec(
+            "UPDATE devices SET status = 'revoked', \
+             expires_at = CASE WHEN expires_at IS NULL OR expires_at > ? THEN ? ELSE expires_at END \
+             WHERE device_id = ?",
+            vec![Val::I(now), Val::I(now), Val::b(device_id)],
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Sets (or, with `None`, clears) a device's human label.
+    pub async fn set_device_label(&self, device_id: &[u8], label: Option<&str>) -> AppResult<()> {
+        self.exec(
+            "UPDATE devices SET label = ? WHERE device_id = ?",
+            vec![Val::OptT(label.map(str::to_owned)), Val::b(device_id)],
         )
         .await?;
         Ok(())

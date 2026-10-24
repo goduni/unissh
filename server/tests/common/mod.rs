@@ -278,7 +278,20 @@ pub async fn login_tokens_v2(
     account_id: &str,
     device_id: &str,
 ) -> serde_json::Value {
-    let chal: serde_json::Value = app
+    let resp = try_login_v2(app, id, account_id, device_id).await;
+    assert_eq!(resp.status(), 200, "auth/verify should succeed");
+    resp.json().await.unwrap()
+}
+
+/// The v2 auth flow up to the server's answer: the challenge's refusal if it
+/// refuses, else the verify response, whatever it is.
+pub async fn try_login_v2(
+    app: &TestApp,
+    id: &Identity,
+    account_id: &str,
+    device_id: &str,
+) -> reqwest::Response {
+    let chal = app
         .client
         .post(format!("{}/v1/auth/challenge", app.base))
         .json(&serde_json::json!({
@@ -286,10 +299,11 @@ pub async fn login_tokens_v2(
         }))
         .send()
         .await
-        .unwrap()
-        .json()
-        .await
         .unwrap();
+    if !chal.status().is_success() {
+        return chal;
+    }
+    let chal: serde_json::Value = chal.json().await.unwrap();
     assert_eq!(
         chal["host"], app.instance_id,
         "challenge host must be the instance id"
@@ -304,15 +318,12 @@ pub async fn login_tokens_v2(
         expiry: chal["expiry"].as_u64().unwrap(),
     };
     let sig = sign_server_auth(&id.kp.signing, &core_chal).unwrap();
-    let resp = app
-        .client
+    app.client
         .post(format!("{}/v1/auth/verify", app.base))
         .json(&serde_json::json!({ "challenge": chal, "signature": ids::b64(&sig) }))
         .send()
         .await
-        .unwrap();
-    assert_eq!(resp.status(), 200, "auth/verify should succeed");
-    resp.json().await.unwrap()
+        .unwrap()
 }
 
 /// Convenience: v2 login returning just the access token.

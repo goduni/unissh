@@ -2,6 +2,7 @@
 //! lifecycle. Instance-scoped (v2). NEVER selects object_bytes / keyset_bytes /
 //! relay messages — the ZK boundary (ARCH §5.4).
 
+use super::auth_repo::LIVE_DEVICE;
 use super::models::*;
 use super::{Store, Val};
 use crate::error::{AppError, AppResult};
@@ -23,13 +24,19 @@ impl Store {
         Ok(self.fetch_scalar_i64(sql, vec![]).await?.unwrap_or(0))
     }
 
-    pub async fn admin_overview(&self) -> AppResult<OverviewCounts> {
+    pub async fn admin_overview(&self, now: i64) -> AppResult<OverviewCounts> {
         Ok(OverviewCounts {
             accounts: self.count_scalar("SELECT COUNT(*) FROM accounts").await?,
             owners: self
                 .count_scalar("SELECT COUNT(*) FROM accounts WHERE is_owner = 1")
                 .await?,
-            devices: self.count_scalar("SELECT COUNT(*) FROM devices").await?,
+            devices: self
+                .fetch_scalar_i64(
+                    &format!("SELECT COUNT(*) FROM devices d WHERE {LIVE_DEVICE}"),
+                    vec![Val::I(now)],
+                )
+                .await?
+                .unwrap_or(0),
             active_sessions: self
                 .count_scalar("SELECT COUNT(*) FROM sessions WHERE revoked = 0")
                 .await?,
@@ -72,10 +79,11 @@ impl Store {
 
     pub async fn admin_list_devices(&self, account_id: &[u8]) -> AppResult<Vec<AdminDeviceRow>> {
         self.fetch_all_as::<AdminDeviceRow>(
-            "SELECT d.device_id, d.kind, d.label, d.status, d.registered_at, \
+            "SELECT d.device_id, d.kind, d.label, d.status, d.registered_at, d.expires_at, \
              (SELECT COUNT(*) FROM sessions s WHERE s.device_id = d.device_id AND s.revoked = 0) \
                 AS session_count \
-             FROM devices d WHERE d.account_id = ? ORDER BY d.registered_at ASC",
+             FROM devices d WHERE d.account_id = ? AND d.status <> 'pending' \
+             ORDER BY d.registered_at ASC",
             vec![Val::b(account_id)],
         )
         .await
