@@ -65,6 +65,18 @@ ignore = [
     # never parsing untrusted input. Same entry as the root deny.toml.
     "RUSTSEC-2026-0374",
 
+    # crypto-bigint (RUSTSEC-2026-0387): some constant-time operations can
+    # branch on secret data, depending on compiler and CPU. 0.7.x is patched
+    # (0.7.6, in the lockfile). 0.5.5 has no patched release and stays: it
+    # comes through elliptic-curve 0.13 (p256/p384/p521 0.13) from ssh-key 0.6,
+    # which the embedded agent uses to sign with ECDSA keys, and from
+    # jsonwebtoken on the server. Leaving it means the agent's ECDSA signing
+    # path is not guaranteed constant-time on every compiler/CPU; Ed25519 and
+    # RSA keys do not go through it. The fix is moving ssh-agent to ssh-key 0.7
+    # (elliptic-curve 0.14, crypto-bigint 0.7) once it is out of release
+    # candidates. Revisit then, or sooner if the advisory is extended to 0.5.
+    "RUSTSEC-2026-0387",
+
     # --- quick-xml DoS advisories (fix is out of the pinned semver range) --------
     # RUSTSEC-2026-0194/0195: quadratic / unbounded-allocation DoS parsing crafted
     # XML. Fix is quick-xml >= 0.41, but the desktop toolkit (muda/wry menu + resource
