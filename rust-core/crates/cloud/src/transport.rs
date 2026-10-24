@@ -208,7 +208,7 @@ impl FfiSyncTransport for HttpSyncTransport {
         // `limits.max_object_bytes`, too many objects) or a body limit — its own
         // or a reverse proxy's, which answers without the JSON error body. The
         // core splits the request on it and singles out an item that cannot fit.
-        if status == reqwest::StatusCode::PAYLOAD_TOO_LARGE {
+        if status == StatusCode::PAYLOAD_TOO_LARGE {
             return Err(FfiError::PayloadTooLarge {
                 msg: push_error_message(status, &bytes),
             });
@@ -349,7 +349,7 @@ fn next_page(page: &Value, cur: u64) -> Option<u64> {
 }
 
 /// Extract the server error code/message for a failed push (best-effort).
-fn push_error_message(status: reqwest::StatusCode, body: &[u8]) -> String {
+fn push_error_message(status: StatusCode, body: &[u8]) -> String {
     if let Ok(v) = serde_json::from_slice::<Value>(body) {
         if let Some(err) = v.get("error") {
             let code = err.get("code").and_then(|c| c.as_str()).unwrap_or("error");
