@@ -629,6 +629,36 @@ impl From<ffi::PersonalAuth> for PersonalAuth {
     }
 }
 
+/// A saved host resolved for a connect by the core's one resolver
+/// (`Core::resolve_connection`): the whole destination, not only the login.
+/// The frontend connects to exactly this — a Personal host's anti-redirect
+/// check was made against this host, port, jump chain and proxy, read from the
+/// vault, not against whatever copy of the profile the UI holds.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedConnect {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub auth: AuthMethod,
+    pub jumps: Vec<JumpHost>,
+    pub proxy: Option<ProxyConfig>,
+    pub ask_password: bool,
+}
+impl From<ffi::ResolvedConnection> for ResolvedConnect {
+    fn from(r: ffi::ResolvedConnection) -> Self {
+        Self {
+            host: r.host,
+            port: r.port,
+            user: r.user,
+            auth: r.auth.into(),
+            jumps: r.jumps.into_iter().map(Into::into).collect(),
+            proxy: r.proxy.map(Into::into),
+            ask_password: r.ask_password,
+        }
+    }
+}
+
 /// Which recognised password prompt the core is offering the login password at.
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]

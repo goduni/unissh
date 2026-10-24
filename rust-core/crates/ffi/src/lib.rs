@@ -632,6 +632,30 @@ fn binding_item_id(team_vault_id: &str, profile_uid: &str) -> String {
     format!("binding:{}", hex::encode(&digest[..16]))
 }
 
+/// Where and how to connect to a saved host, resolved the way every client
+/// connects to it — the app, the CLI and local automation alike
+/// ([`Core::resolve_connection`]).
+#[derive(uniffi::Record, Clone)]
+pub struct ResolvedConnection {
+    /// Host to connect to.
+    pub host: String,
+    /// Port.
+    pub port: u16,
+    /// User to log in as: a Personal host's identity user (binding checked),
+    /// otherwise the profile's user, otherwise the account's default — then
+    /// the profile's username template.
+    pub user: String,
+    /// The credential, by reference to the vault. An empty password when
+    /// `ask_password` is set: the client asks for it.
+    pub auth: AuthMethod,
+    /// ProxyJump chain.
+    pub jumps: Vec<JumpHost>,
+    /// Outbound proxy for the first hop.
+    pub proxy: Option<ProxyConfig>,
+    /// The profile wants the password typed at every connection.
+    pub ask_password: bool,
+}
+
 /// Resolved personal authentication for connecting to a shared host: a concrete
 /// vault-qualified [`AuthMethod`] (a key/password from the PERSONAL vault) plus
 /// the username from the identity. Returned by [`Core::resolve_personal_auth`] only
@@ -5670,6 +5694,19 @@ impl Core {
         }
     }
 
+    /// Resolves the saved host `profile_id` of `vault_id` into a connection (see
+    /// [`ResolvedConnection`]). A Personal host goes through
+    /// [`Core::resolve_personal_auth`], anti-redirect check included, and fails
+    /// when no identity is bound to it. Reveals no secret.
+    pub fn resolve_connection(
+        &self,
+        vault_id: String,
+        profile_id: String,
+    ) -> Result<ResolvedConnection, FfiError> {
+        let profile = self.get_connection(vault_id.clone(), profile_id)?;
+        self.resolve_profile(&vault_id, &profile)
+    }
+
     /// Canonical destination for anti-redirect (the bind pin AND the connect check).
     /// The template is part of the destination → editing it = changing the destination.
     /// The client renders with this both `destination_pin` in [`Core::set_binding`] and
@@ -8018,6 +8055,47 @@ fn profile_to_target(vault_id: &str, p: ConnectionProfile) -> MultiExecTarget {
         jumps: p.jumps,
         proxy: p.proxy,
         publickey_only: false,
+    }
+}
+
+impl Core {
+    /// The body of [`Core::resolve_connection`], for a profile already read.
+    pub(crate) fn resolve_profile(
+        &self,
+        vault_id: &str,
+        p: &ConnectionProfile,
+    ) -> Result<ResolvedConnection, FfiError> {
+        let (user, auth) = if matches!(p.auth, ProfileAuth::Personal) {
+            let destination = self.personal_destination(
+                p.host.clone(),
+                p.port,
+                p.username_template.clone(),
+                p.jumps.clone(),
+                p.proxy.clone(),
+            );
+            let personal = self.resolve_personal_auth(
+                vault_id.to_owned(),
+                p.uid.clone(),
+                destination,
+                p.user.clone(),
+            )?;
+            (personal.user, personal.auth)
+        } else {
+            let default = self.get_account_default_username()?;
+            (
+                pick_username("", &p.user, default.as_deref()),
+                profile_auth_to_method(vault_id, p.auth.clone()),
+            )
+        };
+        Ok(ResolvedConnection {
+            host: p.host.clone(),
+            port: p.port,
+            user: apply_username_template(&user, p.username_template.as_deref()),
+            auth,
+            jumps: p.jumps.clone(),
+            proxy: p.proxy.clone(),
+            ask_password: matches!(p.auth, ProfileAuth::PromptPassword),
+        })
     }
 }
 

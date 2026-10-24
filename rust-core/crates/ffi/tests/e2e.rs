@@ -4496,6 +4496,70 @@ fn profile_carries_its_startup_snippets() {
     assert!(cleared.startup_snippet_ids.is_empty());
 }
 
+/// One resolver for every client — app, CLI, automation: an empty profile user
+/// falls back to the account's default, a stored key comes back as a reference
+/// qualified by its vault, and a password typed per connection comes back as a
+/// flag with an empty password to fill in.
+#[test]
+fn resolve_connection_fills_the_default_user_and_flags_a_typed_password() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
+    core.set_account_default_username("ops".to_owned()).unwrap();
+    let profile =
+        |id: &str, user: &str, auth: unissh_ffi::ProfileAuth| unissh_ffi::ConnectionProfile {
+            proxy: None,
+            profile_id: id.to_owned(),
+            uid: String::new(),
+            label: id.to_owned(),
+            host: "10.0.0.1".to_owned(),
+            port: 22,
+            user: user.to_owned(),
+            auth,
+            username_template: None,
+            jumps: vec![],
+            tags: vec![],
+            startup_snippet_ids: vec![],
+            record_sessions: false,
+            agent_forward: false,
+            color: None,
+            icon: None,
+        };
+    let key = unissh_ffi::ProfileAuth::Key {
+        key_item_id: "k".to_owned(),
+    };
+    core.save_connection("v".to_owned(), profile("by-key", "", key))
+        .unwrap();
+    core.save_connection(
+        "v".to_owned(),
+        profile("typed", "root", unissh_ffi::ProfileAuth::PromptPassword),
+    )
+    .unwrap();
+
+    let by_key = core
+        .resolve_connection("v".to_owned(), "by-key".to_owned())
+        .unwrap();
+    assert_eq!(
+        by_key.user, "ops",
+        "the account default fills an empty user"
+    );
+    assert!(
+        matches!(&by_key.auth, AuthMethod::Agent { vault_id, key_item_id } if vault_id == "v" && key_item_id == "k")
+    );
+    assert!(!by_key.ask_password);
+
+    let typed = core
+        .resolve_connection("v".to_owned(), "typed".to_owned())
+        .unwrap();
+    assert_eq!(
+        typed.user, "root",
+        "a user of its own wins over the default"
+    );
+    assert!(typed.ask_password);
+    assert!(matches!(&typed.auth, AuthMethod::Password { password } if password.is_empty()));
+}
+
 /// Session recording against a real sshd: the capture happens, it lands in the
 /// vault when the session ends, and it is a valid asciicast v2 document.
 #[test]

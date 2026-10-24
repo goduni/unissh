@@ -1154,6 +1154,19 @@ pub async fn resolve_personal_auth(
     Ok(p.into())
 }
 
+/// Resolves a saved host for a connect — the core's one resolver, shared with
+/// the CLI and local automation (Personal binding included).
+#[tauri::command]
+pub async fn resolve_connection(
+    vault_id: String,
+    profile_id: String,
+    state: State<'_, AppState>,
+) -> ApiResult<dto::ResolvedConnect> {
+    let core = state.core.clone();
+    let r = blocking(move || core.resolve_connection(vault_id, profile_id)).await?;
+    Ok(r.into())
+}
+
 // Pure string renderers (no lock, no IO) — call directly. Exposed so the client
 // renders the anti-redirect destination the SAME way for bind-pin and connect.
 #[tauri::command]

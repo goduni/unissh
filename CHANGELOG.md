@@ -72,6 +72,12 @@ starts with `0.`:
 
 ### Changed
 
+- One resolver for saved hosts, in the core (`Core::resolve_connection`): the
+  app, the CLI and local automation now work out a host's user and credential
+  the same way. For the app this means a host that names no user logs in as the
+  account's default user (as automation already did) instead of with an empty
+  one.
+
 - Bindings: `SessionObserver::on_fill` is a new required method for
   implementors of the observer, and `Core::open_session` gained a trailing
   `password_fill: PasswordFillMode` parameter (pass `Off` for no fill).
