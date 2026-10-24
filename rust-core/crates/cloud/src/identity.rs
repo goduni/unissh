@@ -412,6 +412,25 @@ pub fn device_add(http: &Client, base_url: &str, access: &str) -> CloudResult<St
     client::jstr(&v, "device_id")
 }
 
+/// `POST /v1/devices/label` (Bearer) — name the calling device in the Devices
+/// list (see [`device_label`]). A device that joined by invite or by pairing
+/// starts without one. 204.
+pub fn set_own_device_label(
+    http: &Client,
+    base_url: &str,
+    access: &str,
+    label: &str,
+) -> CloudResult<()> {
+    client::send_json(
+        client::headers(
+            http.post(client::url(base_url, "/v1/devices/label")),
+            Some(access),
+        )
+        .json(&json!({ "label": label })),
+    )?;
+    Ok(())
+}
+
 /// `GET /v1/devices` (Bearer) — list the caller's own account devices.
 pub fn device_list(
     http: &Client,
@@ -433,6 +452,11 @@ pub fn device_list(
     for d in devices {
         out.push(dto::DeviceInfo {
             device_id: client::jstr(d, "device_id")?,
+            label: d
+                .get("label")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .filter(|l| !l.is_empty()),
             status: d
                 .get("status")
                 .and_then(|x| x.as_str())

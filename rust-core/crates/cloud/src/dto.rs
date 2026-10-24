@@ -36,6 +36,9 @@ pub struct AccountInfo {
 pub struct DeviceInfo {
     /// Server device id (base64).
     pub device_id: String,
+    /// The name the device gave itself, if any. Open metadata the server
+    /// relays, so text to show, never to act on.
+    pub label: Option<String>,
     /// Device status as the server reports it (`active`, `revoked`, …).
     pub status: String,
     /// Registration time, Unix seconds.

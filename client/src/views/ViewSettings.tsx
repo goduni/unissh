@@ -3995,7 +3995,7 @@ function CloudDevicesList({ currentDeviceId }: { currentDeviceId: string | null 
                 <span
                   style={{
                     fontSize: TEXT.base,
-                    fontFamily: MONO,
+                    fontFamily: d.label ? undefined : MONO,
                     color: p.txt,
                     overflow: "hidden",
                     textOverflow: "ellipsis",
@@ -4003,11 +4003,13 @@ function CloudDevicesList({ currentDeviceId }: { currentDeviceId: string | null 
                   }}
                   title={d.deviceId}
                 >
-                  {d.deviceId.slice(0, 16)}…
+                  {d.label ?? `${d.deviceId.slice(0, 16)}…`}
                 </span>
                 {isCurrent && <Tag>{t("serverCloud.thisDevice")}</Tag>}
               </div>
               <div style={{ fontSize: TEXT.micro, color: p.txt3 }}>
+                {/* Two machines can share a label; the id tells them apart. */}
+                {d.label ? `${d.deviceId.slice(0, 8)} · ` : ""}
                 {t("serverCloud.deviceRegistered", { date: fmtDate(d.registeredAt) })}
                 {" · "}
                 {t("serverCloud.deviceSessions", { n: d.activeSessions })}

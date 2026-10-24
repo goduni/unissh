@@ -726,6 +726,8 @@ export interface AccountInfo {
 
 export interface DeviceInfo {
   deviceId: string;
+  /** The name the device gave itself (e.g. `CLI · Linux`), if any. */
+  label?: string | null;
   status: string;
   registeredAt: number;
   activeSessions: number;

@@ -369,6 +369,20 @@ fn invite_token(invite: &str) -> Zeroizing<String> {
 
 /// The first sync after signing in, and what came of it.
 fn welcome(device: &Device) -> Res<()> {
+    // Paired and joined devices start without a label in the Devices list (the
+    // escrow path enrolled with one); best effort — an older server has no
+    // such call, and the device works the same without it.
+    if device.link.origin != Origin::Escrow {
+        best_effort(device.access().and_then(|access| {
+            identity::set_own_device_label(
+                http(),
+                &device.link.base_url,
+                &access,
+                &identity::device_label("CLI"),
+            )
+            .map_err(Failure::from)
+        }));
+    }
     match server::sync(device) {
         Ok(report) => server::warn_about(&report),
         Err(e) => eprintln!(
