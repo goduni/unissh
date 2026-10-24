@@ -629,6 +629,26 @@ impl From<ffi::PersonalAuth> for PersonalAuth {
     }
 }
 
+/// A saved host resolved for a connect by the core's one resolver
+/// (`Core::resolve_connection`). Host, jumps and proxy are the profile's, which
+/// the frontend already holds.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedConnect {
+    pub user: String,
+    pub auth: AuthMethod,
+    pub ask_password: bool,
+}
+impl From<ffi::ResolvedConnection> for ResolvedConnect {
+    fn from(r: ffi::ResolvedConnection) -> Self {
+        Self {
+            user: r.user,
+            auth: r.auth.into(),
+            ask_password: r.ask_password,
+        }
+    }
+}
+
 /// Which recognised password prompt the core is offering the login password at.
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]

@@ -16,6 +16,7 @@ import type {
   IdentityBinding,
   BindingResolution,
   PersonalAuth,
+  ResolvedConnect,
   DbConsistencyReport,
   DeviceInfo,
   ExecEvent,
@@ -64,7 +65,6 @@ import type {
   VaultInfo,
   VaultIntegrityReport,
 } from "./types";
-import { profileToAuth } from "./types";
 
 // After a vault-content mutation succeeds, notify the auto-sync hook so cloud
 // vaults push to their server immediately (no manual "Sync now"). The original
@@ -306,30 +306,27 @@ export const personalDestination = (
 export const applyUsernameTemplate = (baseUser: string, usernameTemplate?: string | null) =>
   invoke<string>("apply_username_template", { baseUser, usernameTemplate: usernameTemplate ?? null });
 
-/** Resolve a profile's connect {user, auth} for an INTERACTIVE connection.
- *  Personal profiles are resolved in-core (binding → identity + anti-redirect,
- *  rejecting on Unbound/Redirected) and get the resolved connect username;
- *  everything else uses the stored ProfileAuth. `vaultId` is the profile's vault
- *  (the team vault for a Personal host). Throws on a Personal resolution error —
- *  callers surface it. Not for fan-out (Personal is excluded there — B6). */
+/** Resolve a saved profile's connect {user, auth} in the core — the resolver the
+ *  CLI and local automation use too, so every client logs in the same way.
+ *  Personal profiles go through the binding (identity + anti-redirect,
+ *  rejecting on Unbound/Redirected); others use the stored credential, with the
+ *  account's default user when the profile names none; the username template
+ *  applies to both. A profile that wants its password typed gets
+ *  `promptedPassword`. `vaultId` is the profile's vault (the team vault for a
+ *  Personal host). Throws on a resolution error — callers surface it. */
 export async function resolveConnectAuth(
   profile: ConnectionProfile,
   vaultId: string,
   promptedPassword?: string,
 ): Promise<{ user: string; auth: AuthMethod }> {
-  if (profile.auth.type === "personal") {
-    const dest = await personalDestination(
-      profile.host,
-      profile.port,
-      profile.usernameTemplate,
-      profile.jumps,
-      profile.proxy,
-    );
-    const pa = await resolvePersonalAuth(vaultId, profile.uid, dest, profile.user);
-    const user = await applyUsernameTemplate(pa.user, profile.usernameTemplate);
-    return { user, auth: pa.auth };
-  }
-  return { user: profile.user, auth: profileToAuth(profile.auth, vaultId, promptedPassword) };
+  const r = await invoke<ResolvedConnect>("resolve_connection", {
+    vaultId,
+    profileId: profile.profileId,
+  });
+  const auth: AuthMethod = r.askPassword
+    ? { type: "password", password: promptedPassword ?? "" }
+    : r.auth;
+  return { user: r.user, auth };
 }
 export interface SkippedDirective {
   line: number;

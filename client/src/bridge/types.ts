@@ -146,6 +146,14 @@ export interface PersonalAuth {
   auth: AuthMethod;
 }
 
+/** A saved host resolved for a connect by the core (`resolve_connection`). */
+export interface ResolvedConnect {
+  user: string;
+  /** An empty password when `askPassword`: the caller fills in what was typed. */
+  auth: AuthMethod;
+  askPassword: boolean;
+}
+
 export type SyncTarget = "local" | "cloud";
 
 export interface VaultInfo {

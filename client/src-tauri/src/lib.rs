@@ -405,6 +405,7 @@ pub fn run() {
             commands::delete_binding,
             commands::resolve_host_binding,
             commands::resolve_personal_auth,
+            commands::resolve_connection,
             commands::personal_destination,
             commands::apply_username_template,
             commands::import_ssh_config,
