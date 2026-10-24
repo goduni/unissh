@@ -113,6 +113,9 @@ pub struct SessionTokens {
     pub access_token: String,
     /// Single-use token that rotates the pair.
     pub refresh_token: String,
+    /// When the access token expires, in the server's clock (unix seconds);
+    /// `None` from a server that does not say.
+    pub access_expires: Option<i64>,
 }
 
 impl SessionTokens {
@@ -120,6 +123,7 @@ impl SessionTokens {
         Ok(Self {
             access_token: client::jstr(v, "access_token")?,
             refresh_token: client::jstr(v, "refresh_token")?,
+            access_expires: v.get("access_expires").and_then(Value::as_i64),
         })
     }
 }

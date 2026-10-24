@@ -273,7 +273,10 @@ What the design does about it:
 - **No secret on the command line or in the environment.** Secrets are asked on
   the controlling terminal (`/dev/tty`), with echo off — the invite of
   `login join` included, since a single-use invite in argv is readable by every
-  user of the machine until it is redeemed. For unattended use,
+  user of the machine until it is redeemed, and the pasted pairing text, which
+  carries the pairing secret. Such a prompt reads a key at a time with the
+  terminal's own signals off, so Ctrl-C cancels it and puts the terminal back
+  rather than killing the process with echo still off. For unattended use,
   `--password-file` / `UNISSH_PASSWORD_FILE` names a file — never the password
   itself — and a file anyone but its owner can read is refused, as is a device
   directory that is not the user's alone.
@@ -294,16 +297,23 @@ What the design does about it:
   the whole credential, and the help text says so.
 - **Short-lived unlocks.** A command unlocks for its own run. The interactive host
   list locks after 15 minutes without input, which zeroizes the keys, and asks
-  for the master password again.
+  for the master password again — on the terminal, even when a password file is
+  set, since that file would unlock for whoever sits down at it. A copy without
+  a master password unlocks again with its kept Secret Key alone: the lock
+  means nothing there.
 - **Revocation.** `unissh logout` revokes the device on the server, then deletes
-  its local data. It warns first when a joined account has no other device, since
-  deleting that data loses the account. Revoking the device from elsewhere stops
+  its local data, after a last sync so that nothing made there is lost with it.
+  It warns first when a joined account has no other device, since deleting that
+  data loses the account; `--yes` skips the question, not the warning. Revoking the device from elsewhere stops
   its sync and sessions; that is server-trusted and protects the future only (see
   the limitations below). A machine that may have been compromised calls for
   rotating the keys of the vaults it could open.
 - **Host keys stay per machine.** Trust on first use is announced with the
   fingerprint. A changed key stops the connection and prints the presented
   fingerprint, and accepting it takes an explicit `unissh known-hosts trust`.
+  The exception is a host reached through a jump host, whose key the core
+  cannot pin ahead of a connection: there it takes `unissh known-hosts forget`,
+  and the next connection trusts on first use again, announced the same way.
 - **No agent forwarding.** The CLI never forwards an agent. Approving each
   signature needs a prompt that a raw terminal cannot show safely.
 

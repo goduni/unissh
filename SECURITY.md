@@ -401,7 +401,9 @@ sends the outer host's password to whatever is asking, and that is documented,
 not a bug. Nor does it defend against a compromised webview, which already has
 the ungated password-reveal call. The invariant and its limits are in
 [`THREAT_MODEL.md`](THREAT_MODEL.md#saved-password-at-interactive-prompts).
-So does the **command-line client** (`rust-core/crates/cli`): a secret (master
+So does the **command-line client** (the `unissh` binary of
+`rust-core/crates/cli`; its `unissh-harness` is a debugging tool that takes
+secrets as arguments by design, and out of scope): a secret (master
 password, Secret Key, invite, typed host password) taken from argv or the
 environment, written anywhere but the owner-only files it documents, or printed
 to stdout; a kept Secret Key or password file used while others can read it; a

@@ -71,6 +71,7 @@ _Your keys, your hosts, your machine. The client is complete on its own — no a
 | Android | any (universal) | `UniSSH_<version>_universal.apk` — [sideload](#android) |
 | Android | pick your own | `_arm64` / `_armv7` / `_x86_64` / `_x86` `.apk` — smaller |
 | iOS | Apple Silicon | `UniSSH_<version>_ios-sideload.ipa` — unsigned, [sideload](#ios) |
+| Linux, command line | x86-64 / ARM64 | `unissh-cli_<version>_linux-x86_64` / `_linux-aarch64` — one static binary, for a server without a GUI ([command-line client](https://unissh.dev/overview/cli/)) |
 
 **Every desktop platform here covers both architectures**, so take the ARM file on
 an ARM machine instead of letting it emulate the x86-64 one — Windows on ARM will

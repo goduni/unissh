@@ -46,7 +46,7 @@ pub fn run(home: Home, credentials: &Credentials, offline: bool) -> Res<u8> {
             tty.say(&hosts::table(&shown, true))?;
         }
         tty.say(HINT)?;
-        let Some(answer) = ask(&mut tty, &device, credentials)? else {
+        let Some(answer) = ask(&mut tty, &device)? else {
             return Ok(0);
         };
         match answer.trim() {
@@ -92,12 +92,17 @@ fn pick<'h>(shown: &[&'h Host], all: &'h [Host], answer: &str) -> Option<&'h Hos
 
 /// Waits for an answer, locking the instance if none comes for [`IDLE_LOCK`].
 /// `None` when the user ends input (Ctrl-D).
-fn ask(tty: &mut Tty, device: &Device, credentials: &Credentials) -> Res<Option<String>> {
+fn ask(tty: &mut Tty, device: &Device) -> Res<Option<String>> {
     tty.say("> ")?;
     if !tty.wait(IDLE_LOCK)? {
         device.core.lock();
         tty.say("\nLocked after 15 minutes without input.\n")?;
-        unlock_again(device, credentials)?;
+        // Whoever is at the terminal now has to know the master password: a
+        // password file would unlock for anyone who walked up to it.
+        let typed = Credentials {
+            password_file: None,
+        };
+        unlock_again(device, &typed)?;
         tty.say("> ")?;
     }
     match tty.line("") {
@@ -107,7 +112,9 @@ fn ask(tty: &mut Tty, device: &Device, credentials: &Credentials) -> Res<Option<
     }
 }
 
-/// Unlocks after an idle lock, allowing a mistyped password or two.
+/// Unlocks after an idle lock, allowing a mistyped password or two. An
+/// instance without a master password unlocks with its remembered Secret Key
+/// alone: it is only as locked as the files it is kept in.
 fn unlock_again(device: &Device, credentials: &Credentials) -> Res<()> {
     const TRIES: u32 = 3;
     let mut tried = 0;

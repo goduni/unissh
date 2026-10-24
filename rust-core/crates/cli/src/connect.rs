@@ -1,7 +1,7 @@
 //! Connecting: an interactive terminal, a one-off command, a file copy.
 
 use std::io::{self, IsTerminal, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
@@ -335,10 +335,20 @@ struct Streams {
     ended: Arc<Ended>,
 }
 
+/// The status of a command whose output nobody reads any more, as a shell
+/// reports one killed by SIGPIPE (128 + 13) — what `ssh` itself would die of.
+const EXIT_BROKEN_PIPE: i32 = 141;
+
 impl ExecObserver for Streams {
     fn on_stdout(&self, data: Vec<u8>) {
         let mut out = io::stdout().lock();
-        best_effort(out.write_all(&data).and_then(|()| out.flush()));
+        match out.write_all(&data).and_then(|()| out.flush()) {
+            // `| head`, `| grep -m1`: the reader is gone, and Rust ignores
+            // SIGPIPE, so ending here is ours to do — or a `tail -f` streams on
+            // into nothing until the remote command ends.
+            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => self.ended.closed(EXIT_BROKEN_PIPE),
+            Ok(()) | Err(_) => {}
+        }
     }
 
     fn on_stderr(&self, data: Vec<u8>) {
@@ -483,14 +493,7 @@ fn transfer(sftp: &SftpFfi, direction: Direction, force: bool) -> Res<()> {
             if local.exists() && !force {
                 return Err(exists(&local.display().to_string()));
             }
-            sftp.sftp_download(
-                remote,
-                local.to_string_lossy().into_owned(),
-                0,
-                None,
-                progress,
-                None,
-            )?
+            download(sftp, remote, &local, progress)?
         }
         Direction::Upload { local, remote } => {
             let name = local
@@ -525,6 +528,44 @@ fn transfer(sftp: &SftpFfi, direction: Direction, force: bool) -> Res<()> {
     } else {
         Err(Failure::msg("the copy was interrupted"))
     }
+}
+
+/// Downloads into a file beside `local` and renames it over `local` only once
+/// the whole file is there: a copy that fails — a remote file that cannot be
+/// read, a connection that drops — leaves whatever `local` was untouched and
+/// no partial file behind.
+fn download(
+    sftp: &SftpFfi,
+    remote: String,
+    local: &Path,
+    progress: Option<Arc<dyn SftpProgressObserver>>,
+) -> Res<bool> {
+    let name = local
+        .file_name()
+        .map_or_else(|| "download".into(), |n| n.to_string_lossy());
+    let part = local.with_file_name(format!(".{name}.{}.unissh-part", std::process::id()));
+    let result = sftp.sftp_download(
+        remote,
+        part.to_string_lossy().into_owned(),
+        0,
+        None,
+        progress,
+        None,
+    );
+    let completed = match result {
+        Ok(true) => std::fs::rename(&part, local).map(|()| true).map_err(|e| {
+            Failure::msg(format!(
+                "the file arrived but could not be moved to {}: {e}",
+                local.display()
+            ))
+        }),
+        Ok(false) => Ok(false),
+        Err(e) => Err(e.into()),
+    };
+    if !matches!(completed, Ok(true)) {
+        best_effort(std::fs::remove_file(&part));
+    }
+    completed
 }
 
 fn exists(path: &str) -> Failure {

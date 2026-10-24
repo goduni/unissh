@@ -27,7 +27,8 @@ crates/
   ssh-transport  russh: ProxyJump, forwards, host-key TOFU, ssh-config
   sync           client sync engine: verify-before-apply, LWW, anti-rollback
   ffi            the UniFFI contract for the UI (no plaintext keys)
-  cli            a temporary CLI harness to drive the core from a terminal
+  cloud          the server /v1 client the app and the CLI share
+  cli            `unissh`, the command-line client; `unissh-harness` drives the core
 ```
 
 Dependencies run bottom-up; upper crates reuse lower ones. Each crate ships its own README, documented public API, and tests (including negative cases). Detailed per-crate roles are in the [Crate reference](../crates/).

@@ -68,7 +68,8 @@ starts with `0.`:
   core harness is now the `unissh-harness` binary.
 - Bindings: `ExecHandleFfi::close_stdin` ends a streaming command's input and
   keeps its output coming; `Core::wait_for_recordings` waits for session
-  recordings still being written, for a process about to exit.
+  recordings still to be written (a recorded session counts from the moment it
+  opens), for a process about to exit.
 - A device can name itself in the Devices list (`POST /v1/devices/label`,
   audited as `device_label`); the CLI does so after pairing or joining
   (`CLI · Linux`), and the app's Settings → Devices now shows these labels, so

@@ -1,6 +1,7 @@
 //! Looking after the device itself: what it is signed in to, its pinned host
 //! keys, and signing it out.
 
+use std::fmt::Write as _;
 use std::time::SystemTime;
 
 use unissh_cloud::client::http;
@@ -10,7 +11,8 @@ use unissh_ffi::Core;
 use crate::device::{open_core, Credentials, Device, NOT_SIGNED_IN};
 use crate::failure::{Failure, Res};
 use crate::home::{Home, Link, Origin};
-use crate::tty::Tty;
+use crate::server;
+use crate::tty::{one_line, Tty};
 
 /// `unissh status`: what this machine is signed in to. Needs no unlock.
 pub fn status(home: &Home) -> Res<()> {
@@ -90,7 +92,8 @@ pub fn known_hosts(core: &Core, action: KnownHostsAction) -> Res<()> {
     match action {
         KnownHostsAction::List => {
             for k in core.list_known_hosts()? {
-                println!("{}:{}  {}", k.host, k.port, k.fingerprint);
+                // The name is as a vault member typed it (or a proxy passed it).
+                println!("{}:{}  {}", one_line(&k.host), k.port, k.fingerprint);
             }
         }
         KnownHostsAction::Trust { host, fingerprint } => {
@@ -138,8 +141,10 @@ fn host_port(spec: &str) -> Res<(String, u16)> {
 /// another one. A joined account that has no other device is gone for good
 /// once its data here is deleted, so that is said before asking.
 pub fn logout(home: &Home, credentials: &Credentials, yes: bool, local: bool) -> Res<()> {
-    let link = home.link()?;
-    if link.is_none() && !home.has_instance() {
+    // Read, not yet required: a damaged or newer-format link must not block
+    // `--local`, the way out for exactly such a directory.
+    let link = home.link();
+    if matches!(link, Ok(None)) && !home.has_instance() {
         println!("This machine is not signed in.");
         return Ok(());
     }
@@ -153,8 +158,12 @@ pub fn logout(home: &Home, credentials: &Credentials, yes: bool, local: bool) ->
         println!("Signed out locally.");
         return Ok(());
     }
+    link?;
     let device = Device::open(home.clone())?;
     device.unlock(credentials)?;
+    // What changed here since the last sync (a session recording, say) goes
+    // to the server before the data is deleted.
+    let unsynced = server::sync(&device).err();
     let reached = device.access().and_then(|access| {
         let only = device.link.origin == Origin::Joined && is_only_device(&device.link, &access)?;
         Ok((access, only))
@@ -169,6 +178,13 @@ pub fn logout(home: &Home, credentials: &Credentials, yes: bool, local: bool) ->
                 warning.push_str(
                     "THIS IS THE ACCOUNT'S ONLY DEVICE. Without another device, its vault contents\n\
                      are lost for good unless you still have its Emergency Kit and escrow is on.\n",
+                );
+            }
+            if let Some(e) = &unsynced {
+                let _ = write!(
+                    warning,
+                    "The last sync failed ({e}): what changed here since the one before is deleted\n\
+                     with the rest.\n"
                 );
             }
             confirm(yes, &warning)?;
@@ -228,9 +244,12 @@ fn is_only_device(link: &Link, access: &str) -> Res<bool> {
         .any(|d| d.device_id != link.device_id && d.status == "active"))
 }
 
-/// Shows `warning` and asks to go on, unless `yes`.
+/// Shows `warning` and asks to go on. With `yes` it goes on without asking,
+/// but the warning is still printed (to stderr): `--yes` skips the question,
+/// not what the user is told.
 fn confirm(yes: bool, warning: &str) -> Res<()> {
     if yes {
+        eprint!("{warning}");
         return Ok(());
     }
     let mut tty = Tty::open()
