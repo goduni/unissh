@@ -303,7 +303,12 @@ function IdentitySignIn({ instanceUrl, autoFocus }: { instanceUrl: string; autoF
       if (e instanceof CryptoUnavailableError) {
         setError(t("access.onb.bs_err_crypto"));
       } else if (e instanceof ApiError) {
-        setError(e.status === 403 ? t("access.onb.login_err_bad") : e.message);
+        // Refused credentials: an empty password field is a likely cause, so say so.
+        setError(
+          e.status !== 403
+            ? e.message
+            : t(password ? "access.onb.login_err_bad" : "access.onb.login_err_bad_nopwd"),
+        );
       } else {
         setError(e instanceof Error ? e.message : t("access.onb.login_err_generic"));
       }
@@ -356,7 +361,7 @@ function IdentitySignIn({ instanceUrl, autoFocus }: { instanceUrl: string; autoF
           type="password"
           value={password}
           onChange={setPassword}
-          placeholder="••••••••"
+          placeholder={t("access.onb.ks_pwd_ph")}
           mono
           autoComplete="current-password"
         />
@@ -497,7 +502,7 @@ function RestoreSignIn({ instanceUrl }: { instanceUrl: string }) {
           type="password"
           value={password}
           onChange={setPassword}
-          placeholder="••••••••"
+          placeholder={t("access.onb.ks_pwd_ph")}
           mono
           autoComplete="current-password"
         />
