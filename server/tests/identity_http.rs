@@ -748,8 +748,11 @@ async fn panel_devices(
 ) -> Vec<(String, String)> {
     let v: Value = app
         .client
-        .get(format!("{}/v1/admin/devices", app.base))
-        .query(&[("account_id", account)])
+        .get(format!(
+            "{}/v1/admin/devices?account_id={}",
+            app.base,
+            urlencode(account)
+        ))
         .bearer_auth(access)
         .send()
         .await
