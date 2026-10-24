@@ -69,6 +69,9 @@ starts with `0.`:
 - Bindings: `ExecHandleFfi::close_stdin` ends a streaming command's input and
   keeps its output coming; `Core::wait_for_recordings` waits for session
   recordings still being written, for a process about to exit.
+- A device can name itself in the Devices list (`POST /v1/devices/label`); the
+  CLI does so after pairing or joining (`CLI · Linux`), so the owner can tell
+  which device to revoke. A server without the call leaves the device unnamed.
 
 ### Changed
 

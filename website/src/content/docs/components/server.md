@@ -52,7 +52,7 @@ All crypto blobs are base64 (STANDARD). **One server = one instance — there is
 
 ### Accounts / devices
 
-`POST /v1/devices/add` (a sibling device sharing the keyset), `POST /v1/devices/self-enroll` (an account enrolls a further device of its own), `GET /v1/devices`, `POST|GET /v1/attestations` (a space-admin attests / lists member-key attestations — backs the `key_attest` audit event), `GET /v1/accounts` (admin: handles, display names, member-ids, device counts), `POST /v1/owner/set` (owner grant/revoke, server-trusted, anti-lockout), `POST /v1/account/profile`.
+`POST /v1/devices/add` (a sibling device sharing the keyset), `POST /v1/devices/self-enroll` (an account enrolls a further device of its own), `GET /v1/devices`, `POST /v1/devices/label` (the calling device names itself in that list), `POST|GET /v1/attestations` (a space-admin attests / lists member-key attestations — backs the `key_attest` audit event), `GET /v1/accounts` (admin: handles, display names, member-ids, device counts), `POST /v1/owner/set` (owner grant/revoke, server-trusted, anti-lockout), `POST /v1/account/profile`.
 
 ### Spaces / directory
 

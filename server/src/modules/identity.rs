@@ -34,6 +34,7 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/devices/add", post(device_add))
         .route("/v1/devices/self-enroll", post(device_self_enroll))
         .route("/v1/devices", get(devices_list_self))
+        .route("/v1/devices/label", post(device_label_self))
         .route("/v1/invite", post(invite_issue_v2))
         .route("/v1/invite/revoke", post(invite_revoke_v2))
         .route("/v1/join/preview", post(join_preview))
@@ -363,6 +364,42 @@ async fn device_revoke(
     state.store.set_device_status(&target, "revoked").await?;
     state.store.revoke_device_sessions(&target).await?;
     audit_observed(&state, "device_remove", &dev.account_id, &target).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// The longest device label accepted, here and at self-enroll: open metadata
+/// shown in every device listing, so a keyset holder must not bloat it.
+const MAX_DEVICE_LABEL_CHARS: usize = 128;
+
+#[derive(Deserialize)]
+struct DeviceLabelReq {
+    /// The new label; absent, empty or blank clears it.
+    #[serde(default)]
+    label: Option<String>,
+}
+
+/// `POST /v1/devices/label` (Bearer): names the calling device in the Devices
+/// list. A device that joined by invite or by pairing was created without a
+/// label (the pairing device does not know what kind of client joins), and the
+/// owner looking for the one to revoke deserves better than an id. Only ever
+/// the caller's own device; open metadata, like the self-enroll label. 204.
+async fn device_label_self(
+    auth: AuthCtx,
+    State(state): State<AppState>,
+    Json(req): Json<DeviceLabelReq>,
+) -> AppResult<StatusCode> {
+    let label = req
+        .label
+        .as_deref()
+        .map(str::trim)
+        .filter(|l| !l.is_empty());
+    if label.is_some_and(|l| l.chars().count() > MAX_DEVICE_LABEL_CHARS) {
+        return Err(AppError::malformed("device label too long (max 128 chars)"));
+    }
+    state
+        .store
+        .set_device_label(&auth.device.device_id, label)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -825,7 +862,7 @@ async fn device_self_enroll(
     if req
         .label
         .as_deref()
-        .is_some_and(|l| l.chars().count() > 128)
+        .is_some_and(|l| l.chars().count() > MAX_DEVICE_LABEL_CHARS)
     {
         return Err(AppError::malformed("device label too long (max 128 chars)"));
     }

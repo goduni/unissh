@@ -95,6 +95,16 @@ impl Store {
         Ok(())
     }
 
+    /// Sets (or, with `None`, clears) a device's human label.
+    pub async fn set_device_label(&self, device_id: &[u8], label: Option<&str>) -> AppResult<()> {
+        self.exec(
+            "UPDATE devices SET label = ? WHERE device_id = ?",
+            vec![Val::OptT(label.map(str::to_owned)), Val::b(device_id)],
+        )
+        .await?;
+        Ok(())
+    }
+
     pub async fn set_device_status(&self, device_id: &[u8], status: &str) -> AppResult<()> {
         self.exec(
             "UPDATE devices SET status = ? WHERE device_id = ?",
