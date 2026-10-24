@@ -58,6 +58,9 @@ name: Client (Tauri)
 # core change must rebuild the client. Same for rust-toolchain.toml — the
 # standalone client workspace has no toolchain file of its own and inherits the
 # repo-root pin by rustup walking up.
+# The root Cargo.toml/Cargo.lock are listed for the `cli` job: the static CLI
+# binary builds from the root workspace, so a dependency bump there must show
+# a musl break in its PR, not on the tag.
 # GitHub Actions does not support YAML anchors; keep the two lists in sync.
 on:
   push:
@@ -67,6 +70,8 @@ on:
       - "client/**"
       - "rust-core/**"
       - "rust-toolchain.toml"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - "scripts/bump-version.py"
       - "scripts/assert-icons-replaced.py"
       - ".github/workflows/client.yml"
@@ -75,6 +80,8 @@ on:
       - "client/**"
       - "rust-core/**"
       - "rust-toolchain.toml"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - "scripts/bump-version.py"
       - "scripts/assert-icons-replaced.py"
       - ".github/workflows/client.yml"
@@ -1160,6 +1167,90 @@ jobs:
             --repo "${{ github.repository }}" --clobber
 
   # ---------------------------------------------------------------------------
+  # The command-line client (`unissh`, crate unissh-cli) as one static binary per
+  # architecture — the thing to drop onto a server. Static (musl), because a
+  # server is exactly the machine with an old glibc, and a binary that needs a
+  # newer one than the host has does not start at all. Built on every run so a
+  # break shows up in the PR rather than on the tag. Read-only: on tag builds
+  # release-integrity takes the artifacts from this run, attaches them and
+  # hashes them into SHA256SUMS with everything else.
+  #
+  # SQLCipher's OpenSSL is vendored for musl (rust-core/crates/storage/Cargo.toml):
+  # there is no system libcrypto to link a static binary against.
+  # ---------------------------------------------------------------------------
+  cli:
+    name: CLI static binary (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    env:
+      TARGET: ${{ matrix.arch }}-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Tag must match the manifest version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: python3 scripts/bump-version.py --check "${GITHUB_REF_NAME#v}"
+
+      # musl-gcc builds the C parts (vendored OpenSSL, SQLCipher, aws-lc).
+      - name: Install the musl toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          rustup target add "$TARGET"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cli-${{ matrix.arch }}
+
+      - name: Build
+        env:
+          CC_x86_64_unknown_linux_musl: musl-gcc
+          CC_aarch64_unknown_linux_musl: musl-gcc
+        run: cargo build --locked --release -p unissh-cli --bin unissh --bin unissh-harness --target "$TARGET"
+
+      # A static binary is the whole point: one that still wants a loader or a
+      # libc from the host would fail on exactly the servers it is for.
+      - name: Check it is static and runs
+        run: |
+          BIN="target/$TARGET/release/unissh"
+          file "$BIN"
+          if ldd "$BIN" 2>/dev/null | grep -q '=>'; then
+            echo "::error::unissh links shared libraries"; ldd "$BIN"; exit 1
+          fi
+          "$BIN" --version
+          VERSION=$("$BIN" --version | cut -d' ' -f2)
+          cp "$BIN" "unissh-cli_${VERSION}_linux-${{ matrix.arch }}"
+          echo "ASSET=unissh-cli_${VERSION}_linux-${{ matrix.arch }}" >> "$GITHUB_ENV"
+
+      # `--version` touches none of what musl could break at run time. The
+      # harness is the same core built the same way: an account (Argon2id),
+      # then a vault (SQLCipher over the vendored OpenSSL), then a key.
+      - name: Exercise the core on musl
+        run: |
+          H="target/$TARGET/release/unissh-harness"
+          D="$(mktemp -d)"
+          KEY=$("$H" --db "$D/u.db" --keyset "$D/k.bin" init | tail -n 1)
+          "$H" --db "$D/u.db" --keyset "$D/k.bin" create-vault --secret-key "$KEY" --id v --name V
+          "$H" --db "$D/u.db" --keyset "$D/k.bin" gen-key --secret-key "$KEY" --vault v --item k | grep -q '^ssh-ed25519 '
+          rm -rf "$D"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cli-linux-${{ matrix.arch }}
+          path: ${{ env.ASSET }}
+          if-no-files-found: error
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
   # Release integrity (tag builds only): publish a SHA256SUMS file and a build
   # provenance attestation for the artifacts tauri-action just uploaded.
   #
@@ -1171,10 +1262,11 @@ jobs:
   # ---------------------------------------------------------------------------
   release-integrity:
     name: checksums + provenance
-    # Waits for mobile too so the APK/IPA land in SHA256SUMS. `!cancelled()`
+    # Waits for mobile and the CLI too so the APK/IPA and the static `unissh`
+    # binaries land in SHA256SUMS. `!cancelled()`
     # (not the implicit success()) so a broken mobile leg degrades the release
     # to desktop-only instead of shipping desktop artifacts with no checksums.
-    needs: [build, android, ios]
+    needs: [build, android, ios, cli]
     if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     permissions:
@@ -1182,6 +1274,30 @@ jobs:
       id-token: write # OIDC for build provenance
       attestations: write # write the attestation
     steps:
+      # The CLI binaries come from this run's artifacts, not from the cli job
+      # itself, so that job needs no write token and nothing waits for the
+      # release to exist. Whatever legs succeeded are attached.
+      - name: Take the CLI binaries from this run
+        if: needs.cli.result != 'skipped'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: cli-linux-*
+          merge-multiple: true
+          path: cli-dist
+
+      - name: Attach the CLI binaries to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          shopt -s nullglob
+          files=(cli-dist/unissh-cli_*)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::warning::no CLI binary was built for this release"
+            exit 0
+          fi
+          gh release upload "${{ github.ref_name }}" "${files[@]}" \
+            --repo "${{ github.repository }}" --clobber
+
       - name: Download the release artifacts tauri-action uploaded
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -1268,6 +1384,18 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" \
             --json body --jq .body > body.md
+          # The CLI row names only the binaries this release really carries: a
+          # failed leg must not advertise a file that 404s.
+          CLI_FILES=""
+          for arch in x86_64 aarch64; do
+            if [ -e "dist/unissh-cli_${VERSION}_linux-${arch}" ]; then
+              CLI_FILES="${CLI_FILES:+$CLI_FILES · }\`unissh-cli_${VERSION}_linux-${arch}\`"
+            fi
+          done
+          CLI_ROW=""
+          if [ -n "$CLI_FILES" ]; then
+            CLI_ROW="| **Command line** (Linux servers; one static binary) | ${CLI_FILES} |"
+          fi
 
           # Re-runs must not stack a second footer onto the first.
           if grep -q '<!-- unissh:footer -->' body.md; then
@@ -1292,6 +1420,7 @@ jobs:
           | **Android** (sideload) | \`UniSSH_${VERSION}_universal.apk\` — works on any device |
           | ↳ smaller, if you know your ABI | \`_arm64\` · \`_armv7\` · \`_x86_64\` · \`_x86\` \`.apk\` |
           | **iOS** (sideload, unsigned) | \`UniSSH_${VERSION}_ios-sideload.ipa\` |
+          ${CLI_ROW}
 
           **Every platform above ships both architectures**, Windows included — so if
           your machine is ARM, take the ARM file rather than letting it emulate the

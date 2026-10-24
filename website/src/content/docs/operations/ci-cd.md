@@ -7,10 +7,12 @@ UniSSH ships four GitHub Actions workflows: continuous integration for the Rust 
 
 ## Core & server CI (`ci.yml`)
 
-Runs on every push to `main`, every pull request, and weekly on a schedule (to surface new advisories via cargo-deny). Three jobs:
+Runs on every push to `main`, every pull request, and weekly on a schedule (to surface new advisories via cargo-deny). Its jobs:
 
 - **`lint`** — a log-redaction guard (`scripts/check-log-redaction.py`), then `cargo fmt --all --check` and `cargo clippy --workspace --all-targets -- -D warnings`. The toolchain (channel 1.95 + rustfmt/clippy) comes from `rust-toolchain.toml`.
 - **`test`** — `cargo test --workspace` inside a `rust:bookworm` **root container**. The sshd-backed integration tests are designed to run as root against a self-spawned `sshd`, so the container provides a privileged, reproducible environment; it installs `openssh-server`/`openssh-client` plus the OpenSSL headers and C toolchain for bundled SQLCipher.
+- **`mcp-platform`** — the MCP crate's tests on Linux, macOS and Windows.
+- **`cli-platform`** — clippy for the command-line client on macOS and Windows, the halves of its code that `lint` on Linux never compiles.
 - **`deny`** — `cargo-deny check advisories bans sources licenses`, reading `deny.toml` from the repo root and, separately, from the two excluded workspaces (`client/src-tauri`, `server-ui/crypto-wasm`) — a supply-chain gate over all three lockfiles.
 
 ## Container images (`publish-images.yml`)
@@ -30,6 +32,8 @@ One file carries two flows:
 - **Release** — on a `v*` tag: build release bundles and attach them to a GitHub Release.
 
 It builds on a five-way matrix: `ubuntu-22.04` and `ubuntu-22.04-arm` (the version is pinned for webkit2gtk-4.1 availability and broad AppImage glibc compatibility → `.deb`/`.rpm`/`.AppImage`), `windows-latest` and `windows-11-arm` (`.msi` via WiX + NSIS `.exe`), and `macos-latest` building `--target universal-apple-darwin` (`.dmg`/`.app` for Apple Silicon and Intel in one bundle). Both ARM legs build natively rather than cross-compiling, which is what keeps the vendored-OpenSSL and webkit dependencies straightforward. Node 22 + the repo-root pinned Rust toolchain are used; the client's path dependency on `../../rust-core/crates/ffi` resolves inside the single checkout (no cross-repo checkout, no PAT).
+
+A **`cli`** job builds the command-line client (`unissh`) as a static musl binary for x86-64 and ARM64 on every run, checks that it links no shared library, and exercises the core on musl through `unissh-harness` (an account, a vault, a key). On a tag the binaries go onto the release as `unissh-cli_<version>_linux-<arch>`, attached by the integrity job below from this run's artifacts.
 
 Each tagged release also gets a **`SHA256SUMS`** file, a **`SHA256SUMS.minisig`** detached signature over it, and a **build-provenance attestation** (`actions/attest-build-provenance`) for the bundles — verifiable with `gh attestation verify <file> --repo goduni/unissh`, which needs GitHub CLI 2.49 or newer (see [Install from a release](../../overview/install/)).
 

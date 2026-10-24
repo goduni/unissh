@@ -122,27 +122,6 @@ jobs:
       # sees — macOS termios, and the Windows stand-ins for the terminal.
       - run: cargo clippy -p unissh-cli --all-targets -- -D warnings
 
-  # The CLI as a binary, on request only (`gh workflow run ci.yml --ref <branch>`):
-  # for a live pass on a machine that cannot build the core, until releases
-  # carry it. ubuntu-22.04 keeps the glibc floor of the desktop .deb.
-  cli-binary:
-    name: CLI binary (linux x86_64)
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v7
-      - uses: Swatinem/rust-cache@v2
-      - name: Install build deps (OpenSSL + C toolchain for bundled-sqlcipher)
-        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev clang
-      - run: cargo build --locked --release -p unissh-cli
-      - uses: actions/upload-artifact@v7
-        with:
-          name: unissh-cli-linux-x86_64
-          path: |
-            target/release/unissh
-            target/release/unissh-harness
-          retention-days: 7
-
   deny:
     name: cargo-deny (supply chain)
     runs-on: ubuntu-latest

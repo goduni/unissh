@@ -75,6 +75,9 @@ starts with `0.`:
   the owner can tell which device to revoke. A server without the call leaves
   the device unnamed. Labels with control or bidirectional-formatting
   characters are refused, at self-enroll too.
+- Releases carry the command-line client as a static Linux binary for x86-64
+  and ARM64 (`unissh-cli_<version>_linux-<arch>`, musl), in the signed
+  `SHA256SUMS` with everything else.
 
 ### Changed
 

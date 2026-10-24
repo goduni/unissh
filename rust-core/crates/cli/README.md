@@ -11,6 +11,14 @@ The crate also builds `unissh-harness`, the original core harness for driving th
 FFI facade without a server. It takes secrets as arguments and is for debugging
 only.
 
+## Getting it
+
+Releases carry a static Linux binary per architecture,
+`unissh-cli_<version>_linux-{x86_64,aarch64}` (musl, no shared libraries), hashed
+into the signed `SHA256SUMS`. Install it as `unissh` on a server. The desktop
+app's Linux binary has that name too, so on a machine with the app, use another
+one such as `unissh-cli`. From source: `cargo build -p unissh-cli --release`.
+
 ## Signing in
 
 There are three ways, and each creates this machine's instance:
