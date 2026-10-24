@@ -26,7 +26,11 @@ pub fn lines(text: &str) -> String {
         .collect()
 }
 
+// The quiet-prompt line editor is the Unix terminal's (Windows has no `Tty`);
+// it is pure, so its tests run everywhere.
+
 /// What one key does at a quiet prompt.
+#[cfg(any(unix, test))]
 #[derive(Debug, PartialEq, Eq)]
 enum Key {
     /// Keep reading.
@@ -39,10 +43,15 @@ enum Key {
     End,
 }
 
+#[cfg(any(unix, test))]
 const CTRL_C: u8 = 0x03;
+#[cfg(any(unix, test))]
 const CTRL_D: u8 = 0x04;
+#[cfg(any(unix, test))]
 const BACKSPACE: u8 = 0x08;
+#[cfg(any(unix, test))]
 const CTRL_U: u8 = 0x15;
+#[cfg(any(unix, test))]
 const DELETE: u8 = 0x7f;
 
 /// Line editing for a prompt that echoes nothing. The terminal's own line
@@ -51,11 +60,13 @@ const DELETE: u8 = 0x7f;
 /// terminal would — Backspace and Ctrl-U edit, Enter ends the line (a CR LF
 /// pair once), Ctrl-D on an empty line ends input — and Ctrl-C cancels, with
 /// the terminal put back by whoever turned echo off.
+#[cfg(any(unix, test))]
 struct QuietLine {
     text: Zeroizing<Vec<u8>>,
     after_cr: bool,
 }
 
+#[cfg(any(unix, test))]
 impl QuietLine {
     fn new() -> Self {
         Self {
@@ -104,10 +115,12 @@ impl QuietLine {
     }
 }
 
+#[cfg(unix)]
 fn cancelled() -> io::Error {
     io::Error::new(io::ErrorKind::Interrupted, "cancelled")
 }
 
+#[cfg(unix)]
 fn ended() -> io::Error {
     io::Error::new(io::ErrorKind::UnexpectedEof, "cancelled")
 }
