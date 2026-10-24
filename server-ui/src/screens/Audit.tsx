@@ -1,6 +1,7 @@
 import { type CSSProperties, type RefObject, useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
+import { ApiError } from "../api/errors";
 import { fmtEpoch, fmtNum, fmtRelative } from "../util/format";
 import type { AuditEntry, AuditSink } from "../api/types";
 import { truncId } from "../util/bytes";
@@ -271,7 +272,9 @@ function ExportCard({ onClose, toggle }: { onClose: () => void; toggle: RefObjec
       URL.revokeObjectURL(url);
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      // The export never answers 404 itself: a 404 is a server older than it.
+      if (e instanceof ApiError && e.status === 404) setError(t("screen.audit.exportUnsupported"));
+      else setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -406,6 +409,8 @@ function SinksCard() {
   const { t } = useTranslation();
   const sinks = useAsync(() => api.admin.auditSinks(), []);
   const list = sinks.data?.sinks ?? [];
+  // The endpoint never answers 404 itself: a 404 is a server older than sinks.
+  const unsupported = sinks.errorStatus === 404;
 
   const columns: Column<AuditSink>[] = [
     {
@@ -495,9 +500,12 @@ function SinksCard() {
         rows={list}
         rowKey={(s) => s.sink}
         loading={sinks.loading}
-        error={sinks.error}
+        error={unsupported ? null : sinks.error}
         onRetry={sinks.reload}
-        empty={{ title: t("screen.audit.sinksNone"), icon: "server" }}
+        empty={{
+          title: t(unsupported ? "screen.audit.sinksUnsupported" : "screen.audit.sinksNone"),
+          icon: "server",
+        }}
         summary
         minWidth={800}
         ariaLabel={t("screen.audit.sinksTitle")}

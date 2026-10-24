@@ -5,6 +5,8 @@ export interface AsyncState<T> {
   data: T | null;
   loading: boolean;
   error: string | null;
+  /** The HTTP status of a refused call (an ApiError), else null. */
+  errorStatus: number | null;
   reload: () => void;
 }
 
@@ -22,12 +24,14 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[]): AsyncState<T
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [errorStatus, setErrorStatus] = useState<number | null>(null);
   const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
     let alive = true;
     setLoading(true);
     setError(null);
+    setErrorStatus(null);
     fn()
       .then((d) => {
         if (alive) {
@@ -38,6 +42,7 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[]): AsyncState<T
       .catch((e) => {
         if (alive) {
           setError(message(e));
+          setErrorStatus(e instanceof ApiError ? e.status : null);
           setLoading(false);
         }
       });
@@ -47,5 +52,5 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[]): AsyncState<T
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, nonce]);
 
-  return { data, loading, error, reload: () => setNonce((n) => n + 1) };
+  return { data, loading, error, errorStatus, reload: () => setNonce((n) => n + 1) };
 }

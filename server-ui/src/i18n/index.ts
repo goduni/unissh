@@ -371,6 +371,8 @@ const ru = {
         tagVault: "Хранилище",
       },
       audit: {
+        sinksUnsupported: "Этот сервер не умеет доставлять журнал во внешние приёмники: его версия старше этой функции. Обновите сервер.",
+        exportUnsupported: "Этот сервер не умеет выгружать журнал: его версия старше этой функции. Обновите сервер.",
         colEvent: "Событие",
         colSource: "Источник",
         colAuthor: "Ключ автора",
@@ -904,6 +906,8 @@ const en: typeof ru = {
         tagVault: "Vault",
       },
       audit: {
+        sinksUnsupported: "This server can't deliver the log to external sinks: its version predates the feature. Update the server.",
+        exportUnsupported: "This server can't export the log: its version predates the feature. Update the server.",
         colEvent: "Event",
         colSource: "Source",
         colAuthor: "Author key",
