@@ -235,9 +235,9 @@ The contract includes `Core`, `sshExec`, `generateSshKey`, `JumpHost`,
 
 ## CLI harness
 
-The [`unissh-cli`](../cli) crate (the `unissh` binary) uses this facade for an end-to-end
-scenario from the terminal: `init → create-vault → gen-key → exec` (with `--jump` for
-ProxyJump).
+The [`unissh-cli`](../cli) crate's `unissh-harness` binary uses this facade for an
+end-to-end scenario from the terminal: `init → create-vault → gen-key → exec` (with
+`--jump` for ProxyJump). Its `unissh` binary is the command-line client.
 
 ## Native automation connections
 

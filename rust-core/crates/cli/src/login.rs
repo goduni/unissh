@@ -10,7 +10,6 @@
 //! does not get far enough to keep.
 
 use std::fmt::Write as _;
-use std::io::ErrorKind;
 
 use unissh_cloud::client::{http, unb64, validate_base_url};
 use unissh_cloud::dto::PairingPayload;
@@ -100,7 +99,8 @@ pub fn pair(home: &Home, choice: &SignIn) -> Res<()> {
     let password = choice.new_password(&mut tty, "Master password for this machine: ")?;
     tty.say(
         "In a signed-in UniSSH app open Settings → Server → Add device, copy the\n\
-         text it shows and paste it here. Keep that card open until this finishes.\n",
+         text it shows and paste it here. Nothing of it is shown (it holds the pairing\n\
+         secret), only a dot per line. Keep that card open until this finishes.\n",
     )?;
     let payload = read_payload(&mut tty)?;
     validate_base_url(&payload.base_url)?;
@@ -141,28 +141,16 @@ pub fn pair(home: &Home, choice: &SignIn) -> Res<()> {
     welcome(&Device::new(home.clone(), link, core))
 }
 
-/// Reads the pasted pairing text, up to its last field or an empty line.
+/// Reads the pasted pairing text, up to its last field or an empty line. It
+/// carries the pairing secret, so it is not echoed: not into the scrollback,
+/// not into a shared tmux pane, not into a terminal log.
 fn read_payload(tty: &mut Tty) -> Res<PairingPayload> {
-    // It carries the pairing secret.
-    let mut text = Zeroizing::new(String::new());
-    loop {
-        let line = match tty.line("") {
-            Ok(line) => line,
-            Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
-            Err(e) => return Err(e.into()),
-        };
-        if line.trim().is_empty() && !text.is_empty() {
-            break;
-        }
-        text.push_str(&line);
-        text.push('\n');
-        if let Some(payload) = PairingPayload::parse_text(&text) {
-            return Ok(payload);
-        }
-    }
-    Err(Failure::msg(
-        "that is not the whole pairing text: it has seven lines, from baseUrl to oobCode",
-    ))
+    let text = tty.pasted_secret(|text| PairingPayload::parse_text(text).is_some())?;
+    PairingPayload::parse_text(&text).ok_or_else(|| {
+        Failure::msg(
+            "that is not the whole pairing text: it has seven lines, from baseUrl to oobCode",
+        )
+    })
 }
 
 /// `unissh login escrow`: signs in to an account with its password and Secret
@@ -230,28 +218,9 @@ pub fn escrow(home: &Home, base_url: &str, handle: &str, choice: &SignIn) -> Res
     };
     home.save_link(&link)?;
     fresh.keep();
-    let mut device = Device::new(home.clone(), link, core);
-    // The account's first space is where its cloud vaults are bound, as the
-    // app picks it after an escrow sign-in. Like the app, carry on without
-    // one: the device still pulls, it only has nothing to push to yet.
-    match first_space(&device) {
-        Ok(space) if !space.is_empty() => {
-            device.link.space_id = space;
-            home.save_link(&device.link)?;
-        }
-        Ok(_) => {}
-        Err(e) => eprintln!("unissh: could not read the account's spaces: {e}"),
-    }
-    welcome(&device)
-}
-
-fn first_space(device: &Device) -> Res<String> {
-    let spaces = identity::list_spaces(http(), &device.link.base_url, &device.access()?)?;
-    Ok(spaces
-        .into_iter()
-        .next()
-        .map(|s| s.space_id)
-        .unwrap_or_default())
+    // The space is left for the first sync to find (`server::sync`), which
+    // also finds it later if it cannot now.
+    welcome(&Device::new(home.clone(), link, core))
 }
 
 /// What `unissh login join` needs besides the server and the invite.
@@ -315,13 +284,10 @@ pub fn join(home: &Home, base_url: &str, joining: &Joining, choice: &SignIn) -> 
         joining.handle.clone(),
     )?;
     // The invite is spent and the account exists: from here nothing may
-    // delete the keys, and the Emergency Kit comes before anything else that
-    // can fail.
+    // delete the keys. The link and the remembered Secret Key are written
+    // before anything waits for the user — a Ctrl-C or a dropped connection
+    // at the Emergency Kit must not leave keys this machine cannot use.
     fresh.keep();
-    let kit = Zeroizing::new(format_secret_key(&secret_key));
-    tty.say(&emergency_kit(&kit))?;
-    best_effort(tty.line("Press Enter once it is saved. "));
-    best_effort(choice.keep_secret_key(home, &secret_key));
     let link = Link {
         format: LINK_FORMAT,
         base_url: base_url.to_owned(),
@@ -332,13 +298,18 @@ pub fn join(home: &Home, base_url: &str, joining: &Joining, choice: &SignIn) -> 
         handle: joining.handle.clone(),
         origin: Origin::Joined,
     };
-    home.save_link(&link).map_err(|e| {
+    let saved = home.save_link(&link).map_err(|e| {
         Failure::msg(format!(
             "the account was created and its keys are in {}, but its server link could \
              not be saved: {e}. Do not delete that directory",
             home.dir().display()
         ))
-    })?;
+    });
+    best_effort(choice.keep_secret_key(home, &secret_key));
+    let kit = Zeroizing::new(format_secret_key(&secret_key));
+    tty.say(&emergency_kit(&kit))?;
+    best_effort(tty.line("Press Enter once it is saved. "));
+    saved?;
     tty.say(
         "A vault admin now has to grant this account access to the vaults it needs;\n\
          after that, `unissh sync` brings them here.\n",

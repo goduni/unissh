@@ -33,7 +33,7 @@ pub struct Device {
 pub const NOT_SIGNED_IN: &str = "this machine is not signed in to UniSSH. Sign in with one of:\n  \
      unissh login pair                     (pair with a signed-in UniSSH app)\n  \
      unissh login escrow <server> <handle> (your password and Secret Key)\n  \
-     unissh login join <server> <invite>   (a separate account for this machine)";
+     unissh login join <server>            (a separate account for this machine; asks for the invite)";
 
 impl Device {
     /// The device signed in at `home`.

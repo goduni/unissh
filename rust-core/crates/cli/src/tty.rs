@@ -26,6 +26,105 @@ pub fn lines(text: &str) -> String {
         .collect()
 }
 
+// The quiet-prompt line editor is the Unix terminal's (Windows has no `Tty`);
+// it is pure, so its tests run everywhere.
+
+/// What one key does at a quiet prompt.
+#[cfg(any(unix, test))]
+#[derive(Debug, PartialEq, Eq)]
+enum Key {
+    /// Keep reading.
+    More,
+    /// The line is complete.
+    Enter,
+    /// Ctrl-C: give up.
+    Cancel,
+    /// Ctrl-D on an empty line: no more input.
+    End,
+}
+
+#[cfg(any(unix, test))]
+const CTRL_C: u8 = 0x03;
+#[cfg(any(unix, test))]
+const CTRL_D: u8 = 0x04;
+#[cfg(any(unix, test))]
+const BACKSPACE: u8 = 0x08;
+#[cfg(any(unix, test))]
+const CTRL_U: u8 = 0x15;
+#[cfg(any(unix, test))]
+const DELETE: u8 = 0x7f;
+
+/// Line editing for a prompt that echoes nothing. The terminal's own line
+/// editing is off there, and so are its signals: a Ctrl-C that killed the
+/// process would leave the terminal with echo off. So this does what the
+/// terminal would — Backspace and Ctrl-U edit, Enter ends the line (a CR LF
+/// pair once), Ctrl-D on an empty line ends input — and Ctrl-C cancels, with
+/// the terminal put back by whoever turned echo off.
+#[cfg(any(unix, test))]
+struct QuietLine {
+    text: Zeroizing<Vec<u8>>,
+    after_cr: bool,
+}
+
+#[cfg(any(unix, test))]
+impl QuietLine {
+    fn new() -> Self {
+        Self {
+            // Room up front: a reallocation would leave a copy of the secret
+            // behind that is never wiped.
+            text: Zeroizing::new(Vec::with_capacity(256)),
+            after_cr: false,
+        }
+    }
+
+    fn key(&mut self, byte: u8) -> Key {
+        let after_cr = std::mem::take(&mut self.after_cr);
+        match byte {
+            b'\n' if after_cr => Key::More,
+            b'\r' => {
+                self.after_cr = true;
+                Key::Enter
+            }
+            b'\n' => Key::Enter,
+            CTRL_C => Key::Cancel,
+            CTRL_D if self.text.is_empty() => Key::End,
+            BACKSPACE | DELETE => {
+                // A whole character, not the last byte of one.
+                while let Some(b) = self.text.pop() {
+                    if b & 0xC0 != 0x80 {
+                        break;
+                    }
+                }
+                Key::More
+            }
+            CTRL_U => {
+                self.text.clear();
+                Key::More
+            }
+            b if b.is_ascii_control() => Key::More,
+            b => {
+                self.text.push(b);
+                Key::More
+            }
+        }
+    }
+
+    /// The line so far, leaving an empty one.
+    fn take(&mut self) -> Zeroizing<Vec<u8>> {
+        std::mem::replace(&mut self.text, Zeroizing::new(Vec::with_capacity(256)))
+    }
+}
+
+#[cfg(unix)]
+fn cancelled() -> io::Error {
+    io::Error::new(io::ErrorKind::Interrupted, "cancelled")
+}
+
+#[cfg(unix)]
+fn ended() -> io::Error {
+    io::Error::new(io::ErrorKind::UnexpectedEof, "cancelled")
+}
+
 /// Whether a typed answer means yes.
 fn is_yes(answer: &str) -> bool {
     matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
@@ -50,6 +149,22 @@ impl Tty {
         let text = std::str::from_utf8(&bytes)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         Ok(Zeroizing::new(text.to_owned()))
+    }
+
+    /// Reads a pasted block that echoes nothing, such as a pairing text with a
+    /// secret in it: line by line until `complete` accepts the text so far, an
+    /// empty line or Ctrl-D. A dot shows for each line received.
+    pub fn pasted_secret(
+        &mut self,
+        mut complete: impl FnMut(&str) -> bool,
+    ) -> io::Result<Zeroizing<String>> {
+        let bytes =
+            self.read_quiet_lines(&mut |text| std::str::from_utf8(text).is_ok_and(&mut complete));
+        self.say("\n")?;
+        let mut bytes = bytes?;
+        String::from_utf8(std::mem::take(&mut *bytes))
+            .map(Zeroizing::new)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
     /// Asks a yes/no question; anything but `y`/`yes` is no.
@@ -81,10 +196,9 @@ mod imp {
 
     use rustix::event::{poll, PollFd, PollFlags, Timespec};
     use rustix::io::Errno;
-    use rustix::termios::{
-        tcgetattr, tcgetwinsize, tcsetattr, LocalModes, OptionalActions, Termios,
-    };
+    use rustix::termios::{tcgetattr, tcgetwinsize, tcsetattr, OptionalActions, Termios};
 
+    use super::{cancelled, ended, Key, QuietLine};
     use crate::failure::best_effort;
     use zeroize::Zeroizing;
 
@@ -120,9 +234,13 @@ mod imp {
         }
 
         /// Reads one line, without its line ending. End of input before any
-        /// character is an `UnexpectedEof` — the user pressed Ctrl-D.
+        /// character is an `UnexpectedEof` — the user pressed Ctrl-D; Ctrl-C
+        /// at a quiet prompt is an `Interrupted`.
         pub(super) fn read_line(&self, quiet: bool) -> io::Result<Zeroizing<Vec<u8>>> {
-            let _echo = quiet.then(|| NoEcho::on(&self.file)).transpose()?;
+            if quiet {
+                let _quiet = Quiet::on(&self.file)?;
+                return self.read_quiet_line(&mut QuietLine::new());
+            }
             let mut line = Zeroizing::new(Vec::with_capacity(256));
             let mut byte = [0_u8; 1];
             loop {
@@ -139,20 +257,75 @@ mod imp {
                 }
             }
         }
+
+        /// Lines with nothing echoed, in one quiet stretch so a pasted block
+        /// keeps its later lines, until `complete` accepts the text, an empty
+        /// line or end of input.
+        pub(super) fn read_quiet_lines(
+            &self,
+            complete: &mut dyn FnMut(&[u8]) -> bool,
+        ) -> io::Result<Zeroizing<Vec<u8>>> {
+            let _quiet = Quiet::on(&self.file)?;
+            let mut editor = QuietLine::new();
+            let mut text = Zeroizing::new(Vec::with_capacity(1024));
+            loop {
+                let line = match self.read_quiet_line(&mut editor) {
+                    Ok(line) => line,
+                    Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(text),
+                    Err(e) => return Err(e),
+                };
+                if line.is_empty() {
+                    if text.is_empty() {
+                        continue;
+                    }
+                    return Ok(text);
+                }
+                text.extend_from_slice(&line);
+                text.push(b'\n');
+                (&self.file).write_all(b".")?;
+                if complete(&text) {
+                    return Ok(text);
+                }
+            }
+        }
+
+        /// One line at a quiet prompt, a key at a time ([`QuietLine`]).
+        fn read_quiet_line(&self, editor: &mut QuietLine) -> io::Result<Zeroizing<Vec<u8>>> {
+            let mut byte = [0_u8; 1];
+            loop {
+                if (&self.file).read(&mut byte)? == 0 {
+                    let line = editor.take();
+                    return if line.is_empty() {
+                        Err(ended())
+                    } else {
+                        Ok(line)
+                    };
+                }
+                let [key] = byte;
+                match editor.key(key) {
+                    Key::More => {}
+                    Key::Enter => return Ok(editor.take()),
+                    Key::Cancel => return Err(cancelled()),
+                    Key::End => return Err(ended()),
+                }
+            }
+        }
     }
 
-    /// Echo off on a terminal until dropped.
-    struct NoEcho<'fd> {
+    /// A terminal that echoes nothing and does no line editing or signals of
+    /// its own, until dropped ([`QuietLine`] does the editing).
+    struct Quiet<'fd> {
         fd: BorrowedFd<'fd>,
         saved: Termios,
     }
 
-    impl<'fd> NoEcho<'fd> {
+    impl<'fd> Quiet<'fd> {
         fn on(file: &'fd File) -> io::Result<Self> {
             let fd = file.as_fd();
             let saved = tcgetattr(fd)?;
             let mut quiet = saved.clone();
-            quiet.local_modes.remove(LocalModes::ECHO);
+            // Raw: no echo, no ICANON editing, no ISIG — a key at a time.
+            quiet.make_raw();
             // TCSAFLUSH, as `ssh` does for a passphrase: what was typed ahead
             // of the prompt is not taken as the beginning of the secret.
             tcsetattr(fd, OptionalActions::Flush, &quiet)?;
@@ -160,7 +333,7 @@ mod imp {
         }
     }
 
-    impl Drop for NoEcho<'_> {
+    impl Drop for Quiet<'_> {
         fn drop(&mut self) {
             best_effort(tcsetattr(self.fd, OptionalActions::Flush, &self.saved));
         }
@@ -279,6 +452,13 @@ mod imp {
         pub(super) const fn read_line(&self, _quiet: bool) -> io::Result<Zeroizing<Vec<u8>>> {
             match *self {}
         }
+
+        pub(super) const fn read_quiet_lines(
+            &self,
+            _complete: &mut dyn FnMut(&[u8]) -> bool,
+        ) -> io::Result<Zeroizing<Vec<u8>>> {
+            match *self {}
+        }
     }
 
     /// Raw mode: none here, so no value of this type exists.
@@ -313,7 +493,38 @@ pub const INPUT_TICK: Duration = Duration::from_millis(100);
 
 #[cfg(test)]
 mod tests {
-    use super::{is_yes, lines, one_line};
+    use super::{is_yes, lines, one_line, Key, QuietLine, CTRL_C, CTRL_D, CTRL_U, DELETE};
+
+    fn typed(keys: &[u8]) -> (Vec<Key>, Vec<u8>) {
+        let mut editor = QuietLine::new();
+        let keys = keys.iter().map(|&k| editor.key(k)).collect();
+        (keys, editor.take().to_vec())
+    }
+
+    /// With the terminal's line editing off, the prompt edits: a Backspace
+    /// takes a whole character, Ctrl-U the line, control keys type nothing.
+    #[test]
+    fn a_quiet_prompt_edits_the_line_itself() {
+        let (_, line) = typed("pä".as_bytes());
+        assert_eq!(line, "pä".as_bytes());
+        let mut keys = "pä".as_bytes().to_vec();
+        keys.push(DELETE);
+        assert_eq!(typed(&keys).1, b"p", "the two bytes of ä go together");
+        assert_eq!(typed(&[b'x', CTRL_U, b'y', 0x1b]).1, b"y");
+    }
+
+    /// Ctrl-C cancels instead of killing the process with echo off; Ctrl-D
+    /// ends input only on an empty line; CR LF is one Enter.
+    #[test]
+    fn a_quiet_prompt_cancels_ends_and_enters() {
+        assert_eq!(typed(&[b'a', CTRL_C]).0.last(), Some(&Key::Cancel));
+        assert_eq!(typed(&[CTRL_D]).0, [Key::End]);
+        assert_eq!(typed(&[b'a', CTRL_D]).0, [Key::More, Key::More]);
+        assert_eq!(
+            typed(b"a\r\nb\n").0,
+            [Key::More, Key::Enter, Key::More, Key::More, Key::Enter]
+        );
+    }
 
     /// What a hostile server or host name could try: clear the screen, move
     /// the cursor (also via the 8-bit CSI), ring the bell, add a fake line.

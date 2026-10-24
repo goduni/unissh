@@ -30,7 +30,8 @@ unissh login join   https://unissh.example.com        # a separate account (asks
 ```
 
 - **pair**: in a signed-in app, open Settings → Server → Add device, then paste the
-  seven lines it shows. The account's keys arrive over the end-to-end encrypted
+  seven lines it shows. They carry the pairing secret, so nothing of them is echoed,
+  only a dot per line. The account's keys arrive over the end-to-end encrypted
   pairing channel, and the server only relays it. You choose a master password
   for this machine's copy.
 - **escrow**: asks for the account password and Secret Key, then fetches the
@@ -71,8 +72,16 @@ from the terminal (`/dev/tty`, so pipes still work) or from an owner-only
 when the local copy is more than five minutes old; a sync that fails is a warning,
 and the command uses the copy on this machine. `--offline` never contacts the server.
 
-The interactive list locks the instance after 15 minutes without input; the next
-pick asks for the master password again.
+The interactive list locks the instance after 15 minutes without input and asks
+for the master password again, on the terminal even when a password file is set.
+A copy without a master password unlocks again with its kept Secret Key alone.
+
+A password prompt reads a key at a time with the terminal's signals off: Ctrl-C
+cancels it and puts the terminal back. `unissh ssh host -- cmd | head` ends when
+the reader does, with status 141 as `ssh` would. `unissh cp` downloads into a
+temporary file beside the destination and renames it into place when the copy is
+complete, so a failed copy leaves an existing file as it was. An upload, as with
+`scp`, writes the remote file in place.
 
 ## Data
 
@@ -91,8 +100,10 @@ with the unlocked keyset, using the same challenge signature as the app, and sig
 out when it is done.
 
 `unissh logout` revokes the device on the server and deletes this directory's
-UniSSH files. It warns first when a joined account has no other device, because
-deleting its data then loses the account. `--local` skips the server, for a
+UniSSH files, after a last sync so that nothing made here is lost with it. It warns
+first when a joined account has no other device, because deleting its data then
+loses the account; `--yes` skips the question but still prints the warning.
+`--local` skips the server, for a
 machine that can no longer reach it; revoke the device from another one afterwards.
 
 ## Not here (yet)

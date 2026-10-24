@@ -4673,8 +4673,8 @@ fn session_recording_captures_and_persists() {
 }
 
 /// A process that exits right after a session — the CLI — has to wait for the
-/// recording, which is written on a thread of its own: once the observer has
-/// heard of the close, `wait_for_recordings` returns only after the write.
+/// recording, which is written on a thread of its own: `wait_for_recordings`
+/// holds while the session is open and returns only after the write.
 #[test]
 fn wait_for_recordings_outlasts_the_detached_write() {
     let dir = tempfile::tempdir().unwrap();
@@ -4711,6 +4711,12 @@ fn wait_for_recordings_outlasts_the_detached_write() {
             unissh_ffi::PasswordFillMode::Off,
         )
         .unwrap();
+    // Still open: its recording is yet to be written, so the wait holds — a
+    // CLI that gave up on a slow close must not take that for "nothing left".
+    assert!(
+        !core.wait_for_recordings(200),
+        "an open recorded session counts"
+    );
     session.write(b"exit\n".to_vec()).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     while !observer.closed.load(std::sync::atomic::Ordering::SeqCst) {

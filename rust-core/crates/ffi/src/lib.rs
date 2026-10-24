@@ -1852,9 +1852,11 @@ impl Core {
     /// the vault; `true` once none is left, `false` on timeout.
     ///
     /// An SSH session's recording is written on a thread of its own after the
-    /// session ends — begun before the observer's `on_close` — so a process
-    /// that exits right after a session (a command-line client) calls this
-    /// first, or the recording is lost with the process.
+    /// session ends, so a process that exits right after a session (a
+    /// command-line client) calls this first, or the recording is lost with
+    /// the process. A recorded session counts from the moment it opens, so
+    /// this also waits out a close still under way — or one that never comes,
+    /// until the timeout.
     pub fn wait_for_recordings(&self, timeout_ms: u32) -> bool {
         self.recordings
             .wait_idle(std::time::Duration::from_millis(u64::from(timeout_ms)))
@@ -3947,9 +3949,9 @@ impl Core {
                         host: host_for_record,
                         user: user_for_record,
                         started_unix,
-                        in_flight: Arc::clone(&self.recordings),
                     }),
                     saved: std::sync::atomic::AtomicBool::new(false),
+                    pending: Mutex::new(Some(self.recordings.begin())),
                     // SSH: on_close lands on a tokio worker — see the field.
                     write_inline: false,
                 })
@@ -4031,9 +4033,9 @@ impl Core {
                         host: "localhost".to_owned(),
                         user: unissh_local_pty::os_username(),
                         started_unix,
-                        in_flight: Arc::clone(&self.recordings),
                     }),
                     saved: std::sync::atomic::AtomicBool::new(false),
+                    pending: Mutex::new(None),
                     // Local: on_close lands on the pty's waiter thread, which
                     // `close` is already waiting for — and auto-lock is right
                     // behind it. See the field.
@@ -9839,8 +9841,6 @@ struct RecordingSaver {
     host: String,
     user: String,
     started_unix: u64,
-    /// Where a detached write is counted, for [`Core::wait_for_recordings`].
-    in_flight: Arc<InFlight>,
 }
 
 impl RecordingSaver {
@@ -9899,6 +9899,13 @@ struct RecordingSink {
     recorder: Arc<SessionRecorder>,
     saver: Arc<RecordingSaver>,
     saved: std::sync::atomic::AtomicBool,
+    /// A detached write, counted for [`Core::wait_for_recordings`] from the
+    /// moment the session opens rather than the moment it closes: a process
+    /// that gives up waiting for a slow close still waits for the recording
+    /// that close will write. Handed to the writer thread in `on_close`;
+    /// dropped with the sink if the session never closes. `None` for an
+    /// inline write, which needs no waiting for.
+    pending: Mutex<Option<InFlightGuard>>,
     /// Write the recording on the thread that reported the close, instead of a
     /// detached one.
     ///
@@ -9938,9 +9945,9 @@ impl OutputSink for RecordingSink {
             }
             let saver = Arc::clone(&self.saver);
             let recorder = Arc::clone(&self.recorder);
-            // Counted from before the observer hears of the close, so whoever
-            // waits after seeing it waits for this write too.
-            let pending = self.saver.in_flight.begin();
+            // Counted since the session opened (see the field), so whoever
+            // waits — after seeing the close or not — waits for this write too.
+            let pending = lock_recover(&self.pending).take();
             std::thread::spawn(move || {
                 saver.save(&recorder);
                 drop(pending);

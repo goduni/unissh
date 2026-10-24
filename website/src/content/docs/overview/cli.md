@@ -65,7 +65,8 @@ unissh login pair
 ```
 
 Paste the seven lines the app shows, and keep the card open until pairing
-finishes. The account's keys travel over the end-to-end encrypted pairing
+finishes. They hold the pairing secret, so they are not echoed: a dot shows for
+each line received. The account's keys travel over the end-to-end encrypted pairing
 channel; the server only relays the messages.
 
 **The same account, by password and Secret Key.** This needs escrow sign-in to be
@@ -117,7 +118,13 @@ UNISSH_PASSWORD_FILE=~/.config/unissh-password unissh ssh web -- uptime
 A command that reads hosts syncs first when the local copy is more than five
 minutes old. If that sync fails, you get a warning and the command uses the copy
 on the machine. `--offline` never contacts the server, and `unissh sync` syncs now.
-The interactive list locks after 15 minutes without input.
+The interactive list locks after 15 minutes without input, and asks for the
+master password on the terminal again, even when a password file is set.
+
+Ctrl-C at a password prompt cancels it. `unissh ssh web -- cmd | head` stops
+when `head` does (status 141, as with `ssh`). `unissh cp` replaces a downloaded
+file only once the copy is complete, so a failed copy leaves the old one as it
+was; uploads are written in place, as `scp` does.
 
 Nothing that could resume a server session is stored. Each command that needs
 the server signs in with the unlocked keys and signs out when done.
@@ -129,8 +136,9 @@ unissh logout          # revokes this device on the server, deletes its data her
 unissh logout --local  # server unreachable: delete locally, revoke from another device
 ```
 
-If a joined account has no other device, `logout` says so first: deleting its
-data then loses the account.
+`logout` syncs once more before it deletes anything. If a joined account has no
+other device, it says so first: deleting its data then loses the account. With
+`--yes` the warning is still printed; only the question is skipped.
 
 ## What it does not do yet
 
