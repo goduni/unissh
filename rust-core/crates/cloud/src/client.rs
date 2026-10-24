@@ -177,39 +177,34 @@ pub fn url(base_url: &str, path: &str) -> String {
 /// `http://` is permitted ONLY for loopback hosts (localhost / 127.x / [::1]),
 /// which the integration tests and the local-eval stack use.
 pub fn validate_base_url(base_url: &str) -> CloudResult<()> {
+    // Parsed by the HTTP stack's own URL parser, so the host checked is the one
+    // it will connect to. A hand-rolled split can read a URL one way where the
+    // parser reads it another: `http://attacker.example\@127.0.0.1` looks like
+    // userinfo before a loopback host, but `\` ends the host for http(s).
+    let scheme_error = || {
+        CloudError::other(
+            "server URL must start with https:// (http:// allowed for localhost only)",
+        )
+    };
     let s = base_url.trim();
-    if let Some(rest) = s.strip_prefix("https://") {
-        return if rest.is_empty() {
-            Err(CloudError::other("server URL is missing a host"))
+    let parsed = reqwest::Url::parse(s).map_err(|e| {
+        if s.starts_with("https://") || s.starts_with("http://") {
+            CloudError::other(format!("server URL is not valid: {e}"))
         } else {
-            Ok(())
-        };
+            scheme_error()
+        }
+    })?;
+    let host = parsed.host_str().unwrap_or("");
+    match parsed.scheme() {
+        "https" if host.is_empty() => Err(CloudError::other("server URL is missing a host")),
+        "https" => Ok(()),
+        "http" if is_loopback_host(host.trim_start_matches('[').trim_end_matches(']')) => Ok(()),
+        "http" => Err(CloudError::other(format!(
+            "refusing plaintext http:// to non-loopback host \"{host}\": \
+             use https:// so tokens and data are encrypted in transit"
+        ))),
+        _ => Err(scheme_error()),
     }
-    if let Some(rest) = s.strip_prefix("http://") {
-        let host = url_host(rest).to_ascii_lowercase();
-        return if is_loopback_host(&host) {
-            Ok(())
-        } else {
-            Err(CloudError::other(format!(
-                "refusing plaintext http:// to non-loopback host \"{host}\": \
-                 use https:// so tokens and data are encrypted in transit"
-            )))
-        };
-    }
-    Err(CloudError::other(
-        "server URL must start with https:// (http:// allowed for localhost only)",
-    ))
-}
-
-/// The host of an URL's remainder after `scheme://`: no path, query or
-/// fragment, no `user@`, no port, no brackets around an IPv6 address.
-fn url_host(rest: &str) -> &str {
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let host_port = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
-    if let Some(v6) = host_port.strip_prefix('[') {
-        return v6.split_once(']').map_or(v6, |(h, _)| h);
-    }
-    host_port.split_once(':').map_or(host_port, |(h, _)| h)
 }
 
 /// `localhost`, or a loopback IP address — the name compared whole, so
@@ -531,6 +526,17 @@ mod base_url_tests {
         assert!(validate_base_url("http://localhost@attacker.example").is_err());
         assert!(validate_base_url("http://localhost:8080/v1").is_ok());
         assert!(validate_base_url("http://127.0.0.2:8443").is_ok());
+    }
+
+    /// The HTTP stack ends the host at a backslash; a check that split only
+    /// on `/` would see userinfo and a loopback host where the request goes to
+    /// the attacker's — in plaintext, with the bearer.
+    #[test]
+    fn a_host_hidden_behind_a_backslash_is_the_one_checked() {
+        assert!(validate_base_url("http://attacker.example\\@127.0.0.1").is_err());
+        assert!(validate_base_url("http://attacker.example\\@localhost:8080/").is_err());
+        assert!(validate_base_url("HTTP://LOCALHOST:8080").is_ok());
+        assert!(validate_base_url("http://127.1").is_ok());
     }
 }
 
