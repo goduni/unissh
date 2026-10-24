@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, type CSSProperties, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { useMeta } from "../store/meta";
@@ -6,9 +6,35 @@ import { useUi, type Route } from "../store/ui";
 import { useAsync } from "../util/useAsync";
 import { fmtNum } from "../util/format";
 import { MONO } from "../theme/tokens";
-import { Icon, type IconName } from "../ui/icons";
-import { KpiCard, Spinner, ZkBanner } from "../ui/primitives";
+import {
+  Card,
+  CardHeader,
+  EmptyState,
+  ErrorCard,
+  Missing,
+  Skeleton,
+  StatTile,
+  StatTiles,
+  ToneBadge,
+  ZkBanner,
+  type Tone,
+} from "../ui/primitives";
 import { Screen } from "./Screen";
+
+/** A fact's name: the panel's words in Geologica, a machine's in mono; 12 px muted. */
+const FACT_KEY: CSSProperties = { fontSize: 12, lineHeight: "16px", color: "var(--muted-foreground)" };
+const FACT_KEY_MONO: CSSProperties = { ...FACT_KEY, fontFamily: MONO };
+/** A machine's value: mono 12 px in full text. */
+const MONO_VALUE: CSSProperties = { fontFamily: MONO, fontSize: 12, lineHeight: "20px", color: "var(--foreground)" };
+/** A line of the attention card: the state as a word, then what it means. */
+const ATTENTION_ROW: CSSProperties = {
+  display: "flex",
+  flexWrap: "wrap",
+  alignItems: "center",
+  gap: "4px 12px",
+  minHeight: 36,
+  padding: "6px 16px",
+};
 
 export function Overview() {
   const { t } = useTranslation();
@@ -32,166 +58,147 @@ export function Overview() {
     }
   }, [adminOv.data, setCounts]);
 
-  const statusItems = [
-    { label: t("screen.overview.statusVersion"), value: version.data ? `${version.data.server}` : "…", icon: "shield" as const, mono: true },
+  const ov = adminOv.data;
+
+  // The instance in three facts: what runs, whether it answers, which generation.
+  const facts: { key: string; label: ReactNode; value: ReactNode }[] = [
     {
-      label: "readyz",
-      value: ready.loading ? "…" : ready.data ? "OK" : "FAIL",
-      icon: "activity" as const,
-      mono: false,
+      key: "version",
+      label: <span style={FACT_KEY}>{t("screen.overview.statusVersion")}</span>,
+      value: version.data ? (
+        <span style={MONO_VALUE}>{version.data.server}</span>
+      ) : version.loading ? (
+        <Skeleton width={72} height={14} />
+      ) : (
+        <Missing />
+      ),
     },
     {
-      label: "instance_generation",
-      value: adminOv.data ? fmtNum(adminOv.data.instance_generation) : "…",
-      icon: "layers" as const,
-      mono: true,
+      key: "readyz",
+      label: <span style={FACT_KEY_MONO}>readyz</span>,
+      value: ready.loading ? (
+        <Skeleton width={64} height={20} radius="var(--radius-sm)" />
+      ) : ready.data ? (
+        <ToneBadge tone="success">{t("screen.health.state.ok")}</ToneBadge>
+      ) : (
+        <ToneBadge tone="destructive">{t("screen.health.state.failing")}</ToneBadge>
+      ),
+    },
+    {
+      key: "instance_generation",
+      label: <span style={FACT_KEY_MONO}>instance_generation</span>,
+      value: ov ? (
+        <span style={MONO_VALUE}>{fmtNum(ov.instance_generation)}</span>
+      ) : adminOv.loading ? (
+        <Skeleton width={40} height={14} />
+      ) : (
+        <Missing />
+      ),
     },
   ];
 
-  const kpis: { label: string; value: string; icon: IconName; route: Route; delta?: string }[] = adminOv.data
-    ? [
-        { label: t("nav.accounts"), value: String(adminOv.data.accounts), icon: "server" as const, route: "accounts" as Route, delta: t("screen.overview.deltaOwners", { count: adminOv.data.owners }) },
-        { label: t("nav.devices"), value: String(adminOv.data.devices), icon: "fingerprint" as const, route: "devices" as Route, delta: t("screen.overview.deltaSessions", { count: adminOv.data.active_sessions }) },
-        { label: t("nav.vaults"), value: String(adminOv.data.vaults), icon: "lock" as const, route: "vaults" as Route },
-        { label: t("nav.objects"), value: fmtNum(adminOv.data.objects), icon: "layers" as const, route: "objects" as Route },
-        { label: t("nav.invites"), value: String(adminOv.data.pending_invites), icon: "tag" as const, route: "invites" as Route, delta: t("screen.overview.deltaPending") },
-        { label: "next_seq", value: fmtNum(adminOv.data.next_seq), icon: "refresh" as const, route: "maint" as Route },
-      ]
-    : [];
+  const tiles: { label: string; value: string; route: Route; note?: string }[] = [
+    {
+      label: t("nav.accounts"),
+      value: ov ? String(ov.accounts) : "",
+      route: "accounts",
+      note: ov ? t("screen.overview.deltaOwners", { count: ov.owners }) : undefined,
+    },
+    {
+      label: t("nav.devices"),
+      value: ov ? String(ov.devices) : "",
+      route: "devices",
+      note: ov ? t("screen.overview.deltaSessions", { count: ov.active_sessions }) : undefined,
+    },
+    { label: t("nav.vaults"), value: ov ? String(ov.vaults) : "", route: "vaults" },
+    { label: t("nav.objects"), value: ov ? fmtNum(ov.objects) : "", route: "objects" },
+    {
+      label: t("nav.invites"),
+      value: ov ? String(ov.pending_invites) : "",
+      route: "invites",
+      note: ov ? t("screen.overview.deltaPending") : undefined,
+    },
+    { label: "next_seq", value: ov ? fmtNum(ov.next_seq) : "", route: "maint" },
+  ];
+
+  // Only what is wrong or about to be: a warning or a failure, a line each. A healthy readyz is already said in the
+  // strip above; when nothing is wrong the card says so in one dashed row.
+  const attention: { key: string; tone: Extract<Tone, "warning" | "destructive">; title: string; desc: string }[] =
+    ready.loading || ready.data
+      ? []
+      : [
+          {
+            key: "readyz",
+            tone: "destructive",
+            title: t("screen.overview.readyzDownTitle"),
+            desc: t("screen.overview.readyzDownDesc"),
+          },
+        ];
 
   return (
     <Screen title={t("screen.overview.title")} sub={t("screen.overview.sub")}>
-      {/* status row */}
-      <div
-        style={{
-          display: "flex",
-          flexWrap: "wrap",
-          gap: 10,
-          alignItems: "center",
-          padding: "13px 16px",
-          background: "var(--bg1)",
-          border: "1px solid var(--line)",
-          borderRadius: 12,
-          marginBottom: 16,
-        }}
-      >
-        {statusItems.map((s, i) => (
-          <div
-            key={s.label}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              paddingRight: 18,
-              borderRight: i < statusItems.length - 1 ? "1px solid var(--line)" : undefined,
-            }}
-          >
-            <Icon name={s.icon} size={15} color="var(--txt3)" />
-            <div>
-              <div
-                style={{
-                  fontSize: 10.5,
-                  color: "var(--txt3)",
-                  textTransform: "uppercase",
-                  letterSpacing: 0.4,
-                  fontWeight: 600,
-                }}
-              >
-                {s.label}
-              </div>
-              <div style={{ fontSize: 13, fontWeight: 700, fontFamily: s.mono ? MONO : "inherit" }}>
-                {s.value}
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* KPI grid */}
-      {adminOv.loading && !adminOv.data ? (
-        <div style={{ display: "flex", justifyContent: "center", padding: 40 }}>
-          <Spinner />
-        </div>
-      ) : (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(168px, 1fr))",
-            gap: 12,
-            marginBottom: 18,
-          }}
-        >
-          {kpis.map((k) => (
-            <div key={k.label} className="hoverable">
-              <KpiCard
-                label={k.label}
-                value={k.value}
-                delta={k.delta}
-                deltaColor="var(--txt3)"
-                icon={k.icon}
-                onClick={() => go(k.route)}
-              />
+      {/* The instance: a ruled strip of facts. */}
+      <Card pad={false}>
+        <dl style={{ display: "flex", flexWrap: "wrap", margin: 0 }}>
+          {facts.map((f, i) => (
+            <div
+              key={f.key}
+              style={{
+                display: "grid",
+                gap: 4,
+                alignContent: "start",
+                minWidth: 0,
+                padding: "8px 16px",
+                borderLeft: i > 0 ? "1px solid var(--rule)" : undefined,
+              }}
+            >
+              <dt>{f.label}</dt>
+              <dd style={{ margin: 0, display: "flex", alignItems: "center", minHeight: 20 }}>{f.value}</dd>
             </div>
           ))}
-        </div>
+        </dl>
+      </Card>
+
+      {/* What needs attention: a line each, the state as a word, then what it means. */}
+      <Card pad={false}>
+        <CardHeader title={t("screen.overview.attentionTitle")} />
+        {ready.loading ? (
+          <div role="status" aria-busy="true" style={ATTENTION_ROW}>
+            <span className="u-sr-only">{t("common.loading")}</span>
+            <Skeleton width={96} height={20} radius="var(--radius-sm)" />
+            <Skeleton width={160} height={12} />
+          </div>
+        ) : attention.length === 0 ? (
+          // Absent, not broken: the compact dashed row, inset from the card's edges.
+          <div style={{ padding: 8 }}>
+            <EmptyState compact icon="check" title={t("screen.overview.attentionNone")} />
+          </div>
+        ) : (
+          <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+            {attention.map((a, i) => (
+              <li key={a.key} style={{ ...ATTENTION_ROW, borderTop: i > 0 ? "1px solid var(--rule)" : undefined }}>
+                <ToneBadge tone={a.tone}>{a.title}</ToneBadge>
+                <span style={{ minWidth: 0, color: "var(--muted-foreground)" }}>{a.desc}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+
+      {/* The figures of the instance: one card, each leading to its section. */}
+      {adminOv.error && !ov ? (
+        <ErrorCard message={adminOv.error} onRetry={adminOv.reload} retrying={adminOv.loading} />
+      ) : (
+        <StatTiles cols={3}>
+          {tiles.map((k) => (
+            <StatTile key={k.route} label={k.label} value={k.value} loading={!ov} onClick={() => go(k.route)}>
+              {k.note ? <span>{k.note}</span> : null}
+            </StatTile>
+          ))}
+        </StatTiles>
       )}
 
-      {/* warnings */}
-      <div
-        style={{
-          background: "var(--bg1)",
-          border: "1px solid var(--line)",
-          borderRadius: 14,
-          padding: "17px 19px",
-          marginBottom: 14,
-        }}
-      >
-        <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>{t("screen.overview.attentionTitle")}</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
-          <WarnRow
-            color={ready.data ? "var(--green)" : "var(--red)"}
-            icon={ready.data ? "check" : "alert"}
-            title={ready.data ? "readyz · OK" : t("screen.overview.readyzDownTitle")}
-            desc={ready.data ? t("screen.overview.readyzOkDesc") : t("screen.overview.readyzDownDesc")}
-          />
-        </div>
-      </div>
-
-      <ZkBanner>
-        <b style={{ color: "var(--txt)" }}>{t("zk.overview")}</b>
-      </ZkBanner>
+      <ZkBanner>{t("zk.overview")}</ZkBanner>
     </Screen>
-  );
-}
-
-function WarnRow({
-  color,
-  icon,
-  title,
-  desc,
-}: {
-  color: string;
-  icon: "alert" | "lock" | "check";
-  title: string;
-  desc: string;
-}) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        gap: 10,
-        alignItems: "flex-start",
-        padding: "10px 11px",
-        borderRadius: 10,
-        background: `color-mix(in srgb, ${color} 9%, transparent)`,
-        border: `1px solid color-mix(in srgb, ${color} 28%, transparent)`,
-      }}
-    >
-      <Icon name={icon} size={15} color={color} style={{ marginTop: 1 }} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--txt)" }}>{title}</div>
-        <div style={{ fontSize: 11.5, color: "var(--txt3)", marginTop: 1 }}>{desc}</div>
-      </div>
-    </div>
   );
 }

@@ -1,13 +1,15 @@
-import { useEffect, useState } from "react";
+import "./access.css";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { useUi } from "../store/ui";
 import { useAsync } from "../util/useAsync";
 import { fmtDate } from "../util/format";
 import { Icon } from "../ui/icons";
-import { Btn, Field, SecretRow } from "../ui/primitives";
+import { Btn, Field, InlineError, SecretRow, Segmented } from "../ui/primitives";
 import { Modal } from "../ui/overlays";
 import { useCopy } from "../ui/useCopy";
+import { Caution, DialogFoot, DialogTitle } from "./kit";
 
 const ROLES = ["member", "admin"] as const;
 const TTLS: { label: string; seconds: number }[] = [
@@ -16,11 +18,17 @@ const TTLS: { label: string; seconds: number }[] = [
   { label: "common.ttl7d", seconds: 604800 },
 ];
 
+// Field's own bottom margin is dropped: the body's 16 px gap spaces the fields.
+const FIELD = { marginBottom: 0 };
+
 export function InviteModal() {
   const { t } = useTranslation();
   const open = useUi((s) => s.inviteOpen);
   const close = useUi((s) => s.closeInvite);
   const bumpReload = useUi((s) => s.bumpReload);
+  const titleId = useId();
+  const descId = useId();
+  const spaceSelectId = useId();
 
   // The invite is scoped to a SPACE the caller admins (v2). The invitee joins that
   // space with the token; the server resolves the space from the token's intents.
@@ -36,7 +44,7 @@ export function InviteModal() {
   const [token, setToken] = useState<string | null>(null);
   const [expiresAt, setExpiresAt] = useState<number | null>(null);
   const [url, setUrl] = useState<string | null>(null);
-  const both = useCopy(1200);
+  const both = useCopy(1500);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -56,9 +64,18 @@ export function InviteModal() {
     if (open && !spaceId && spaceList.length) setSpaceId(spaceList[0].space_id);
   }, [open, spaceId, spaceList]);
 
+  // When the token appears the form is gone; the focus moves to the warning that says
+  // it is shown once, so it is read first and Tab stays inside the dialog.
+  const shownOnce = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (token) shownOnce.current?.focus();
+  }, [token]);
+
   if (!open) return null;
 
-  const issue = async () => {
+  const issue = async (e?: FormEvent) => {
+    e?.preventDefault();
+    if (busy) return;
     if (!spaceId) {
       setError(t("screen.invites.noSpaces"));
       return;
@@ -81,158 +98,121 @@ export function InviteModal() {
     }
   };
 
-  return (
-    <Modal onClose={close} width={440}>
-      <div style={{ padding: "20px 22px 0" }}>
-        <div style={{ fontSize: 16, fontWeight: 800 }}>{t("screen.invites.issueTitle")}</div>
-        <div style={{ fontSize: 12, color: "var(--txt3)", marginTop: 2 }}>
-          {t("screen.invites.issueSubtitle")}
-        </div>
-      </div>
+  const head = (
+    <DialogTitle
+      titleId={titleId}
+      title={t("screen.invites.issueTitle")}
+      descId={descId}
+      description={t("screen.invites.issueSubtitle")}
+    />
+  );
 
-      <div style={{ padding: "18px 22px" }}>
-        {token ? (
-          <>
-            <div
-              style={{
-                display: "flex",
-                gap: 10,
-                alignItems: "flex-start",
-                background: "color-mix(in srgb, var(--amber) 10%, transparent)",
-                border: "1px solid color-mix(in srgb, var(--amber) 32%, transparent)",
-                borderRadius: 10,
-                padding: "11px 13px",
-                marginBottom: 14,
-              }}
-            >
-              <Icon name="alert" size={15} color="var(--amber)" style={{ marginTop: 1 }} />
-              <div style={{ fontSize: 12, color: "var(--txt2)", lineHeight: 1.5 }}>
-                {t("screen.invites.shownOnce")}
-                <div style={{ marginTop: 4, color: "var(--txt)" }}>{t("screen.invites.deliverHint")}</div>
-              </div>
-            </div>
+  return (
+    <Modal onClose={close} width={460} labelledBy={titleId} describedBy={descId}>
+      {token ? (
+        <>
+          <div className="acc-dlg-body">
+            {head}
+            <Caution ref={shownOnce} focusable>
+              {t("screen.invites.shownOnce")}
+              <div style={{ marginTop: 4, fontWeight: 600 }}>{t("screen.invites.deliverHint")}</div>
+            </Caution>
             <SecretRow label={t("screen.invites.spaceIdLabel")} value={spaceId} />
-            <div style={{ height: 10 }} />
             <SecretRow label={t("screen.invites.tokenLabel")} value={token} />
-            {url ? (
-              <>
-                <div style={{ height: 10 }} />
-                <SecretRow label={t("screen.invites.urlLabel")} value={url} />
-              </>
-            ) : null}
+            {url ? <SecretRow label={t("screen.invites.urlLabel")} value={url} /> : null}
             {expiresAt ? (
-              <div style={{ fontSize: 11.5, color: "var(--txt3)", marginTop: 8 }}>
-                {t("screen.invites.expiresIn", { when: fmtDate(expiresAt) })}
-              </div>
+              <p className="acc-note">{t("screen.invites.expiresIn", { when: fmtDate(expiresAt) })}</p>
             ) : null}
+            {both.failed ? (
+              <p role="alert" className="acc-error">
+                {t("common.copyFailed")}
+              </p>
+            ) : null}
+          </div>
+          <DialogFoot>
+            <Btn variant="outline" onClick={close}>
+              {t("common.done")}
+            </Btn>
             <Btn
-              full
               variant="primary"
-              icon={both.copied ? "check" : "copy"}
+              icon={both.copied ? "check" : both.failed ? "x" : "copy"}
               onClick={() =>
                 both.copy(`${t("screen.invites.spaceIdLabel")}: ${spaceId}\n${t("screen.invites.tokenLabel")}: ${token}`)
               }
-              style={{ marginTop: 14 }}
             >
               {both.copied ? t("common.copied") : t("screen.invites.copyBoth")}
             </Btn>
-            <Btn full onClick={close} style={{ marginTop: 9 }}>
-              {t("common.done")}
-            </Btn>
-          </>
-        ) : (
-          <>
-            <Field label={t("screen.invites.spaceLabel")}>
+          </DialogFoot>
+        </>
+      ) : (
+        <form className="acc-dlg-form" onSubmit={issue} noValidate>
+          <div className="acc-dlg-body">
+            {head}
+            <Field
+              label={t("screen.invites.spaceLabel")}
+              htmlFor={spaceList.length === 0 ? undefined : spaceSelectId}
+              style={FIELD}
+            >
               {spaceList.length === 0 ? (
-                <div style={{ fontSize: 12.5, color: "var(--txt3)" }}>
+                // Absent, or still on its way: a dashed placeholder holding the field's place.
+                <div className="acc-absent" role={spaces.loading ? "status" : undefined}>
                   {spaces.loading ? t("common.loading") : t("screen.invites.noSpaces")}
                 </div>
               ) : (
-                <select
-                  value={spaceId}
-                  onChange={(e) => setSpaceId(e.target.value)}
-                  style={{
-                    width: "100%",
-                    height: 34,
-                    borderRadius: 8,
-                    background: "var(--bg2)",
-                    border: "1px solid var(--line)",
-                    color: "var(--txt)",
-                    fontFamily: "inherit",
-                    fontSize: 13,
-                    padding: "0 10px",
-                  }}
-                >
-                  {spaceList.map((s) => (
-                    <option key={s.space_id} value={s.space_id}>
-                      {s.name}
-                    </option>
-                  ))}
-                </select>
+                <div style={{ position: "relative" }}>
+                  <select
+                    id={spaceSelectId}
+                    value={spaceId}
+                    onChange={(e) => setSpaceId(e.target.value)}
+                    className="u-input acc-select"
+                    autoFocus
+                  >
+                    {spaceList.map((s) => (
+                      <option key={s.space_id} value={s.space_id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                  <Icon
+                    name="chevronDown"
+                    size={16}
+                    color="var(--muted-foreground)"
+                    style={{ position: "absolute", top: 8, right: 10, pointerEvents: "none" }}
+                  />
+                </div>
               )}
             </Field>
-            <Field label={t("screen.invites.roleLabel")}>
-              <div style={{ display: "flex", gap: 8 }}>
-                {ROLES.map((r) => (
-                  <Chip key={r} active={role === r} onClick={() => setRole(r)}>
-                    {r}
-                  </Chip>
-                ))}
-              </div>
+            <Field label={t("screen.invites.roleLabel")} style={FIELD}>
+              <Segmented
+                ariaLabel={t("screen.invites.roleLabel")}
+                options={ROLES.map((r) => ({ value: r, label: r }))}
+                value={role}
+                onChange={setRole}
+              />
             </Field>
-            <Field label={t("screen.invites.ttlLabel")}>
-              <div style={{ display: "flex", gap: 8 }}>
-                {TTLS.map((x) => (
-                  <Chip key={x.seconds} active={ttl === x.seconds} onClick={() => setTtl(x.seconds)}>
-                    {t(x.label)}
-                  </Chip>
-                ))}
-              </div>
+            <Field label={t("screen.invites.ttlLabel")} style={FIELD}>
+              <Segmented
+                ariaLabel={t("screen.invites.ttlLabel")}
+                options={TTLS.map((x) => ({ value: String(x.seconds), label: t(x.label) }))}
+                value={String(ttl)}
+                onChange={(v) => setTtl(Number(v))}
+              />
             </Field>
-            <div style={{ fontSize: 11.5, color: "var(--txt3)", lineHeight: 1.5, marginTop: -4, marginBottom: 12 }}>
-              {t("screen.invites.advisoryNote")}
-            </div>
+            {/* The bound of what the role means, said before the click. */}
+            <p className="acc-copy">{t("screen.invites.advisoryNote")}</p>
 
-            {error ? (
-              <div style={{ fontSize: 12.5, color: "var(--red)", marginBottom: 12, display: "flex", gap: 6, alignItems: "center" }}>
-                <Icon name="alert" size={14} color="var(--red)" />
-                {error}
-              </div>
-            ) : null}
-
-            <div style={{ display: "flex", gap: 9 }}>
-              <Btn full onClick={close}>
-                {t("common.cancel")}
-              </Btn>
-              <Btn full variant="primary" loading={busy} disabled={spaceList.length === 0} onClick={issue}>
-                {t("screen.invites.issueButton")}
-              </Btn>
-            </div>
-          </>
-        )}
-      </div>
+            {error ? <InlineError>{error}</InlineError> : null}
+          </div>
+          <DialogFoot>
+            <Btn variant="outline" onClick={close}>
+              {t("common.cancel")}
+            </Btn>
+            <Btn variant="primary" type="submit" loading={busy} disabled={spaceList.length === 0}>
+              {t("screen.invites.issueButton")}
+            </Btn>
+          </DialogFoot>
+        </form>
+      )}
     </Modal>
-  );
-}
-
-function Chip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        flex: 1,
-        padding: "8px 0",
-        borderRadius: 8,
-        border: active ? "1px solid var(--accentLine)" : "1px solid var(--line)",
-        background: active ? "var(--accentSoft)" : "var(--bg2)",
-        color: active ? "var(--accent)" : "var(--txt2)",
-        fontFamily: "inherit",
-        fontSize: 13,
-        fontWeight: 600,
-        cursor: "pointer",
-      }}
-    >
-      {children}
-    </button>
   );
 }

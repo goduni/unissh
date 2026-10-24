@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Login } from "./access/Login";
 import { pendingOidcRedirect, resumeOidcLogin } from "./api/auth-service";
 import { loadWasmProvider } from "./crypto/wasm-provider";
+import { Wordmark } from "./shell/Mark";
 import { Shell } from "./shell/Shell";
 import { useSession } from "./store/session";
 import { useUi } from "./store/ui";
@@ -14,22 +15,38 @@ import { ThemeProvider } from "./theme/ThemeProvider";
 let oidcResumeStarted = false;
 
 /** Minimal centered "completing sign-in" screen shown while the OIDC redirect is
- *  being resolved (code exchange → callback → session). */
+ *  being resolved (code exchange → callback → session): the wordmark and one
+ *  muted sentence on the ground. */
 function OidcResuming() {
   const { t } = useTranslation();
   return (
     <div
       style={{
-        height: "100vh",
+        minHeight: "100dvh",
         display: "flex",
+        flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
-        background: "var(--desk)",
-        color: "var(--txt2)",
-        fontSize: 14,
+        gap: 12,
+        padding: 16,
+        background: "var(--background)",
+        color: "var(--foreground)",
       }}
     >
-      {t("access.onb.sso_resuming")}
+      <Wordmark />
+      <p
+        role="status"
+        style={{
+          margin: 0,
+          maxWidth: "48ch",
+          color: "var(--muted-foreground)",
+          fontSize: 14,
+          lineHeight: "20px",
+          textAlign: "center",
+        }}
+      >
+        {t("access.onb.sso_resuming")}
+      </p>
     </div>
   );
 }

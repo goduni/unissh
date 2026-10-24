@@ -1,4 +1,5 @@
-import { useEffect, useState, type ReactNode } from "react";
+import "./access.css";
+import { useEffect, useId, useState, type FormEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { loginWithEscrow, NotAKeysetFileError, oidcLogin, restoreFromKit } from "../api/auth-service";
@@ -6,85 +7,71 @@ import { ApiError } from "../api/errors";
 import type { InstanceInfo } from "../api/types";
 import { CryptoUnavailableError } from "../crypto/provider";
 import { useCryptoReady } from "../crypto/wasm-provider";
+import { Wordmark } from "../shell/Mark";
 import { usePrefs } from "../store/prefs";
-import { MONO } from "../theme/tokens";
-import { Icon, type IconName } from "../ui/icons";
-import { Btn, Field, InlineError, Segmented, TextInput } from "../ui/primitives";
+import { Icon } from "../ui/icons";
+import { Btn, Field, InlineError, TextInput } from "../ui/primitives";
 import { ClaimModal } from "./ClaimModal";
+import { CautionLine, LineTabs, panelId, SecretInput, tabId, ThemeToggle } from "./kit";
+import { PromptLines } from "./PromptLines";
 
-function Brand() {
+// Field's own bottom margin is dropped: the form's 16 px gap spaces the fields.
+const FIELD = { marginBottom: 0 };
+
+// The way in: the one split screen. A rail-coloured panel with the drawn device and the
+// wordmark (5 parts) beside the form (4 parts, at most 360 px); on phones the panel is a
+// band of at least 160 px above the form.
+function Frame({ children }: { children: ReactNode }) {
   const { t } = useTranslation();
   return (
-    <div style={{ padding: "24px 24px 0", display: "flex", gap: 13, alignItems: "center" }}>
-      <span style={{ position: "relative", width: 34, height: 34 }}>
-        <span
-          style={{
-            position: "absolute",
-            inset: 0,
-            borderRadius: 9,
-            background: "linear-gradient(140deg, var(--accent), var(--purple))",
-            boxShadow: "0 6px 18px -6px var(--accent)",
-          }}
-        />
-        <span
-          style={{
-            position: "absolute",
-            inset: 0,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: "#fff",
-            fontFamily: MONO,
-            fontWeight: 700,
-            fontSize: 15,
-          }}
-        >
-          ›_
+    <div className="acc-login">
+      <header className="acc-panel">
+        <PromptLines />
+        <span style={{ position: "relative" }}>
+          <Wordmark />
         </span>
-      </span>
-      <div>
-        <div style={{ fontSize: 17, fontWeight: 800 }}>
-          Uni<span style={{ color: "var(--accent)" }}>SSH</span> Admin
+        <p className="acc-panel-note">{t("access.onb.server_subtitle")}</p>
+      </header>
+      <div className="acc-side">
+        <div className="acc-topbar">
+          <ThemeToggle />
         </div>
-        <div style={{ fontSize: 12, color: "var(--txt3)" }}>{t("access.onb.server_subtitle")}</div>
+        <main className="acc-main">
+          <div className="acc-column">{children}</div>
+        </main>
       </div>
     </div>
   );
 }
 
-function Card({ children }: { children: ReactNode }) {
+/** The headline of the login page: 24 / 600, its only use. */
+function Headline({ children }: { children: ReactNode }) {
   return (
-    <div
+    <h1
       style={{
-        height: "100vh",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        background: "var(--desk)",
-        padding: 24,
+        margin: 0,
+        fontSize: 24,
+        fontWeight: 600,
+        lineHeight: 1.333,
+        letterSpacing: "-0.025em",
+        textWrap: "balance",
+        color: "var(--foreground)",
       }}
     >
-      <div
-        style={{
-          width: 440,
-          maxWidth: "100%",
-          background: "var(--bg1)",
-          border: "1px solid var(--line)",
-          borderRadius: 16,
-          boxShadow: "var(--shadow)",
-          overflow: "hidden",
-        }}
-      >
-        {children}
-      </div>
-    </div>
+      {children}
+    </h1>
   );
+}
+
+function Copy({ children }: { children: ReactNode }) {
+  return <p className="acc-copy">{children}</p>;
 }
 
 export function Login() {
   const { t } = useTranslation();
   const instanceUrl = usePrefs((s) => s.instanceUrl);
   const setInstanceUrl = usePrefs((s) => s.setInstanceUrl);
+  const urlId = useId();
 
   const [url, setUrl] = useState(instanceUrl);
   const [info, setInfo] = useState<InstanceInfo | null>(null);
@@ -124,159 +111,184 @@ export function Login() {
     if (!info.claimed) {
       return (
         <>
-          <Card>
-            <Brand />
-            <div style={{ padding: "18px 24px 24px" }}>
-              <InstanceSummary info={info} onChange={back} />
-              <div style={{ fontSize: 12.5, color: "var(--txt2)", lineHeight: 1.55, margin: "14px 0 16px" }}>
-                {t("access.onb.disc_unclaimed")}
-              </div>
-            </div>
-          </Card>
+          <Frame>
+            <Headline>{t("access.onb.claim_title")}</Headline>
+            <InstanceSummary info={info} onChange={back} />
+            <Copy>{t("access.onb.disc_unclaimed")}</Copy>
+          </Frame>
           <ClaimModal instanceUrl={url.trim()} onClose={back} />
         </>
       );
     }
     return (
-      <Card>
-        <Brand />
-        <div style={{ padding: "18px 24px 24px" }}>
-          <InstanceSummary info={info} onChange={back} />
-          <div style={{ height: 14 }} />
-          <LoginForm instanceUrl={url.trim()} info={info} />
-        </div>
-      </Card>
+      <Frame>
+        <Headline>{t("access.onb.headline_signin")}</Headline>
+        <InstanceSummary info={info} onChange={back} />
+        <LoginForm instanceUrl={url.trim()} info={info} />
+      </Frame>
     );
   }
 
   // ── Step 0: server address ───────────────────────────────────
+  const submitUrl = (e: FormEvent) => {
+    e.preventDefault();
+    if (probing) return;
+    void probe(url);
+  };
   return (
-    <Card>
-      <Brand />
-      <div style={{ padding: "20px 24px 24px" }}>
-        <div style={{ fontSize: 12.5, color: "var(--txt2)", lineHeight: 1.55, marginBottom: 16 }}>
-          {t("access.onb.disc_intro")}
-        </div>
+    <Frame>
+      <div className="acc-stack">
+        <Headline>{t("access.onb.headline_connect")}</Headline>
+        <Copy>{t("access.onb.disc_intro")}</Copy>
+      </div>
+      <form className="acc-form" onSubmit={submitUrl} noValidate>
         <Field
           label={t("access.onb.server_url_label")}
           tag={t("access.onb.server_url_tag")}
           hint={t("access.onb.server_url_hint")}
+          htmlFor={urlId}
+          style={FIELD}
         >
-          <TextInput value={url} onChange={setUrl} placeholder="https://unissh.example:8443" mono />
+          <TextInput
+            id={urlId}
+            value={url}
+            onChange={setUrl}
+            placeholder="https://unissh.example:8443"
+            mono
+            autoFocus
+          />
         </Field>
         {error ? <InlineError>{error}</InlineError> : null}
-        <Btn variant="primary" full icon="enter" loading={probing} onClick={() => void probe(url)}>
+        <Btn variant="primary" type="submit" full loading={probing}>
           {t("access.onb.disc_continue")}
         </Btn>
-      </div>
-    </Card>
+      </form>
+    </Frame>
   );
 }
 
 function InstanceSummary({ info, onChange }: { info: InstanceInfo; onChange: () => void }) {
   const { t } = useTranslation();
+  const nameId = useId();
   return (
     <div
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 11,
-        padding: "11px 13px",
-        borderRadius: 12,
-        border: "1px solid var(--line)",
-        background: "var(--bg2)",
+        gap: 12,
+        minHeight: 48,
+        padding: "8px 12px",
+        borderRadius: "var(--radius-md)",
+        // Solid: a claimed instance is there to sign in to; dashed: not set up yet.
+        border: `1px ${info.claimed ? "solid" : "dashed"} var(--border)`,
+        background: info.claimed ? "var(--card)" : "transparent",
       }}
     >
-      <Icon name={info.claimed ? "check" : "database"} size={16} color="var(--txt3)" />
+      <Icon name={info.claimed ? "check" : "database"} size={16} color="var(--muted-foreground)" />
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis" }}>
+        <div
+          id={nameId}
+          style={{
+            fontSize: 13,
+            fontWeight: 600,
+            lineHeight: "18px",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
           {info.name || t("access.onb.disc_untitled")}
         </div>
-        <div style={{ fontSize: 11, color: "var(--txt3)", fontFamily: MONO }}>v{info.version}</div>
+        <div
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: 12,
+            lineHeight: "16px",
+            color: "var(--muted-foreground)",
+          }}
+        >
+          v{info.version}
+        </div>
       </div>
-      <button
-        type="button"
-        onClick={onChange}
-        style={{
-          background: "none",
-          border: "none",
-          color: "var(--accent)",
-          fontFamily: "inherit",
-          fontSize: 12,
-          fontWeight: 600,
-          cursor: "pointer",
-          padding: "4px 6px",
-        }}
-      >
+      <button type="button" className="u-link" aria-describedby={nameId} onClick={onChange}>
         {t("access.onb.disc_change")}
       </button>
     </div>
   );
 }
 
-// The claimed-instance sign-in menu. A small segmented control chooses the way in:
-// "Identity" (escrow) and "Emergency Kit" (offline file restore) are always offered;
-// "SSO" appears only when the instance advertises an OIDC provider (`info.oidc`) —
-// never a dead entry. There is no "Reconnect" concept in the panel.
+// The claimed-instance sign-in menu. Line tabs choose the way in (each shows its own
+// panel): "Identity" (escrow) and "Emergency Kit" (offline file restore) are always
+// offered; "SSO" appears only when the instance advertises an OIDC provider
+// (`info.oidc`) — never a dead entry. There is no "Reconnect" concept in the panel.
 type SignInMode = "identity" | "kit" | "sso";
 
 function LoginForm({ instanceUrl, info }: { instanceUrl: string; info: InstanceInfo }) {
   const { t } = useTranslation();
   const ssoEnabled = !!info.oidc;
   const [mode, setMode] = useState<SignInMode>("identity");
+  // The first field takes the focus on arrival only; after a switch it stays on the tab.
+  const [switched, setSwitched] = useState(false);
+  const base = useId();
 
-  const tabs: { value: SignInMode; label: string; icon: IconName }[] = [
-    { value: "identity", label: t("access.onb.signin_tab_identity"), icon: "fingerprint" },
-    { value: "kit", label: t("access.onb.signin_tab_kit"), icon: "file" },
+  const tabs: { value: SignInMode; label: string }[] = [
+    { value: "identity", label: t("access.onb.signin_tab_identity") },
+    { value: "kit", label: t("access.onb.signin_tab_kit") },
   ];
   if (ssoEnabled) {
-    tabs.push({ value: "sso", label: t("access.onb.signin_tab_sso"), icon: "enter" });
+    tabs.push({ value: "sso", label: t("access.onb.signin_tab_sso") });
   }
+
+  const choose = (m: SignInMode) => {
+    setSwitched(true);
+    setMode(m);
+  };
 
   return (
     <>
-      <Segmented options={tabs} value={mode} onChange={setMode} />
-      <div style={{ height: 16 }} />
-      {mode === "identity" ? <IdentitySignIn instanceUrl={instanceUrl} /> : null}
-      {mode === "kit" ? <RestoreSignIn instanceUrl={instanceUrl} /> : null}
-      {mode === "sso" ? <SsoSignIn instanceUrl={instanceUrl} /> : null}
+      <LineTabs
+        tabs={tabs}
+        value={mode}
+        onChange={choose}
+        idBase={base}
+        ariaLabel={t("access.onb.signin_method")}
+      />
+      <div role="tabpanel" id={panelId(base, mode)} aria-labelledby={tabId(base, mode)}>
+        {mode === "identity" ? <IdentitySignIn instanceUrl={instanceUrl} autoFocus={!switched} /> : null}
+        {mode === "kit" ? <RestoreSignIn instanceUrl={instanceUrl} /> : null}
+        {mode === "sso" ? <SsoSignIn instanceUrl={instanceUrl} /> : null}
+      </div>
     </>
   );
 }
 
-// ── Crypto-unavailable notice (shared by the keyset paths) ─────
-function CryptoWarn() {
-  const { t } = useTranslation();
-  return (
-    <div
-      style={{
-        fontSize: 11.5,
-        color: "var(--amber)",
-        marginBottom: 12,
-        display: "flex",
-        gap: 6,
-        alignItems: "center",
-      }}
-    >
-      <Icon name="alert" size={13} color="var(--amber)" />
-      {t("access.onb.ks_crypto_warn")}
-    </div>
-  );
-}
-
 // ── Sign in with your identity (escrow: handle + password + Secret Key) ─────
-function IdentitySignIn({ instanceUrl }: { instanceUrl: string }) {
+function IdentitySignIn({ instanceUrl, autoFocus }: { instanceUrl: string; autoFocus: boolean }) {
   const { t } = useTranslation();
+  const handleId = useId();
+  const passwordId = useId();
+  const secretId = useId();
   const [handle, setHandle] = useState("");
   const [password, setPassword] = useState("");
   const [secretKey, setSecretKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Which field a refusal is about (said under it); null: the server's answer.
+  const [invalid, setInvalid] = useState<"handle" | "secret" | null>(null);
   const cryptoReady = useCryptoReady();
 
-  const submit = async () => {
-    if (!handle.trim()) return setError(t("access.onb.login_err_no_handle"));
-    if (!secretKey.trim()) return setError(t("access.onb.login_err_no_secret"));
+  const submit = async (e?: FormEvent) => {
+    e?.preventDefault();
+    if (busy) return;
+    if (!handle.trim()) {
+      setInvalid("handle");
+      return setError(t("access.onb.login_err_no_handle"));
+    }
+    if (!secretKey.trim()) {
+      setInvalid("secret");
+      return setError(t("access.onb.login_err_no_secret"));
+    }
+    setInvalid(null);
     setError(null);
     setBusy(true);
     try {
@@ -299,61 +311,113 @@ function IdentitySignIn({ instanceUrl }: { instanceUrl: string }) {
     }
   };
 
+  // Editing the field a refusal named clears that refusal.
+  const clearIf = (field: "handle" | "secret") => {
+    if (invalid === field) {
+      setInvalid(null);
+      setError(null);
+    }
+  };
+
   return (
-    <>
-      <div style={{ fontSize: 12.5, color: "var(--txt2)", lineHeight: 1.55, marginBottom: 14 }}>
-        {t("access.onb.login_intro")}
-      </div>
+    <form className="acc-form" onSubmit={submit} noValidate>
+      <Copy>{t("access.onb.login_intro")}</Copy>
       <Field
         label={t("access.onb.login_handle_label")}
         tag={t("access.onb.login_handle_tag")}
         hint={t("access.onb.login_handle_hint")}
+        error={invalid === "handle" ? error : null}
+        htmlFor={handleId}
+        style={FIELD}
       >
         <TextInput
+          id={handleId}
           value={handle}
-          onChange={setHandle}
+          onChange={(v) => {
+            setHandle(v);
+            clearIf("handle");
+          }}
           placeholder={t("access.onb.login_handle_ph")}
           mono
+          invalid={invalid === "handle"}
+          autoComplete="username"
+          autoFocus={autoFocus}
         />
       </Field>
       <Field
         label={t("access.onb.ks_pwd_label")}
         tag={t("access.onb.ks_pwd_tag")}
         hint={t("access.onb.ks_pwd_hint")}
+        htmlFor={passwordId}
+        style={FIELD}
       >
-        <TextInput type="password" value={password} onChange={setPassword} placeholder="••••••••" mono />
+        <TextInput
+          id={passwordId}
+          type="password"
+          value={password}
+          onChange={setPassword}
+          placeholder="••••••••"
+          mono
+          autoComplete="current-password"
+        />
       </Field>
       <Field
         label={t("access.onb.ks_secretkey_label")}
         tag={t("access.onb.ks_secretkey_tag")}
         hint={t("access.onb.ks_secretkey_hint")}
+        error={invalid === "secret" ? error : null}
+        htmlFor={secretId}
+        style={FIELD}
       >
-        <TextInput value={secretKey} onChange={setSecretKey} placeholder="hex" mono />
+        <SecretInput
+          id={secretId}
+          value={secretKey}
+          onChange={(v) => {
+            setSecretKey(v);
+            clearIf("secret");
+          }}
+          placeholder="hex"
+          invalid={invalid === "secret"}
+        />
       </Field>
 
-      {!cryptoReady ? <CryptoWarn /> : null}
-      {error ? <InlineError>{error}</InlineError> : null}
+      {!cryptoReady ? <CautionLine>{t("access.onb.ks_crypto_warn")}</CautionLine> : null}
+      {error && !invalid ? <InlineError>{error}</InlineError> : null}
 
-      <Btn variant="primary" full icon="enter" loading={busy} onClick={submit}>
+      <Btn variant="primary" type="submit" full loading={busy}>
         {t("access.onb.login_btn")}
       </Btn>
-    </>
+    </form>
   );
 }
 
 // ── Restore from Emergency Kit (offline: identity.kit file + password + Secret Key) ──
 function RestoreSignIn({ instanceUrl }: { instanceUrl: string }) {
   const { t } = useTranslation();
+  const fileId = useId();
+  const passwordId = useId();
+  const secretId = useId();
   const [file, setFile] = useState<File | null>(null);
   const [password, setPassword] = useState("");
   const [secretKey, setSecretKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Which field a refusal is about (said under it); null: the unlock's answer.
+  const [invalid, setInvalid] = useState<"file" | "secret" | null>(null);
   const cryptoReady = useCryptoReady();
 
-  const submit = async () => {
-    if (!file) return setError(t("access.onb.restore_err_no_file"));
-    if (!secretKey.trim()) return setError(t("access.onb.login_err_no_secret"));
+  const submit = async (e?: FormEvent) => {
+    e?.preventDefault();
+    if (busy) return;
+    if (!file) {
+      setInvalid("file");
+      return setError(t("access.onb.restore_err_no_file"));
+    }
+    if (!secretKey.trim()) {
+      setInvalid("secret");
+      return setError(t("access.onb.login_err_no_secret"));
+    }
+    setInvalid(null);
     setError(null);
     setBusy(true);
     try {
@@ -383,40 +447,88 @@ function RestoreSignIn({ instanceUrl }: { instanceUrl: string }) {
     }
   };
 
+  const clearIf = (field: "file" | "secret") => {
+    if (invalid === field) {
+      setInvalid(null);
+      setError(null);
+    }
+  };
+
   return (
-    <>
-      <div style={{ fontSize: 12.5, color: "var(--txt2)", lineHeight: 1.55, marginBottom: 14 }}>
-        {t("access.onb.restore_intro")}
-      </div>
+    <form className="acc-form" onSubmit={submit} noValidate>
+      <Copy>{t("access.onb.restore_intro")}</Copy>
       <Field
         label={t("access.onb.restore_file_label")}
         tag={t("access.onb.restore_file_tag")}
-        hint={file ? file.name : t("access.onb.restore_file_hint")}
+        tagMono
+        hint={
+          file ? (
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--foreground)" }}>
+              {file.name}
+            </span>
+          ) : (
+            t("access.onb.restore_file_hint")
+          )
+        }
+        error={invalid === "file" ? error : null}
+        htmlFor={fileId}
+        style={FIELD}
       >
-        <TextInput type="file" accept=".kit,.keyset" onFile={setFile} />
+        <TextInput
+          id={fileId}
+          type="file"
+          accept=".kit,.keyset"
+          invalid={invalid === "file"}
+          onFile={(picked) => {
+            setFile(picked);
+            clearIf("file");
+          }}
+        />
       </Field>
       <Field
         label={t("access.onb.ks_pwd_label")}
         tag={t("access.onb.ks_pwd_tag")}
         hint={t("access.onb.ks_pwd_hint")}
+        htmlFor={passwordId}
+        style={FIELD}
       >
-        <TextInput type="password" value={password} onChange={setPassword} placeholder="••••••••" mono />
+        <TextInput
+          id={passwordId}
+          type="password"
+          value={password}
+          onChange={setPassword}
+          placeholder="••••••••"
+          mono
+          autoComplete="current-password"
+        />
       </Field>
       <Field
         label={t("access.onb.ks_secretkey_label")}
         tag={t("access.onb.ks_secretkey_tag")}
         hint={t("access.onb.ks_secretkey_hint")}
+        error={invalid === "secret" ? error : null}
+        htmlFor={secretId}
+        style={FIELD}
       >
-        <TextInput value={secretKey} onChange={setSecretKey} placeholder="hex" mono />
+        <SecretInput
+          id={secretId}
+          value={secretKey}
+          onChange={(v) => {
+            setSecretKey(v);
+            clearIf("secret");
+          }}
+          placeholder="hex"
+          invalid={invalid === "secret"}
+        />
       </Field>
 
-      {!cryptoReady ? <CryptoWarn /> : null}
-      {error ? <InlineError>{error}</InlineError> : null}
+      {!cryptoReady ? <CautionLine>{t("access.onb.ks_crypto_warn")}</CautionLine> : null}
+      {error && !invalid ? <InlineError>{error}</InlineError> : null}
 
-      <Btn variant="primary" full icon="enter" loading={busy} onClick={submit}>
+      <Btn variant="primary" type="submit" full loading={busy}>
         {t("access.onb.restore_btn")}
       </Btn>
-    </>
+    </form>
   );
 }
 
@@ -441,15 +553,13 @@ function SsoSignIn({ instanceUrl }: { instanceUrl: string }) {
   };
 
   return (
-    <>
-      <div style={{ fontSize: 12.5, color: "var(--txt2)", lineHeight: 1.55, marginBottom: 14 }}>
-        {t("access.onb.sso_hint")}
-      </div>
-      {!cryptoReady ? <CryptoWarn /> : null}
+    <div className="acc-form">
+      <Copy>{t("access.onb.sso_hint")}</Copy>
+      {!cryptoReady ? <CautionLine>{t("access.onb.ks_crypto_warn")}</CautionLine> : null}
       {error ? <InlineError>{error}</InlineError> : null}
-      <Btn variant="primary" full icon="enter" loading={busy} onClick={startSso}>
+      <Btn variant="primary" full loading={busy} onClick={startSso}>
         {t("access.onb.sso_cta")}
       </Btn>
-    </>
+    </div>
   );
 }

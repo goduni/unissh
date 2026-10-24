@@ -1,34 +1,38 @@
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import type { AccountRow } from "../api/types";
 import { usePrefs } from "../store/prefs";
 import { useUi } from "../store/ui";
 import { useAsync } from "../util/useAsync";
+import { truncId } from "../util/bytes";
 import { DataTable, type Column } from "../ui/DataTable";
-import { Icon } from "../ui/icons";
+import { Icon, type IconName } from "../ui/icons";
 import { Drawer } from "../ui/overlays";
 import {
   Avatar,
   Btn,
+  Card,
+  EmptyState,
+  ErrorCard,
+  IconBtn,
   PubkeyChip,
+  SectionLabel,
   Segmented,
-  Spinner,
-  StatusDot,
+  Skeleton,
+  StateBadge,
+  SummaryCount,
+  SummaryLine,
+  SummaryPart,
   Tag,
+  TextInput,
+  Well,
   ZkBanner,
   initialsOf,
 } from "../ui/primitives";
 import { Screen } from "./Screen";
 import { MONO } from "../theme/tokens";
-
-// Seed the avatar color from a char-hash of account_id (same hash as the Directory
-// list / Spaces tile) — seeding on .length collapses nearly every account onto one color.
-const seedOf = (id: string) => {
-  let h = 0;
-  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
-  return Math.abs(h);
-};
+import "./identity.css";
 
 export function Accounts() {
   const { t } = useTranslation();
@@ -40,7 +44,7 @@ export function Accounts() {
 }
 
 function AccountsBody() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const density = usePrefs((s) => s.density);
   const setDensity = usePrefs((s) => s.setDensity);
   const reloadTick = useUi((s) => s.reloadTick);
@@ -65,133 +69,177 @@ function AccountsBody() {
 
   const nameOf = (a: AccountRow) => a.display_name || a.handle || "—";
 
+  // The summary line: how many, what the filter found, how many own the instance and how many are switched off.
+  const query = q.trim();
+  const reading = data.loading && accounts.length === 0;
+  const n = (v: number) => v.toLocaleString(i18n.language);
+  const owners = accounts.filter((a) => a.is_owner).length;
+  const off = accounts.filter((a) => a.status === "disabled").length;
+  const summary = (
+    <>
+      {query ? (
+        <SummaryCount>{t("common.found", { n: n(filtered.length) })}</SummaryCount>
+      ) : (
+        <SummaryCount n={accounts.length} />
+      )}
+      {query ? <SummaryPart label={t("common.filter")} value={<Clip>{query}</Clip>} active /> : null}
+      <SummaryPart label={t("screen.accounts.partOwners")} value={n(owners)} />
+      {off > 0 ? <SummaryPart label={t("screen.accounts.partDisabled")} value={n(off)} /> : null}
+    </>
+  );
+
+  const empty: { title: string; icon: IconName; actionLabel?: string; onAction?: () => void } = query
+    ? {
+        title: t("common.nothingFound"),
+        icon: "searchIcon",
+        actionLabel: t("common.resetFilters"),
+        onAction: () => setQ(""),
+      }
+    : { title: t("screen.accounts.empty"), icon: "user" };
+
   const columns: Column<AccountRow>[] = [
     {
       key: "acc",
       label: t("screen.accounts.colAccount"),
       width: "2fr",
       render: (a) => (
-        <span style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-          <Avatar label={initialsOf(nameOf(a))} seed={seedOf(a.account_id)} size={30} />
-          <span style={{ minWidth: 0 }}>
-            <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontSize: 13, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                {nameOf(a)}
-              </span>
-              {a.is_owner ? <Tag tone="green">{t("screen.accounts.ownerBadge")}</Tag> : null}
-            </span>
-            <span style={{ fontSize: 11, color: "var(--txt3)", fontFamily: MONO }}>
-              {a.handle ?? "—"}
-            </span>
-          </span>
+        <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+          <Avatar label={initialsOf(nameOf(a))} size={18} />
+          <AccountName a={a} style={{ fontWeight: 500 }} />
+          {a.display_name && a.handle ? <span style={{ ...HANDLE, flexShrink: 4 }}>{a.handle}</span> : null}
+          {a.is_owner ? <OwnerChip /> : null}
         </span>
       ),
     },
     { key: "pub", label: "member_pubkey", width: "1.6fr", render: (a) => <PubkeyChip value={a.member_pubkey} /> },
-    { key: "dev", label: t("screen.accounts.colDevices"), width: "90px", render: (a) => <span style={mono}>{a.device_count}</span> },
+    { key: "dev", label: t("screen.accounts.colDevices"), width: "96px", numeric: true, render: (a) => a.device_count },
     {
       key: "status",
       label: t("screen.accounts.colStatus"),
-      width: "100px",
-      render: (a) => (
-        <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, color: a.status === "active" ? "var(--green)" : "var(--red)" }}>
-          <StatusDot status={a.status === "active" ? "online" : "offline"} size={7} />
-          {a.status === "active" ? t("common.active") : t("common.disabled")}
-        </span>
-      ),
+      width: "104px",
+      render: (a) => <AccountState a={a} />,
     },
-    { key: "chev", label: "", width: "40px", align: "right", render: () => <Icon name="chevronRight" size={16} color="var(--txt3)" /> },
+    {
+      key: "chev",
+      label: "",
+      width: "16px",
+      align: "right",
+      render: () => <Icon name="chevronRight" size={16} color="var(--muted-foreground)" />,
+    },
   ];
 
   return (
     <>
       <ZkBanner>{t("zk.accounts")}</ZkBanner>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            flex: 1,
-            minWidth: 0,
-            height: 34,
-            padding: "0 12px",
-            borderRadius: 9,
-            background: "var(--bg1)",
-            border: "1px solid var(--line)",
-          }}
-        >
-          <Icon name="searchIcon" size={14} color="var(--txt3)" />
-          <input
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+        <div className="id-filter">
+          <Icon name="searchIcon" size={16} color="var(--muted-foreground)" />
+          <TextInput
             value={q}
-            onChange={(e) => setQ(e.target.value)}
+            onChange={setQ}
             placeholder={t("screen.accounts.filterPlaceholder")}
-            style={{ flex: 1, border: "none", background: "transparent", color: "var(--txt)", fontSize: 13, outline: "none", fontFamily: "inherit" }}
+            ariaLabel={t("screen.accounts.filterPlaceholder")}
+            style={{ paddingLeft: 32 }}
           />
         </div>
-        <Segmented
-          value={density}
-          onChange={setDensity}
-          options={[
-            { value: "cards", label: t("common.cards"), icon: "grid" },
-            { value: "list", label: t("common.list") },
-          ]}
-        />
+        <div style={{ marginLeft: "auto" }}>
+          <Segmented
+            size="md"
+            value={density}
+            onChange={setDensity}
+            ariaLabel={t("settings.density")}
+            options={[
+              { value: "cards", label: t("common.cards"), icon: "grid" },
+              { value: "list", label: t("common.list"), icon: "menu" },
+            ]}
+          />
+        </div>
       </div>
 
-      {data.loading && accounts.length === 0 ? (
-        <div style={{ display: "flex", justifyContent: "center", padding: 48 }}>
-          <Spinner />
-        </div>
-      ) : density === "cards" ? (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(290px, 1fr))", gap: 12 }}>
-          {filtered.map((a) => (
-            <div
-              key={a.account_id}
-              className="hoverable"
-              onClick={() => setSel(a.account_id)}
-              style={{ background: "var(--bg1)", border: "1px solid var(--line)", borderRadius: 13, padding: "15px 16px", cursor: "pointer" }}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
-                <Avatar label={initialsOf(nameOf(a))} seed={seedOf(a.account_id)} size={38} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                    <span style={{ fontSize: 14, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                      {nameOf(a)}
-                    </span>
-                    {a.is_owner ? <Tag tone="green">{t("screen.accounts.ownerBadge")}</Tag> : null}
-                  </div>
-                  <div style={{ fontSize: 12, color: "var(--txt3)", fontFamily: MONO }}>{a.handle ?? "—"}</div>
-                </div>
-                <StatusDot status={a.status === "active" ? "online" : "offline"} size={8} />
-              </div>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 7,
-                  marginTop: 13,
-                  padding: "7px 9px",
-                  borderRadius: 8,
-                  background: "var(--bg2)",
-                  border: "1px solid var(--line)",
-                }}
-              >
-                <Icon name="key" size={13} color="var(--txt3)" />
-                <PubkeyChip value={a.member_pubkey} />
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 11, fontSize: 11.5, color: "var(--txt3)" }}>
-                <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                  <Icon name="fingerprint" size={13} />
-                  {t("screen.accounts.deviceCount", { count: a.device_count })}
-                </span>
-                <span style={{ color: a.status === "active" ? "var(--green)" : "var(--red)", fontWeight: 600 }}>
-                  {a.status === "active" ? t("common.active") : t("common.disabled")}
-                </span>
-              </div>
+      {density === "cards" ? (
+        <div style={{ display: "grid", gap: 8 }}>
+          {data.error && accounts.length === 0 ? null : (
+            <SummaryLine loading={reading} style={{ minHeight: 16, padding: 0, borderBottom: 0 }}>
+              {reading ? null : summary}
+            </SummaryLine>
+          )}
+          {data.error ? (
+            <ErrorCard message={data.error} onRetry={data.reload} retrying={data.loading} />
+          ) : null}
+          {reading ? (
+            <div role="status" aria-busy="true" style={CARD_GRID}>
+              <span className="u-sr-only">{t("common.loading")}</span>
+              {Array.from({ length: 3 }, (_, i) => (
+                <Card key={i} style={{ display: "grid", gap: 12 }}>
+                  <Skeleton width="60%" height={20} />
+                  <Skeleton height={32} />
+                  <Skeleton width="40%" height={16} />
+                </Card>
+              ))}
             </div>
-          ))}
+          ) : filtered.length === 0 ? (
+            data.error ? null : (
+              <EmptyState
+                icon={empty.icon}
+                title={empty.title}
+                actionLabel={empty.actionLabel}
+                onAction={empty.onAction}
+              />
+            )
+          ) : (
+            <div style={CARD_GRID}>
+              {filtered.map((a) => (
+                <div key={a.account_id} className="id-card">
+                  {/* The name has the whole line (two at most); the handle and the chips go on the line under it. */}
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                    <Avatar label={initialsOf(nameOf(a))} size={20} />
+                    <div style={{ flex: 1, minWidth: 0, display: "grid", gap: 4 }}>
+                      <button
+                        type="button"
+                        className="id-card__open"
+                        onClick={() => setSel(a.account_id)}
+                        style={{
+                          display: "block",
+                          justifySelf: "start",
+                          fontSize: 15,
+                          fontWeight: 600,
+                          lineHeight: "20px",
+                          letterSpacing: "-0.025em",
+                        }}
+                      >
+                        <AccountName a={a} clamp />
+                      </button>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, minHeight: 20 }}>
+                        {a.display_name && a.handle ? <span style={HANDLE}>{a.handle}</span> : null}
+                        {a.is_owner ? <OwnerChip /> : null}
+                        <AccountState a={a} />
+                      </div>
+                    </div>
+                  </div>
+                  <Well style={{ display: "flex", alignItems: "center", gap: 8, padding: "2px 2px 2px 10px" }}>
+                    <Icon name="key" size={14} color="var(--muted-foreground)" />
+                    <span className="id-card__over" style={{ display: "flex", flex: 1, minWidth: 0 }}>
+                      <PubkeyChip value={a.member_pubkey} />
+                    </span>
+                  </Well>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      fontSize: 12,
+                      lineHeight: "16px",
+                      color: "var(--muted-foreground)",
+                    }}
+                  >
+                    <Icon name="fingerprint" size={14} />
+                    {t("screen.accounts.deviceCount", { count: a.device_count })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       ) : (
         <DataTable
@@ -199,9 +247,12 @@ function AccountsBody() {
           rows={filtered}
           rowKey={(a) => a.account_id}
           onRowClick={(a) => setSel(a.account_id)}
+          loading={data.loading}
           error={data.error}
           onRetry={data.reload}
-          empty={{ title: t("screen.accounts.empty"), icon: "server" }}
+          summary={reading ? true : summary}
+          ariaLabel={t("screen.accounts.title")}
+          empty={empty}
         />
       )}
 
@@ -209,6 +260,62 @@ function AccountsBody() {
         <AccountDrawer account={selected} onClose={() => setSel(null)} onChanged={() => data.reload()} />
       ) : null}
     </>
+  );
+}
+
+/**
+ * An account's name: its display name, else its handle (mono), else its id (mono, muted). One line cut with an
+ * ellipsis; `clamp`: up to two lines, then the ellipsis (a card, where the name has its line to itself).
+ */
+function AccountName({ a, style, clamp }: { a: AccountRow; style?: CSSProperties; clamp?: boolean }) {
+  const fit = clamp ? undefined : TRUNC;
+  const cls = clamp ? "id-card__name" : undefined;
+  if (a.display_name)
+    return (
+      <span className={cls} style={{ ...fit, ...style }}>
+        {a.display_name}
+      </span>
+    );
+  if (a.handle)
+    return (
+      <span className={cls} style={{ ...fit, ...style, fontFamily: MONO, fontSize: 12 }}>
+        {a.handle}
+      </span>
+    );
+  return (
+    <span className={cls} style={{ ...fit, ...style, fontFamily: MONO, fontSize: 12, color: "var(--muted-foreground)" }}>
+      {truncId(a.account_id)}
+    </span>
+  );
+}
+
+/** Owner is a role, not a state: a neutral chip, never a colour. */
+function OwnerChip() {
+  const { t } = useTranslation();
+  return <Tag>{t("screen.accounts.ownerBadge")}</Tag>;
+}
+
+function AccountState({ a }: { a: AccountRow }) {
+  const { t } = useTranslation();
+  const active = a.status === "active";
+  return <StateBadge state={active ? "active" : "disabled"} label={active ? t("common.active") : t("common.disabled")} />;
+}
+
+/** A value of a summary part that the reader typed: cut, so a long filter cannot stretch the line. */
+function Clip({ children }: { children: ReactNode }) {
+  return (
+    <span
+      style={{
+        display: "inline-block",
+        maxWidth: "24ch",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        verticalAlign: "bottom",
+      }}
+    >
+      {children}
+    </span>
   );
 }
 
@@ -225,6 +332,7 @@ function AccountDrawer({
   const askConfirm = useUi((s) => s.askConfirm);
   const toast = useUi((s) => s.toast);
   const go = useUi((s) => s.go);
+  const titleId = useId();
 
   const name = account.display_name || account.handle || "—";
   const disabled = account.status === "disabled";
@@ -264,22 +372,42 @@ function AccountDrawer({
   };
 
   return (
-    <Drawer onClose={onClose}>
-      <div style={{ padding: "20px 22px", borderBottom: "1px solid var(--line)", display: "flex", alignItems: "center", gap: 13 }}>
-        <Avatar label={initialsOf(name)} seed={seedOf(account.account_id)} size={44} />
+    <Drawer onClose={onClose} labelledBy={titleId}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          gap: 12,
+          padding: 16,
+          borderBottom: "1px solid var(--rule)",
+        }}
+      >
+        <Avatar label={initialsOf(name)} size={24} />
         <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-            <span style={{ fontSize: 16, fontWeight: 800, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
-            {account.is_owner ? <Tag tone="green">{t("screen.accounts.ownerBadge")}</Tag> : null}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+            <h2
+              id={titleId}
+              style={{
+                ...TRUNC,
+                margin: 0,
+                fontSize: 18,
+                fontWeight: 600,
+                lineHeight: "24px",
+                letterSpacing: "-0.025em",
+              }}
+            >
+              <AccountName a={account} />
+            </h2>
+            {account.is_owner ? <OwnerChip /> : null}
           </div>
-          <div style={{ fontSize: 12, color: "var(--txt3)", fontFamily: MONO }}>{account.handle ?? "—"}</div>
+          {account.display_name && account.handle ? (
+            <div style={{ ...HANDLE, display: "block", marginTop: 2 }}>{account.handle}</div>
+          ) : null}
         </div>
-        <button onClick={onClose} style={{ border: "none", background: "transparent", color: "var(--txt3)", cursor: "pointer", display: "flex" }}>
-          <Icon name="plus" size={18} style={{ transform: "rotate(45deg)" }} />
-        </button>
+        <IconBtn icon="x" title={t("common.close")} onClick={onClose} />
       </div>
 
-      <div style={{ flex: 1, overflowY: "auto", padding: "18px 22px" }}>
+      <div style={{ flex: 1, overflowY: "auto", padding: 16, display: "grid", alignContent: "start", gap: 16 }}>
         <DrawerRow label="account_id">
           <PubkeyChip value={account.account_id} />
         </DrawerRow>
@@ -287,55 +415,62 @@ function AccountDrawer({
           <PubkeyChip value={account.member_pubkey} />
         </DrawerRow>
         <DrawerRow label={t("common.status")}>
-          <span style={{ color: disabled ? "var(--red)" : "var(--green)", fontWeight: 600, fontSize: 13 }}>
-            {disabled ? t("common.disabled") : t("common.active")}
-          </span>
+          <AccountState a={account} />
         </DrawerRow>
         <DrawerRow label={t("screen.accounts.drawerDevices")}>
-          <span style={mono}>{account.device_count}</span>
+          <span style={{ fontFamily: MONO, fontSize: 12 }}>{account.device_count}</span>
         </DrawerRow>
 
-        <div
-          style={{
-            marginTop: 6,
-            marginBottom: 16,
-            fontSize: 12,
-            color: "var(--txt3)",
-            lineHeight: 1.5,
-            background: "var(--accentSoft)",
-            border: "1px solid var(--accentLine)",
-            borderRadius: 10,
-            padding: "10px 12px",
-          }}
-        >
-          {t("screen.accounts.serverVisibilityNote")}
-        </div>
+        <Well style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+          <Icon name="shield" size={16} color="var(--muted-foreground)" style={{ marginTop: 2 }} />
+          <p style={{ margin: 0, fontSize: 14, lineHeight: "20px", color: "var(--foreground)" }}>
+            {t("screen.accounts.serverVisibilityNote")}
+          </p>
+        </Well>
+      </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
-          <Btn full variant={account.is_owner ? "outline" : "soft"} icon="shield" onClick={toggleOwner}>
-            {account.is_owner ? t("screen.accounts.ownerRevokeTitle") : t("screen.accounts.ownerGrantTitle")}
-          </Btn>
-          <Btn full icon="shieldcheck" onClick={() => go("grants")}>
-            {t("screen.accounts.issueGrant")}
-          </Btn>
-          <Btn full variant="danger" icon={disabled ? "unlock" : "lock"} onClick={toggleDisabled}>
-            {disabled ? t("screen.accounts.enableTitle") : t("screen.accounts.disableTitle")}
-          </Btn>
-        </div>
+      <div style={{ display: "grid", gap: 8, padding: 16, borderTop: "1px solid var(--rule)" }}>
+        <Btn full variant={account.is_owner ? "danger" : "outline"} icon="shield" onClick={toggleOwner}>
+          {account.is_owner ? t("screen.accounts.ownerRevokeTitle") : t("screen.accounts.ownerGrantTitle")}
+        </Btn>
+        <Btn full variant="outline" icon="shieldcheck" onClick={() => go("grants")}>
+          {t("screen.accounts.issueGrant")}
+        </Btn>
+        <Btn full variant={disabled ? "outline" : "danger"} icon={disabled ? "unlock" : "lock"} onClick={toggleDisabled}>
+          {disabled ? t("screen.accounts.enableTitle") : t("screen.accounts.disableTitle")}
+        </Btn>
       </div>
     </Drawer>
   );
 }
 
-function DrawerRow({ label, children }: { label: string; children: React.ReactNode }) {
+function DrawerRow({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div style={{ marginBottom: 14 }}>
-      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, textTransform: "uppercase", color: "var(--txt3)", marginBottom: 6 }}>
-        {label}
-      </div>
-      {children}
+    <div style={{ display: "grid", gap: 8, minWidth: 0 }}>
+      <SectionLabel>{label}</SectionLabel>
+      <div style={{ minWidth: 0 }}>{children}</div>
     </div>
   );
 }
 
-const mono: React.CSSProperties = { fontFamily: MONO, fontSize: 12.5, color: "var(--txt2)" };
+const TRUNC: CSSProperties = {
+  minWidth: 0,
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+};
+
+/** A handle beside or under a name: mono, muted. */
+const HANDLE: CSSProperties = {
+  ...TRUNC,
+  fontFamily: MONO,
+  fontSize: 12,
+  lineHeight: "16px",
+  color: "var(--muted-foreground)",
+};
+
+const CARD_GRID: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+  gap: 12,
+};

@@ -1,26 +1,26 @@
-import { useState } from "react";
+import { useId, useState, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import type { SpaceInfo } from "../api/types";
 import { useUi } from "../store/ui";
 import { useAsync } from "../util/useAsync";
-import { truncId } from "../util/bytes";
 import { DataTable, type Column } from "../ui/DataTable";
-import { Btn, Field, Tag, TextInput, gradientFor } from "../ui/primitives";
+import {
+  Avatar,
+  Btn,
+  Field,
+  IconBtn,
+  InlineError,
+  PubkeyChip,
+  RoleBadge,
+  Segmented,
+  TextInput,
+  initialsOf,
+} from "../ui/primitives";
 import { Modal } from "../ui/overlays";
 import { Screen } from "./Screen";
-import { MONO } from "../theme/tokens";
 
 export function Spaces() {
-  const { t } = useTranslation();
-  return (
-    <Screen title={t("screen.spaces.title")} sub={t("screen.spaces.sub")}>
-      <SpacesBody />
-    </Screen>
-  );
-}
-
-function SpacesBody() {
   const { t } = useTranslation();
   const toast = useUi((s) => s.toast);
   const reloadTick = useUi((s) => s.reloadTick);
@@ -29,63 +29,55 @@ function SpacesBody() {
   const [creating, setCreating] = useState(false);
   const [addMemberTo, setAddMemberTo] = useState<SpaceInfo | null>(null);
 
-  const roleTone = (role: string): "amber" | "neutral" => (role === "admin" ? "amber" : "neutral");
-
   const columns: Column<SpaceInfo>[] = [
     {
       key: "name",
       label: t("screen.spaces.colName"),
       width: "2fr",
       render: (s) => (
-        <span style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-          <span style={tile(s.space_id)}>{(s.name[0] || "·").toUpperCase()}</span>
-          <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
-            <span
-              style={{
-                fontSize: 13,
-                fontWeight: 600,
-                color: "var(--txt)",
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-              }}
-            >
-              {s.name}
-            </span>
-            <span style={{ fontFamily: MONO, fontSize: 11, color: "var(--txt3)" }}>
-              {truncId(s.space_id, 10, 6)}
-            </span>
-          </span>
+        <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+          <Avatar label={initialsOf(s.name) || "·"} size={18} />
+          <span style={NAME}>{s.name}</span>
         </span>
       ),
     },
     {
+      key: "id",
+      label: "space_id",
+      width: "1.6fr",
+      render: (s) => <PubkeyChip value={s.space_id} head={10} tail={6} />,
+    },
+    {
       key: "role",
       label: t("screen.spaces.colRole"),
-      width: "120px",
-      render: (s) => <Tag tone={roleTone(s.role)}>{s.role}</Tag>,
+      width: "110px",
+      render: (s) => <RoleBadge role={s.role} />,
     },
     {
       key: "actions",
       label: "",
-      width: "160px",
+      width: "28px",
       align: "right",
+      // Only an admin of the space adds members; an empty cell, not a missing value, for the others.
       render: (s) =>
         s.role === "admin" ? (
-          <Btn size="sm" icon="plus" onClick={() => setAddMemberTo(s)}>
-            {t("screen.spaces.addMember")}
-          </Btn>
-        ) : null,
+          <IconBtn icon="plus" title={t("screen.spaces.addMember")} onClick={() => setAddMemberTo(s)} />
+        ) : (
+          <span aria-hidden="true" />
+        ),
     },
   ];
 
   return (
-    <>
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14 }}>
+    <Screen
+      title={t("screen.spaces.title")}
+      sub={t("screen.spaces.sub")}
+      actions={
         <Btn variant="primary" icon="plus" onClick={() => setCreating(true)}>
           {t("screen.spaces.create")}
         </Btn>
-      </div>
+      }
+    >
       <DataTable
         columns={columns}
         rows={list.data?.spaces ?? []}
@@ -93,6 +85,9 @@ function SpacesBody() {
         loading={list.loading}
         error={list.error}
         onRetry={list.reload}
+        summary
+        minWidth={560}
+        ariaLabel={t("screen.spaces.title")}
         empty={{
           title: t("screen.spaces.emptyTitle"),
           hint: t("screen.spaces.emptyHint"),
@@ -123,7 +118,7 @@ function SpacesBody() {
           }}
         />
       ) : null}
-    </>
+    </Screen>
   );
 }
 
@@ -132,6 +127,9 @@ function CreateSpaceModal({ onClose, onDone }: { onClose: () => void; onDone: ()
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const titleId = useId();
+  const subId = useId();
+  const nameId = useId();
 
   const create = async () => {
     if (!name.trim()) {
@@ -151,28 +149,33 @@ function CreateSpaceModal({ onClose, onDone }: { onClose: () => void; onDone: ()
   };
 
   return (
-    <Modal onClose={onClose} width={420}>
-      <div style={{ padding: 22 }}>
-        <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 4 }}>
+    <Modal onClose={onClose} width={420} labelledBy={titleId} describedBy={subId}>
+      <div style={{ padding: 24 }}>
+        <h2 id={titleId} style={DIALOG_TITLE}>
           {t("screen.spaces.createTitle")}
-        </div>
-        <div style={{ fontSize: 12.5, color: "var(--txt3)", marginBottom: 16 }}>
+        </h2>
+        <p id={subId} style={DIALOG_SUB}>
           {t("screen.spaces.createSub")}
+        </p>
+        <div style={{ marginTop: 16 }}>
+          {error ? <InlineError>{error}</InlineError> : null}
+          <Field label={t("screen.spaces.nameLabel")} htmlFor={nameId} style={{ marginBottom: 0 }}>
+            <TextInput
+              id={nameId}
+              value={name}
+              onChange={setName}
+              placeholder={t("screen.spaces.namePlaceholder")}
+            />
+          </Field>
         </div>
-        <Field label={t("screen.spaces.nameLabel")}>
-          <TextInput value={name} onChange={setName} placeholder={t("screen.spaces.namePlaceholder")} />
-        </Field>
-        {error ? (
-          <div style={{ fontSize: 12.5, color: "var(--red)", marginBottom: 12 }}>{error}</div>
-        ) : null}
-        <div style={{ display: "flex", gap: 9 }}>
-          <Btn full onClick={onClose}>
-            {t("common.cancel")}
-          </Btn>
-          <Btn full variant="primary" loading={busy} onClick={create}>
-            {t("screen.spaces.create")}
-          </Btn>
-        </div>
+      </div>
+      <div style={DIALOG_FOOT}>
+        <Btn variant="outline" onClick={onClose}>
+          {t("common.cancel")}
+        </Btn>
+        <Btn variant="primary" loading={busy} onClick={create}>
+          {t("screen.spaces.create")}
+        </Btn>
       </div>
     </Modal>
   );
@@ -194,6 +197,9 @@ function AddMemberModal({
   const [role, setRole] = useState<(typeof MEMBER_ROLES)[number]>("member");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const titleId = useId();
+  const subId = useId();
+  const accountFieldId = useId();
 
   const add = async () => {
     if (!accountId.trim()) {
@@ -213,77 +219,77 @@ function AddMemberModal({
   };
 
   return (
-    <Modal onClose={onClose} width={440}>
-      <div style={{ padding: 22 }}>
-        <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 4 }}>
+    <Modal onClose={onClose} width={440} labelledBy={titleId} describedBy={subId}>
+      <div style={{ padding: 24 }}>
+        <h2 id={titleId} style={DIALOG_TITLE}>
           {t("screen.spaces.addMemberTitle")}
+        </h2>
+        <p id={subId} style={{ ...DIALOG_SUB, overflowWrap: "anywhere" }}>
+          {space.name}
+        </p>
+        <div style={{ marginTop: 16 }}>
+          {error ? <InlineError>{error}</InlineError> : null}
+          <Field label={t("screen.spaces.accountLabel")} htmlFor={accountFieldId}>
+            <TextInput
+              id={accountFieldId}
+              mono
+              value={accountId}
+              onChange={setAccountId}
+              placeholder={t("screen.spaces.accountPlaceholder")}
+            />
+          </Field>
+          <Field label={t("screen.spaces.roleLabel")} style={{ marginBottom: 0 }}>
+            <Segmented
+              size="md"
+              value={role}
+              onChange={setRole}
+              ariaLabel={t("screen.spaces.roleLabel")}
+              options={MEMBER_ROLES.map((r) => ({ value: r, label: t(`role.${r}`) }))}
+            />
+          </Field>
         </div>
-        <div style={{ fontSize: 12.5, color: "var(--txt3)", marginBottom: 16 }}>{space.name}</div>
-        <Field label={t("screen.spaces.accountLabel")}>
-          <TextInput
-            mono
-            value={accountId}
-            onChange={setAccountId}
-            placeholder={t("screen.spaces.accountPlaceholder")}
-          />
-        </Field>
-        <Field label={t("screen.spaces.roleLabel")}>
-          <div style={{ display: "flex", gap: 8 }}>
-            {MEMBER_ROLES.map((r) => {
-              const on = role === r;
-              return (
-                <button
-                  key={r}
-                  onClick={() => setRole(r)}
-                  style={{
-                    flex: 1,
-                    padding: "8px 0",
-                    borderRadius: 8,
-                    border: on ? "1px solid var(--accentLine)" : "1px solid var(--line)",
-                    background: on ? "var(--accentSoft)" : "var(--bg2)",
-                    color: on ? "var(--accent)" : "var(--txt2)",
-                    fontFamily: "inherit",
-                    fontSize: 13,
-                    fontWeight: 600,
-                    cursor: "pointer",
-                  }}
-                >
-                  {r}
-                </button>
-              );
-            })}
-          </div>
-        </Field>
-        {error ? (
-          <div style={{ fontSize: 12.5, color: "var(--red)", marginBottom: 12 }}>{error}</div>
-        ) : null}
-        <div style={{ display: "flex", gap: 9 }}>
-          <Btn full onClick={onClose}>
-            {t("common.cancel")}
-          </Btn>
-          <Btn full variant="primary" loading={busy} onClick={add}>
-            {t("screen.spaces.addMember")}
-          </Btn>
-        </div>
+      </div>
+      <div style={DIALOG_FOOT}>
+        <Btn variant="outline" onClick={onClose}>
+          {t("common.cancel")}
+        </Btn>
+        <Btn variant="primary" loading={busy} onClick={add}>
+          {t("screen.spaces.addMember")}
+        </Btn>
       </div>
     </Modal>
   );
 }
 
-function tile(seed: string): React.CSSProperties {
-  let h = 0;
-  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0;
-  return {
-    width: 26,
-    height: 26,
-    borderRadius: 7,
-    background: gradientFor(Math.abs(h)),
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    color: "#fff",
-    fontWeight: 700,
-    fontSize: 12,
-    flexShrink: 0,
-  };
-}
+/** A name in a row: 13/500, cut with an ellipsis. */
+const NAME: CSSProperties = {
+  minWidth: 0,
+  fontWeight: 500,
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+};
+
+/** A dialog's head and foot, as the confirm dialog draws them. */
+const DIALOG_TITLE: CSSProperties = {
+  margin: 0,
+  fontSize: 18,
+  fontWeight: 600,
+  lineHeight: "24px",
+  letterSpacing: "-0.025em",
+};
+const DIALOG_SUB: CSSProperties = {
+  margin: "8px 0 0",
+  fontSize: 14,
+  lineHeight: "20px",
+  maxWidth: "72ch",
+  color: "var(--muted-foreground)",
+};
+const DIALOG_FOOT: CSSProperties = {
+  display: "flex",
+  flexWrap: "wrap",
+  justifyContent: "flex-end",
+  gap: 8,
+  padding: "16px 24px",
+  borderTop: "1px solid var(--rule)",
+};

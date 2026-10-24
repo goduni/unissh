@@ -82,6 +82,19 @@ starts with `0.`:
 
 ### Changed
 
+- The admin panel has a new look.
+  - **Colour:** hueless carbon surfaces, one electric blue for actions and
+    the current place, and green, amber and red only for states, each said
+    in a word. Geologica is used for the panel's words, JetBrains Mono for
+    ids, keys and values.
+  - **Layout:** the sidebar folds to icons, and a header holds an account
+    menu with the theme (light, dark or as the system has it), the language
+    and lock. On phones the sidebar opens as a drawer, and wide tables
+    scroll sideways.
+  - **Tables:** they say how many rows they hold. Row actions sit in a menu
+    instead of a red button on every row. The audit log is grouped by day.
+  - **Removed:** the five accent colours. The fonts are now served from the
+    panel itself.
 - One resolver for saved hosts, in the core (`Core::resolve_connection`): the
   app, the CLI and local automation now work out a host's user and credential
   the same way. For the app this means a host that names no user logs in as the

@@ -1,5 +1,7 @@
-// Lucide-derived icon set — exact port of the mockup's ICONS (inner SVG paths,
-// 24×24 viewBox, stroke 1.6–1.9). Render via <Icon name … />.
+// Lucide-derived icon set (inner SVG paths, 24×24 viewBox, round caps). Render
+// via <Icon name … />: 16 px beside a word, muted unless it says a state. Icons
+// are decorative (hidden from assistive technology); the control around one
+// carries the name.
 
 export const ICONS: Record<string, string> = {
   server:
@@ -50,6 +52,18 @@ export const ICONS: Record<string, string> = {
   searchIcon: '<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.8" y2="16.8"/>',
   file: '<path d="M14 3.5H7A2 2 0 0 0 5 5.5v13A2 2 0 0 0 7 20.5h10a2 2 0 0 0 2-2V8.5z"/><polyline points="14 3.5 14 8.5 19 8.5"/>',
   box: '<polygon points="12 2.5 21 7 12 11.5 3 7 12 2.5"/><polyline points="3 12 12 16.5 21 12"/><polyline points="3 17 12 21.5 21 17"/>',
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  close: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+  more: '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
+  chevronLeft: '<path d="m15 18-6-6 6-6"/>',
+  chevronUp: '<path d="m18 15-6-6-6 6"/>',
+  menu: '<line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/>',
+  panelLeft: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>',
+  monitor: '<rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
+  externalLink: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+  terminal: '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>',
 };
 
 export type IconName = keyof typeof ICONS;
@@ -77,6 +91,8 @@ export function Icon({
       strokeWidth={stroke}
       strokeLinecap="round"
       strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
       style={{ flexShrink: 0, display: "block", ...style }}
       dangerouslySetInnerHTML={{ __html: ICONS[name] || "" }}
     />

@@ -1,0 +1,617 @@
+/*
+ * The shell (DESIGN.md: Layout, Navigation): the rail from 768 px up, the drawer below it, the sticky header with the
+ * account menu, the skip link. Inline styles cannot say :hover, :focus-visible or a media query, so the shell's own
+ * controls live here; every value is a token.
+ */
+
+.sh-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The kit's focus ring: a 3 px ring of --ring at 50 %. */
+.sh-focus:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);
+}
+
+/* These carry their focus by other means (the lit item, the dialog, the page), not by the ring. */
+.sh-main:focus-visible,
+.sh-menu:focus-visible,
+.sh-menu-item:focus-visible,
+.sh-drawer:focus-visible {
+  outline: none;
+}
+
+/* ── Frame ─────────────────────────────────────────────────── */
+.sh-frame {
+  display: flex;
+  min-height: 100dvh;
+  background: var(--background);
+  color: var(--foreground);
+}
+.sh-column {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+.sh-main {
+  flex: 1;
+  min-width: 0;
+  padding: 16px;
+  outline: none;
+}
+
+/* The first stop of the keyboard: hidden until focused, then a small card at the top left. */
+.sh-skip:not(:focus-visible) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.sh-skip:focus-visible {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 400;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+  outline: none;
+  box-shadow:
+    var(--elev-popover),
+    0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);
+}
+
+/* ── Rail ──────────────────────────────────────────────────── */
+.sh-rail {
+  --sh-pad: 10px;
+  display: none;
+}
+.sh-rail-top {
+  padding: 0 8px 4px;
+}
+.sh-rail-top[data-folded="true"] {
+  display: flex;
+  justify-content: center;
+  padding: 0 0 4px;
+}
+
+.sh-instance {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 0 8px;
+}
+.sh-instance-name {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.sh-instance-id {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 16px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.sh-skeleton {
+  display: block;
+  width: 96px;
+  height: 12px;
+  margin: 2px 0;
+  border-radius: var(--radius-sm);
+  background: var(--elevated);
+}
+
+/* ── Nav ───────────────────────────────────────────────────── */
+.sh-nav {
+  display: flex;
+  flex-direction: column;
+}
+.sh-nav-group {
+  display: flex;
+  flex-direction: column;
+}
+.sh-nav-group + .sh-nav-group {
+  margin-top: 10px;
+}
+.sh-nav-label {
+  margin: 4px 8px;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.sh-nav-rule {
+  height: 1px;
+  margin: 6px 8px;
+  background: var(--rule);
+}
+.sh-nav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.sh-nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted-foreground);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 16px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-out-soft),
+    color var(--duration-fast) var(--ease-out-soft);
+}
+.sh-nav-item:hover {
+  background: var(--elevated);
+  color: var(--foreground);
+}
+.sh-nav-item[aria-current="page"] {
+  background: var(--elevated);
+  color: var(--foreground);
+  font-weight: 600;
+}
+/* Position: the 3 px blue rule at the rail's left edge. */
+.sh-nav-item[aria-current="page"]::before {
+  content: "";
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: calc(-1 * var(--sh-pad));
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background: var(--primary);
+}
+.sh-nav-item[data-folded="true"] {
+  justify-content: center;
+  padding: 0;
+}
+.sh-nav-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.sh-nav-count {
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The fold of the rail: a small ghost button at the foot. */
+.sh-fold {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  margin-top: auto;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted-foreground);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-out-soft),
+    color var(--duration-fast) var(--ease-out-soft);
+}
+.sh-fold:hover {
+  background: var(--elevated);
+  color: var(--foreground);
+}
+.sh-fold[data-folded="true"] {
+  justify-content: center;
+  padding: 0;
+}
+
+/* The tooltip of a folded item: the inverse of the sheet. */
+.sh-tip {
+  position: fixed;
+  z-index: 60;
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  background: var(--foreground);
+  color: var(--background);
+  font-size: 13px;
+  line-height: 16px;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+/* ── Header ────────────────────────────────────────────────── */
+.sh-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 48px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--rule);
+  background: color-mix(in oklch, var(--background) 95%, transparent);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+.sh-section {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.sh-header-end {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* A ghost icon button, 28 px square. */
+.sh-icon-btn {
+  display: inline-grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--foreground);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-out-soft);
+}
+.sh-icon-btn:hover {
+  background: var(--elevated);
+}
+
+/* Status badge: 20 px, a 7 px dot and a word, the state's colour on a 15 % tint of it. */
+.sh-badge {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklch, var(--success) 15%, transparent);
+  color: var(--success);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+.sh-badge-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 9999px;
+  background: currentColor;
+}
+
+/* ── Account menu ──────────────────────────────────────────── */
+.sh-menu-anchor {
+  position: relative;
+}
+.sh-account {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 8px 0 4px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--foreground);
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-out-soft);
+}
+.sh-account:hover,
+.sh-account[aria-expanded="true"] {
+  background: var(--elevated);
+}
+.sh-initials {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 9999px;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+.sh-account-label {
+  max-width: 160px;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.sh-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 50;
+  width: 224px;
+  max-height: calc(100dvh - 64px);
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--popover);
+  color: var(--foreground);
+  box-shadow: var(--elev-popover);
+  outline: none;
+  animation: sh-pop-in var(--duration-base) var(--ease-out-soft);
+}
+.sh-menu-head {
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+  min-width: 0;
+  padding: 6px 8px;
+}
+.sh-menu-who {
+  max-width: 100%;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.sh-menu-sub {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.sh-menu-label {
+  padding: 6px 8px 2px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.sh-menu-sep {
+  height: 1px;
+  margin: 4px -4px;
+  background: var(--border);
+}
+.sh-menu-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--foreground);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 16px;
+  text-align: left;
+  cursor: default;
+  outline: none;
+}
+.sh-menu-item:focus {
+  background: var(--elevated);
+}
+.sh-menu-item > svg {
+  color: var(--muted-foreground);
+}
+.sh-menu-item[role="menuitemradio"] {
+  padding-left: 32px;
+}
+.sh-menu-radio {
+  position: absolute;
+  top: 50%;
+  left: 8px;
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  transform: translateY(-50%);
+}
+.sh-menu-radio[data-checked="true"]::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  background: currentColor;
+}
+
+/* ── Drawer (below 768 px) ─────────────────────────────────── */
+.sh-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: var(--overlay);
+  animation: sh-fade-in var(--duration-base) var(--ease-out-soft);
+}
+.sh-drawer {
+  --sh-pad: 12px;
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 101;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 256px;
+  max-width: calc(100vw - 40px);
+  padding: 12px var(--sh-pad);
+  overflow-y: auto;
+  border-right: 1px solid var(--rule);
+  background: var(--rail);
+  box-shadow: var(--elev-popover);
+  outline: none;
+  animation: sh-drawer-in var(--duration-slow) var(--ease-out-soft);
+}
+.sh-drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-left: 8px;
+}
+
+/* ── Breakpoints ───────────────────────────────────────────── */
+@media (max-width: 639.98px) {
+  .sh-account-label,
+  .sh-badge-wide {
+    display: none;
+  }
+}
+@media (max-width: 767.98px) {
+  .sh-only-wide {
+    display: none !important;
+  }
+}
+@media (min-width: 768px) {
+  .sh-only-phone,
+  .sh-scrim,
+  .sh-drawer {
+    display: none !important;
+  }
+  .sh-main {
+    padding: 24px;
+  }
+  .sh-header {
+    padding: 0 24px;
+  }
+  .sh-rail {
+    position: sticky;
+    top: 0;
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    gap: 12px;
+    width: 232px;
+    height: 100dvh;
+    padding: 14px var(--sh-pad);
+    overflow-x: hidden;
+    overflow-y: auto;
+    border-right: 1px solid var(--rule);
+    background: var(--rail);
+    transition: width var(--duration-slow) var(--ease-out-soft);
+  }
+  .sh-rail[data-folded="true"] {
+    width: 56px;
+  }
+}
+
+@keyframes sh-drawer-in {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: none;
+  }
+}
+@keyframes sh-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes sh-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Motion is a response only, and none at all when the reader asks for none. */
+@media (prefers-reduced-motion: reduce) {
+  .sh-rail,
+  .sh-nav-item,
+  .sh-fold,
+  .sh-icon-btn,
+  .sh-account,
+  .sh-menu,
+  .sh-scrim,
+  .sh-drawer {
+    transition: none !important;
+    animation: none !important;
+  }
+}

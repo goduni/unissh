@@ -1,14 +1,25 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import type { DirEntry } from "../api/types";
 import { useUi } from "../store/ui";
 import { useAsync } from "../util/useAsync";
+import { truncId } from "../util/bytes";
 import { DataTable, type Column } from "../ui/DataTable";
 import { Icon } from "../ui/icons";
-import { Avatar, PubkeyChip, StatusDot, ZkBanner, initialsOf } from "../ui/primitives";
+import {
+  Avatar,
+  PubkeyChip,
+  StateBadge,
+  SummaryCount,
+  SummaryPart,
+  TextInput,
+  ZkBanner,
+  initialsOf,
+} from "../ui/primitives";
 import { Screen } from "./Screen";
 import { MONO } from "../theme/tokens";
+import "./identity.css";
 
 export function Directory() {
   const { t } = useTranslation();
@@ -20,7 +31,7 @@ export function Directory() {
 }
 
 function DirectoryBody() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const reloadTick = useUi((s) => s.reloadTick);
   const data = useAsync(() => api.identity.directory(), [reloadTick]);
   const [q, setQ] = useState("");
@@ -38,13 +49,24 @@ function DirectoryBody() {
   }, [accounts, q]);
 
   const nameOf = (a: DirEntry) => a.display_name || a.handle || "—";
-  // Seed the avatar color from a char-hash of account_id (same hash as the Spaces
-  // tile) — seeding on .length collapses nearly every account onto one color.
-  const seedOf = (id: string) => {
-    let h = 0;
-    for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
-    return Math.abs(h);
-  };
+
+  // The summary line: how many, or what the filter found and the filter itself.
+  const query = q.trim();
+  const reading = data.loading && accounts.length === 0;
+  const summary = query ? (
+    <>
+      <SummaryCount>{t("common.found", { n: filtered.length.toLocaleString(i18n.language) })}</SummaryCount>
+      <SummaryPart
+        label={t("common.filter")}
+        value={
+          <span style={{ ...TRUNC, display: "inline-block", maxWidth: "24ch", verticalAlign: "bottom" }}>{query}</span>
+        }
+        active
+      />
+    </>
+  ) : (
+    <SummaryCount n={accounts.length} />
+  );
 
   const columns: Column<DirEntry>[] = [
     {
@@ -52,49 +74,50 @@ function DirectoryBody() {
       label: t("screen.directory.colPerson"),
       width: "1.8fr",
       render: (a) => (
-        <span style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-          <Avatar label={initialsOf(nameOf(a))} seed={seedOf(a.account_id)} size={30} />
-          <span style={{ minWidth: 0 }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+          <Avatar label={initialsOf(nameOf(a))} size={18} />
+          {a.display_name ? (
+            <span style={{ ...TRUNC, fontWeight: 500 }}>{a.display_name}</span>
+          ) : (
+            <span style={{ ...TRUNC, fontFamily: MONO, fontSize: 12, color: a.handle ? undefined : "var(--muted-foreground)" }}>
+              {a.handle || truncId(a.account_id)}
+            </span>
+          )}
+          {a.display_name && a.handle ? (
             <span
               style={{
-                display: "block",
-                fontSize: 13,
-                fontWeight: 600,
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
+                ...TRUNC,
+                flexShrink: 4,
+                fontFamily: MONO,
+                fontSize: 12,
+                lineHeight: "16px",
+                color: "var(--muted-foreground)",
               }}
             >
-              {nameOf(a)}
+              {a.handle}
             </span>
-            <span style={{ fontSize: 11, color: "var(--txt3)", fontFamily: MONO }}>
-              {a.handle ?? "—"}
-            </span>
-          </span>
+          ) : null}
         </span>
       ),
     },
-    { key: "member", label: "member_pubkey", width: "1.5fr", render: (a) => <PubkeyChip value={a.member_pubkey} /> },
-    { key: "x25519", label: "x25519_pub", width: "1.5fr", render: (a) => <PubkeyChip value={a.x25519_pub} /> },
+    {
+      key: "member",
+      label: t("screen.directory.colMemberKey"),
+      width: "1.5fr",
+      render: (a) => <PubkeyChip value={a.member_pubkey} />,
+    },
+    {
+      key: "x25519",
+      label: t("screen.directory.colX25519"),
+      width: "1.5fr",
+      render: (a) => <PubkeyChip value={a.x25519_pub} />,
+    },
     {
       key: "status",
       label: t("common.status"),
-      width: "110px",
-      render: (a) => (
-        <span
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            fontSize: 12,
-            fontWeight: 600,
-            color: a.status === "active" ? "var(--green)" : "var(--red)",
-          }}
-        >
-          <StatusDot status={a.status === "active" ? "online" : "offline"} size={7} />
-          {a.status === "active" ? t("common.active") : t("common.disabled")}
-        </span>
-      ),
+      width: "112px",
+      // The badge says the state in the reader's words, as on every other screen.
+      render: (a) => <StateBadge state={a.status === "active" ? "active" : "disabled"} />,
     },
   ];
 
@@ -102,35 +125,17 @@ function DirectoryBody() {
     <>
       <ZkBanner>{t("zk.directory")}</ZkBanner>
 
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          height: 34,
-          padding: "0 12px",
-          marginBottom: 14,
-          borderRadius: 9,
-          background: "var(--bg1)",
-          border: "1px solid var(--line)",
-          maxWidth: 460,
-        }}
-      >
-        <Icon name="searchIcon" size={14} color="var(--txt3)" />
-        <input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder={t("screen.directory.filterPlaceholder")}
-          style={{
-            flex: 1,
-            border: "none",
-            background: "transparent",
-            color: "var(--txt)",
-            fontSize: 13,
-            outline: "none",
-            fontFamily: "inherit",
-          }}
-        />
+      <div style={{ display: "flex" }}>
+        <div className="id-filter">
+          <Icon name="searchIcon" size={16} color="var(--muted-foreground)" />
+          <TextInput
+            value={q}
+            onChange={setQ}
+            placeholder={t("screen.directory.filterPlaceholder")}
+            ariaLabel={t("screen.directory.filterPlaceholder")}
+            style={{ paddingLeft: 32 }}
+          />
+        </div>
       </div>
 
       <DataTable
@@ -140,8 +145,27 @@ function DirectoryBody() {
         loading={data.loading}
         error={data.error}
         onRetry={data.reload}
-        empty={{ title: t("screen.directory.empty"), icon: "user" }}
+        summary={reading ? true : summary}
+        minWidth={720}
+        ariaLabel={t("screen.directory.title")}
+        empty={
+          query
+            ? {
+                title: t("common.nothingFound"),
+                icon: "searchIcon",
+                actionLabel: t("common.resetFilters"),
+                onAction: () => setQ(""),
+              }
+            : { title: t("screen.directory.empty"), icon: "user" }
+        }
       />
     </>
   );
 }
+
+const TRUNC: CSSProperties = {
+  minWidth: 0,
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+};

@@ -1,10 +1,25 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { useUi } from "../store/ui";
 import { useAsync } from "../util/useAsync";
 import { fmtNum } from "../util/format";
-import { Btn, Card, Field, Segmented, Spinner, TextInput, ZkBanner } from "../ui/primitives";
+import {
+  Btn,
+  Card,
+  CardHeader,
+  EmptyState,
+  ErrorCard,
+  Field,
+  Missing,
+  Segmented,
+  Skeleton,
+  StateBadge,
+  SummaryLine,
+  TextInput,
+  Well,
+  ZkBanner,
+} from "../ui/primitives";
 import { Screen } from "./Screen";
 import { MONO } from "../theme/tokens";
 
@@ -15,9 +30,9 @@ export function Maintenance() {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          gap: 14,
-          marginBottom: 14,
+          gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 360px), 1fr))",
+          gap: 16,
+          alignItems: "start",
         }}
       >
         <MigrationsCard />
@@ -31,55 +46,69 @@ export function Maintenance() {
 function MigrationsCard() {
   const { t } = useTranslation();
   const migrations = useAsync(() => api.admin.migrations(), []);
+  const list = migrations.data?.migrations ?? [];
 
   return (
     <Card pad={false}>
-      <div
-        style={{
-          padding: "14px 18px",
-          borderBottom: "1px solid var(--line)",
-          fontWeight: 700,
-          fontSize: 13.5,
-        }}
-      >
-        {t("screen.maint.migrations")}
-      </div>
-      <div style={{ padding: 14 }}>
-        {migrations.loading ? (
-          <div style={{ display: "flex", justifyContent: "center", padding: 24 }}>
-            <Spinner />
-          </div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column" }}>
-            {(migrations.data?.migrations ?? []).map((m) => (
-              <div
-                key={m.version}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 12,
-                  padding: "11px 4px",
-                  borderBottom: "1px solid var(--line)",
-                }}
-              >
-                <span style={{ fontFamily: MONO, fontSize: 12.5, color: "var(--txt2)" }}>
-                  {`000${m.version}`}
-                </span>
-                <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: "var(--txt)" }}>
-                  {m.description}
-                </span>
-                <span style={{ fontSize: 11.5, fontWeight: 700, color: "var(--green)" }}>{t("screen.maint.migrationApplied")}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      <CardHeader title={t("screen.maint.migrations")} />
+      {migrations.error && !migrations.data ? (
+        <ErrorCard band message={migrations.error} onRetry={migrations.reload} retrying={migrations.loading} />
+      ) : (
+        <>
+          <SummaryLine count={list.length} loading={migrations.loading} />
+          {migrations.loading ? (
+            <div aria-hidden="true">
+              {Array.from({ length: 4 }, (_, i) => (
+                <div
+                  key={i}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    minHeight: 32,
+                    padding: "4px 16px",
+                    borderTop: i > 0 ? "1px solid var(--rule)" : undefined,
+                  }}
+                >
+                  <Skeleton width={40} height={12} />
+                  <Skeleton width="50%" height={12} />
+                </div>
+              ))}
+            </div>
+          ) : list.length === 0 ? (
+            <EmptyState compact flat icon="database" title={t("common.empty")} />
+          ) : (
+            <ol style={{ listStyle: "none", margin: 0, padding: 0 }}>
+              {list.map((m, i) => (
+                <li
+                  key={m.version}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    minHeight: 32,
+                    padding: "4px 16px",
+                    borderTop: i > 0 ? "1px solid var(--rule)" : undefined,
+                  }}
+                >
+                  <span style={{ fontFamily: MONO, fontSize: 12, lineHeight: "16px", color: "var(--muted-foreground)" }}>
+                    {`000${m.version}`}
+                  </span>
+                  <span style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>{m.description}</span>
+                  <StateBadge state="done" label={t("screen.maint.migrationApplied")} />
+                </li>
+              ))}
+            </ol>
+          )}
+        </>
+      )}
     </Card>
   );
 }
 
 function SeqBumpCard() {
   const { t } = useTranslation();
+  const valueId = useId();
   // Owner-gated, instance-wide anti-rollback floor. The current next_seq comes from
   // the owner overview; reload it after a bump so the shown value isn't stale.
   const overview = useAsync(() => api.admin.overview(), []);
@@ -113,39 +142,43 @@ function SeqBumpCard() {
 
   return (
     <Card pad={false}>
-      <div
-        style={{
-          padding: "14px 18px",
-          borderBottom: "1px solid var(--line)",
-          fontWeight: 700,
-          fontSize: 13.5,
-        }}
-      >
-        Anti-rollback · seq-bump
-      </div>
-      <div style={{ padding: "16px 18px" }}>
-        <div style={{ fontSize: 12.5, color: "var(--txt3)", lineHeight: 1.55, marginBottom: 14 }}>
+      <CardHeader title="Anti-rollback · seq-bump" />
+      <div style={{ padding: 16 }}>
+        {/* The consequence, before the click. */}
+        <p
+          style={{
+            margin: "0 0 12px",
+            maxWidth: "72ch",
+            fontSize: 14,
+            lineHeight: "20px",
+            color: "var(--muted-foreground)",
+          }}
+        >
           {t("screen.maint.seqBumpHint")}
-        </div>
-        <div
+        </p>
+        <Well
           style={{
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            padding: "10px 13px",
-            background: "var(--bg2)",
-            border: "1px solid var(--line)",
-            borderRadius: 10,
-            marginBottom: 14,
+            gap: 12,
+            marginBottom: 16,
           }}
         >
-          <span style={{ fontSize: 12, color: "var(--txt3)", fontWeight: 600 }}>{t("screen.maint.currentNextSeq")}</span>
-          <span style={{ fontFamily: MONO, fontSize: 14, fontWeight: 700 }}>
-            {next === undefined ? "—" : fmtNum(next)}
+          <span style={{ fontSize: 12, lineHeight: "16px", color: "var(--muted-foreground)" }}>
+            {t("screen.maint.currentNextSeq")}
           </span>
-        </div>
+          {next !== undefined ? (
+            <span style={{ fontFamily: MONO, fontSize: 13, fontWeight: 600, lineHeight: "20px" }}>{fmtNum(next)}</span>
+          ) : overview.loading ? (
+            <Skeleton width={64} height={14} />
+          ) : (
+            <Missing />
+          )}
+        </Well>
         <Field label={t("screen.maint.modeLabel")}>
           <Segmented
+            ariaLabel={t("screen.maint.modeLabel")}
             options={[
               { value: "by", label: t("screen.maint.modeByLabel") },
               { value: "to", label: t("screen.maint.modeToLabel") },
@@ -154,10 +187,10 @@ function SeqBumpCard() {
             onChange={setMode}
           />
         </Field>
-        <Field label={t("screen.maint.valueLabel")}>
-          <TextInput value={amount} onChange={setAmount} placeholder="0" mono />
+        <Field label={t("screen.maint.valueLabel")} htmlFor={valueId}>
+          <TextInput id={valueId} value={amount} onChange={setAmount} placeholder="0" mono inputMode="numeric" />
         </Field>
-        <Btn variant="danger" full onClick={doBump}>
+        <Btn variant="danger" onClick={doBump}>
           {t("screen.maint.runSeqBump")}
         </Btn>
       </div>

@@ -1,10 +1,9 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { useAsync } from "../util/useAsync";
 import { fmtNum, fmtRelative } from "../util/format";
-import { Btn, Card, Spinner, Tag } from "../ui/primitives";
-import { Icon } from "../ui/icons";
+import { Btn, Card, ErrorCard, Missing, Skeleton, StateBadge, ToneBadge, type Tone } from "../ui/primitives";
 import { Screen } from "./Screen";
 import { MONO } from "../theme/tokens";
 
@@ -17,6 +16,11 @@ function fmtUptime(sec: number, daysLabel: string): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d}${daysLabel} ${pad(h)}:${pad(m)}`;
 }
+
+/** A machine's value: mono 12 px in full text. */
+const MONO_VALUE: CSSProperties = { fontFamily: MONO, fontSize: 12, lineHeight: "16px", color: "var(--foreground)" };
+/** What is said second, beside a value. */
+const MUTED: CSSProperties = { color: "var(--muted-foreground)" };
 
 export function Health() {
   const { t } = useTranslation();
@@ -34,92 +38,40 @@ export function Health() {
       title={t("screen.health.title")}
       sub={t("screen.health.sub")}
       actions={
-        <Btn icon="refresh" size="sm" onClick={checkNow}>
+        <Btn icon="refresh" loading={ready.loading || version.loading} onClick={checkNow}>
           {t("common.checkNow")}
         </Btn>
       }
     >
       {/* liveness — ungated */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          gap: 14,
-          marginBottom: 16,
-        }}
-      >
-        <LivenessCard
-          ok={!!ready.data}
-          loading={ready.loading}
-          label="readyz"
-          okDesc={t("screen.health.readyzOkDesc")}
-          failDesc={t("screen.health.readyzFailDesc")}
-        />
-        <Card>
-          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-            <span
-              style={{
-                width: 48,
-                height: 48,
-                borderRadius: 13,
-                background: "var(--accentSoft)",
-                border: "1px solid var(--accentLine)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                color: "var(--accent)",
-                flexShrink: 0,
-              }}
-            >
-              <Icon name="shield" size={22} />
-            </span>
-            <div style={{ minWidth: 0 }}>
-              <div
-                style={{
-                  fontFamily: MONO,
-                  fontSize: 12.5,
-                  color: "var(--txt3)",
-                  fontWeight: 700,
-                }}
-              >
-                version
-              </div>
-              {version.loading ? (
-                <div style={{ marginTop: 8 }}>
-                  <Spinner size={16} />
-                </div>
-              ) : (
-                <>
-                  <div
-                    style={{
-                      fontFamily: MONO,
-                      fontSize: 18,
-                      fontWeight: 700,
-                      marginTop: 3,
-                      letterSpacing: -0.4,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {version.data ? version.data.server : "—"}
-                  </div>
-                  <div
-                    style={{
-                      fontFamily: MONO,
-                      fontSize: 11.5,
-                      color: "var(--txt3)",
-                      marginTop: 2,
-                    }}
-                  >
-                    api {version.data ? version.data.api : "—"}
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-        </Card>
-      </div>
+      <Card pad={false}>
+        <dl style={{ margin: 0 }}>
+          <KvRow k="readyz">
+            {ready.loading ? (
+              <BadgeSkeleton />
+            ) : (
+              <>
+                <StateBadge state={ready.data ? "ok" : "failing"} />
+                <span style={MUTED}>
+                  {ready.data ? t("screen.health.readyzOkDesc") : t("screen.health.readyzFailDesc")}
+                </span>
+              </>
+            )}
+          </KvRow>
+          <KvRow k="version" last>
+            {version.loading ? (
+              <Skeleton width={120} height={12} />
+            ) : (
+              <>
+                <span style={MONO_VALUE}>{version.data ? version.data.server : <Missing />}</span>
+                <span style={{ ...MONO_VALUE, ...MUTED }}>
+                  api {version.data ? version.data.api : <Missing />}
+                </span>
+              </>
+            )}
+          </KvRow>
+        </dl>
+      </Card>
 
       {/* diagnostics */}
       <HealthBody />
@@ -127,76 +79,11 @@ export function Health() {
   );
 }
 
-function LivenessCard({
-  ok,
-  loading,
-  label,
-  okDesc,
-  failDesc,
-}: {
-  ok: boolean;
-  loading: boolean;
-  label: string;
-  okDesc: string;
-  failDesc: string;
-}) {
-  const color = ok ? "var(--green)" : "var(--red)";
-  return (
-    <Card>
-      <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-        <span
-          style={{
-            width: 48,
-            height: 48,
-            borderRadius: 13,
-            background: `color-mix(in srgb, ${color} 12%, transparent)`,
-            border: `1px solid color-mix(in srgb, ${color} 32%, transparent)`,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            flexShrink: 0,
-          }}
-        >
-          <span
-            style={{
-              width: 13,
-              height: 13,
-              borderRadius: "50%",
-              background: color,
-              boxShadow: `0 0 0 4px color-mix(in srgb, ${color} 20%, transparent), 0 0 9px ${color}`,
-              animation: ok ? "pulseDot 2s ease-in-out infinite" : undefined,
-            }}
-          />
-        </span>
-        <div style={{ minWidth: 0 }}>
-          <div
-            style={{
-              fontFamily: MONO,
-              fontSize: 12.5,
-              color: "var(--txt3)",
-              fontWeight: 700,
-            }}
-          >
-            {label}
-          </div>
-          <div
-            style={{
-              fontSize: 18,
-              fontWeight: 700,
-              marginTop: 3,
-              color,
-              letterSpacing: -0.4,
-            }}
-          >
-            {loading ? "…" : ok ? "OK" : "FAIL"}
-          </div>
-          <div style={{ fontSize: 11.5, color: "var(--txt3)", marginTop: 2 }}>
-            {ok ? okDesc : failDesc}
-          </div>
-        </div>
-      </div>
-    </Card>
-  );
+/** The tone of the instance's own word for its state; a word it has not said before is unknown (muted, dashed). */
+function statusTone(status: string): Tone {
+  if (status === "ok") return "success";
+  if (status === "degraded") return "warning";
+  return "absent";
 }
 
 function HealthBody() {
@@ -204,114 +91,126 @@ function HealthBody() {
 
   const health = useAsync(() => api.admin.health(), []);
 
-  if (health.loading && !health.data) {
-    return (
-      <Card>
-        <div style={{ display: "flex", justifyContent: "center", padding: 24 }}>
-          <Spinner />
-        </div>
-      </Card>
-    );
+  if (health.error && !health.data) {
+    return <ErrorCard message={health.error} onRetry={health.reload} retrying={health.loading} />;
   }
 
   const h = health.data;
   const pool = h?.db.pool;
+  // While the diagnostics are read, each row keeps its place with a skeleton.
+  const mono = (v: ReactNode, width = 96) =>
+    h ? <span style={MONO_VALUE}>{v}</span> : <Skeleton width={width} height={12} />;
 
   return (
-    <Card>
-      <HealthRow
-        label="status"
-        value={
-          h ? (
-            <Tag tone={h.status === "ok" ? "green" : "amber"}>{h.status}</Tag>
+    <Card pad={false}>
+      <dl style={{ margin: 0 }} aria-busy={health.loading || undefined}>
+        <KvRow k="status">
+          {h ? <StateBadge state={h.status} tone={statusTone(h.status)} /> : <BadgeSkeleton />}
+        </KvRow>
+        <KvRow k="version">{mono(h?.version)}</KvRow>
+        <KvRow k="uptime">{mono(h ? fmtUptime(h.uptime_seconds, t("screen.health.uptimeDaysShort")) : null, 72)}</KvRow>
+        <KvRow k="db.backend">{mono(h?.db.backend, 64)}</KvRow>
+        <KvRow k="db.reachable">
+          {h ? (
+            <ToneBadge tone={h.db.reachable ? "success" : "destructive"}>
+              {h.db.reachable ? t("screen.health.reachable") : t("screen.health.unreachable")}
+            </ToneBadge>
           ) : (
-            "—"
-          )
-        }
-      />
-      <HealthRow label="version" value={h ? h.version : "—"} mono />
-      <HealthRow label="uptime" value={h ? fmtUptime(h.uptime_seconds, t("screen.health.uptimeDaysShort")) : "—"} mono />
-      <HealthRow label="DB backend" value={h ? h.db.backend : "—"} mono />
-      <HealthRow
-        label="DB reachable"
-        value={
-          h ? (
-            <Tag tone={h.db.reachable ? "green" : "red"}>
-              {h.db.reachable ? "yes" : "no"}
-            </Tag>
+            <BadgeSkeleton />
+          )}
+        </KvRow>
+        <KvRow k="db.pool" hint="in_use / idle / size / max">
+          {mono(
+            pool
+              ? `${fmtNum(pool.in_use)} / ${fmtNum(pool.idle)} / ${fmtNum(pool.size)} / ${fmtNum(pool.max)}`
+              : null,
+          )}
+        </KvRow>
+        <KvRow k="janitor.interval">
+          {mono(h ? t("common.unitSeconds", { n: fmtNum(h.janitor.interval_seconds) }) : null, 48)}
+        </KvRow>
+        <KvRow k="janitor.last_run">
+          {!h ? (
+            <Skeleton width={72} height={12} />
+          ) : h.janitor.last_run ? (
+            <span>{fmtRelative(h.janitor.last_run)}</span>
           ) : (
-            "—"
-          )
-        }
-      />
-      <HealthRow
-        label="pool used / idle / size / max"
-        value={
-          pool
-            ? `${fmtNum(pool.in_use)} / ${fmtNum(pool.idle)} / ${fmtNum(pool.size)} / ${fmtNum(pool.max)}`
-            : "—"
-        }
-        mono
-      />
-      <HealthRow
-        label="janitor interval"
-        value={h ? t("common.unitSeconds", { n: fmtNum(h.janitor.interval_seconds) }) : "—"}
-        mono
-      />
-      <HealthRow
-        label="janitor last run"
-        value={h ? fmtRelative(h.janitor.last_run) : "—"}
-      />
-      <HealthRow label="TLS" value={h ? h.tls : "—"} mono />
-      <HealthRow
-        label="trust_proxy"
-        value={
-          h ? (
-            <Tag tone={h.trust_proxy ? "amber" : "neutral"}>
-              {h.trust_proxy ? "on" : "off"}
-            </Tag>
+            <Missing />
+          )}
+        </KvRow>
+        <KvRow k="tls">{mono(h?.tls, 64)}</KvRow>
+        <KvRow k="trust_proxy" last>
+          {h ? (
+            <ToneBadge tone={h.trust_proxy ? "warning" : "neutral"}>
+              {h.trust_proxy ? t("screen.health.on") : t("screen.health.off")}
+            </ToneBadge>
           ) : (
-            "—"
-          )
-        }
-        last
-      />
+            <BadgeSkeleton />
+          )}
+        </KvRow>
+      </dl>
     </Card>
   );
 }
 
-function HealthRow({
-  label,
-  value,
-  mono,
+/** The place of a status badge while its state is read. */
+function BadgeSkeleton() {
+  return <Skeleton width={64} height={20} radius="var(--radius-sm)" />;
+}
+
+/**
+ * One line of a ruled key–value list: the key in muted mono (with an optional
+ * legend for a compound value), the value beside it; at least 32 px, divided by --rule.
+ */
+function KvRow({
+  k,
+  hint,
+  children,
   last,
 }: {
-  label: string;
-  value: ReactNode;
-  mono?: boolean;
+  k: string;
+  hint?: string;
+  children: ReactNode;
   last?: boolean;
 }) {
   return (
     <div
       style={{
-        display: "flex",
+        display: "grid",
+        gridTemplateColumns: "minmax(112px, 240px) minmax(0, 1fr)",
+        columnGap: 16,
         alignItems: "center",
-        justifyContent: "space-between",
-        padding: "13px 0",
-        borderBottom: last ? undefined : "1px solid var(--line)",
+        minHeight: 32,
+        padding: "6px 16px",
+        borderBottom: last ? undefined : "1px solid var(--rule)",
       }}
     >
-      <span style={{ fontSize: 12.5, color: "var(--txt3)" }}>{label}</span>
-      <span
+      <dt
         style={{
-          fontSize: 13,
-          color: "var(--txt)",
-          fontWeight: 600,
-          fontFamily: mono ? MONO : "inherit",
+          minWidth: 0,
+          fontFamily: MONO,
+          fontSize: 12,
+          lineHeight: "16px",
+          color: "var(--muted-foreground)",
+          overflowWrap: "anywhere",
         }}
       >
-        {value}
-      </span>
+        {k}
+        {hint ? <span style={{ display: "block", fontSize: 11 }}>{hint}</span> : null}
+      </dt>
+      <dd
+        style={{
+          margin: 0,
+          minWidth: 0,
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          gap: "4px 12px",
+          overflowWrap: "anywhere",
+        }}
+      >
+        {children}
+      </dd>
     </div>
   );
 }

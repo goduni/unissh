@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { api } from "../api";
 import { ROLE_BY_CODE, type VaultRole } from "../api/types";
@@ -8,11 +8,28 @@ import { useUi } from "../store/ui";
 import { useAsync } from "../util/useAsync";
 import { b64ToBytes, truncId } from "../util/bytes";
 import { decodeManifestMembers, type ManifestMember } from "../util/grant-codec";
+import { DataTable, type Column } from "../ui/DataTable";
 import { Icon } from "../ui/icons";
 import { Modal } from "../ui/overlays";
-import { Btn, PubkeyChip, Spinner, Tag, ZkBanner } from "../ui/primitives";
+import {
+  Btn,
+  Card,
+  CardHeader,
+  EmptyState,
+  ErrorCard,
+  InlineError,
+  Missing,
+  PubkeyChip,
+  RoleBadge,
+  SectionLabel,
+  Skeleton,
+  ToneBadge,
+  ZkBanner,
+  tint,
+} from "../ui/primitives";
 import { Screen } from "./Screen";
 import { MONO } from "../theme/tokens";
+import "./data.css";
 
 export function Grants() {
   const { t } = useTranslation();
@@ -23,13 +40,14 @@ export function Grants() {
   );
 }
 
-function roleTone(role: number): "amber" | "accent" | "neutral" {
-  return role === 2 ? "amber" : role === 1 ? "accent" : "neutral";
-}
+const MUTED = { color: "var(--muted-foreground)" } as const;
+/** A muted note line under a figure: 12/16. */
+const NOTE = { fontSize: 12, lineHeight: "16px", ...MUTED } as const;
 
 function GrantsBody() {
   const { t } = useTranslation();
   const reloadTick = useUi((s) => s.reloadTick);
+  const pickLabel = useId();
 
   const vaults = useAsync(() => api.admin.vaults(), [reloadTick]);
   const [sel, setSel] = useState<string | null>(null);
@@ -49,104 +67,120 @@ function GrantsBody() {
 
   const [rotating, setRotating] = useState(false);
 
+  const list = vaults.data?.vaults ?? [];
+  const firstVaults = vaults.loading && !vaults.data;
+
+  const memberColumns: Column<ManifestMember>[] = [
+    {
+      key: "member_pubkey",
+      label: t("screen.grants.colMember"),
+      width: "minmax(0, 1.6fr)",
+      render: (m) => <PubkeyChip value={m.ed25519_pub} />,
+    },
+    {
+      key: "role",
+      label: t("screen.grants.roleColumn"),
+      // The badge says the role in the reader's words («Администратор», "Admin").
+      width: "128px",
+      render: (m) => <RoleBadge role={String(ROLE_BY_CODE[m.role] ?? m.role)} />,
+    },
+    {
+      key: "access",
+      label: t("screen.grants.accessColumn"),
+      width: "112px",
+      render: () => <ToneBadge tone="success">{t("screen.grants.allowed")}</ToneBadge>,
+    },
+  ];
+
   return (
     <>
       <ZkBanner tone="amber">{t("zk.grants")}</ZkBanner>
 
-      <div style={{ fontSize: 12, color: "var(--txt3)", marginBottom: 8 }}>Vault</div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 18, flexWrap: "wrap" }}>
-        {vaults.loading && !vaults.data ? <Spinner size={16} /> : null}
-        {(vaults.data?.vaults ?? []).map((v) => {
-          const on = v.vault_id === selected;
-          return (
-            <button
-              key={v.vault_id}
-              onClick={() => setSel(v.vault_id)}
-              style={{
-                fontFamily: MONO,
-                fontSize: 12,
-                padding: "6px 11px",
-                borderRadius: 8,
-                cursor: "pointer",
-                border: on ? "1px solid var(--accentLine)" : "1px solid var(--line)",
-                background: on ? "var(--accentSoft)" : "var(--bg1)",
-                color: on ? "var(--accent)" : "var(--txt2)",
-              }}
-            >
-              {truncId(v.vault_id, 8, 4)}
-            </button>
-          );
-        })}
-        {!vaults.loading && (vaults.data?.vaults.length ?? 0) === 0 ? (
-          <span style={{ fontSize: 12.5, color: "var(--txt3)" }}>{t("screen.grants.noVaults")}</span>
-        ) : null}
-      </div>
+      {vaults.error ? (
+        <ErrorCard message={vaults.error} onRetry={vaults.reload} retrying={vaults.loading} />
+      ) : null}
+
+      {!vaults.error && !vaults.loading && list.length === 0 ? (
+        <EmptyState icon="lock" title={t("screen.grants.noVaults")} />
+      ) : null}
+
+      {/* Which vault: one of the instance's, chosen in place. Pressed is --elevated at 600, never blue. */}
+      {firstVaults || list.length > 0 ? (
+        <div role="group" aria-labelledby={pickLabel} aria-busy={firstVaults || undefined}>
+          <SectionLabel id={pickLabel}>{t("screen.grants.vaultLabel")}</SectionLabel>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+            {firstVaults
+              ? [0, 1, 2].map((i) => <Skeleton key={i} width={132} height={28} />)
+              : list.map((v) => (
+                  <button
+                    key={v.vault_id}
+                    type="button"
+                    className="u-btn u-btn--outline data-pick"
+                    aria-pressed={v.vault_id === selected}
+                    title={v.vault_id}
+                    onClick={() => setSel(v.vault_id)}
+                  >
+                    {truncId(v.vault_id, 8, 4)}
+                  </button>
+                ))}
+          </div>
+        </div>
+      ) : null}
 
       {selected ? (
-        <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 14 }}>
-          <div style={{ background: "var(--bg1)", border: "1px solid var(--line)", borderRadius: 13, padding: "16px 18px" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-              <span style={{ fontSize: 13.5, fontWeight: 700 }}>{t("screen.grants.keyEpoch")}</span>
-              <Btn size="sm" variant="soft" icon="refresh" onClick={() => setRotating(true)}>
-                {t("screen.grants.rotate")}
-              </Btn>
+        <div className="data-grants-split">
+          {/* The epoch in force, and the one action of the screen: rotating it, with its consequence said first. */}
+          <Card pad={false}>
+            <CardHeader
+              title={t("screen.grants.keyEpoch")}
+              actions={
+                <Btn size="sm" variant="primary" icon="refresh" onClick={() => setRotating(true)}>
+                  {t("screen.grants.rotate")}
+                </Btn>
+              }
+            />
+            <div style={{ padding: 16 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 28 }}>
+                {grants.loading && !grants.data ? (
+                  <Skeleton width={48} height={28} />
+                ) : (
+                  <span
+                    style={{
+                      fontFamily: MONO,
+                      fontSize: 20,
+                      fontWeight: 600,
+                      lineHeight: "28px",
+                      letterSpacing: "-0.025em",
+                    }}
+                  >
+                    {grants.data ? grants.data.key_epoch : <Missing />}
+                  </span>
+                )}
+                {grants.data ? <ToneBadge tone="success">{t("screen.grants.currentBadge")}</ToneBadge> : null}
+              </div>
+              <p style={{ ...NOTE, margin: "4px 0 0" }}>{t("screen.grants.membersSummary", { count: members.length })}</p>
+              <p style={{ ...NOTE, margin: "12px 0 0", paddingTop: 12, borderTop: "1px solid var(--rule)" }}>
+                {t("screen.grants.rotateModalSub")}
+              </p>
             </div>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-              <span style={{ fontFamily: MONO, fontSize: 30, fontWeight: 700, letterSpacing: -1 }}>
-                {grants.data?.key_epoch ?? "—"}
-              </span>
-              <span style={{ fontSize: 11.5, color: "var(--green)", fontWeight: 700 }}>{t("screen.grants.current")}</span>
-            </div>
-            <div style={{ fontSize: 11.5, color: "var(--txt3)", marginTop: 6 }}>
-              {t("screen.grants.membersSummary", { count: members.length })}
-            </div>
-          </div>
+          </Card>
 
-          <div style={{ background: "var(--bg1)", border: "1px solid var(--line)", borderRadius: 13, overflow: "hidden" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 18px", borderBottom: "1px solid var(--line)" }}>
-              <span style={{ fontSize: 13.5, fontWeight: 700 }}>{t("screen.grants.currentEpochMembers")}</span>
-              <span style={{ fontSize: 11.5, color: "var(--txt3)" }}>{t("screen.grants.fromSignedManifest")}</span>
-            </div>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1.6fr 110px 110px",
-                gap: 10,
-                padding: "10px 18px",
-                borderBottom: "1px solid var(--line)",
-                background: "var(--bg2)",
-                fontSize: 10,
-                fontWeight: 700,
-                letterSpacing: 0.3,
-                textTransform: "uppercase",
-                color: "var(--txt3)",
-              }}
-            >
-              <span>member_pubkey</span>
-              <span>{t("screen.grants.roleColumn")}</span>
-              <span>{t("screen.grants.accessColumn")}</span>
-            </div>
-            {grants.loading && !grants.data ? (
-              <div style={{ display: "flex", justifyContent: "center", padding: 40 }}>
-                <Spinner />
-              </div>
-            ) : members.length === 0 ? (
-              <div style={{ padding: "28px 18px", textAlign: "center", color: "var(--txt3)", fontSize: 13 }}>
-                {t("screen.grants.noMembers")}
-              </div>
-            ) : (
-              members.map((m) => (
-                <div
-                  key={m.ed25519_pub}
-                  style={{ display: "grid", gridTemplateColumns: "1.6fr 110px 110px", gap: 10, padding: "11px 18px", borderBottom: "1px solid var(--line)", alignItems: "center" }}
-                >
-                  <PubkeyChip value={m.ed25519_pub} />
-                  <Tag tone={roleTone(m.role)}>{ROLE_BY_CODE[m.role] ?? m.role}</Tag>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: "var(--green)" }}>{t("screen.grants.allowed")}</span>
-                </div>
-              ))
-            )}
-          </div>
+          <Card pad={false}>
+            <CardHeader title={t("screen.grants.currentEpochMembers")}>
+              <span style={NOTE}>{t("screen.grants.fromSignedManifest")}</span>
+            </CardHeader>
+            <DataTable
+              bare
+              columns={memberColumns}
+              rows={members}
+              rowKey={(m) => m.ed25519_pub}
+              loading={grants.loading}
+              empty={{ title: t("screen.grants.noMembers"), icon: "user" }}
+              summary
+              minWidth={420}
+              ariaLabel={t("screen.grants.currentEpochMembers")}
+            />
+          </Card>
         </div>
       ) : null}
 
@@ -184,6 +218,8 @@ function RotateModal({
 }) {
   const { t } = useTranslation();
   const toast = useUi((s) => s.toast);
+  const titleId = useId();
+  const subId = useId();
   const accounts = useAsync(() => api.identity.accounts(), []);
   const [keep, setKeep] = useState<Record<string, VaultRole | "remove">>({});
   // Per-member access expiry as a "YYYY-MM-DD" string (empty = no expiry).
@@ -360,99 +396,152 @@ function RotateModal({
     }
   };
 
+  // Controls inside the rows of the dialog are 28 px.
+  const rowControl = { height: 28, padding: "0 8px", fontSize: 12 } as const;
+
   return (
-    <Modal onClose={onClose} width={520}>
-      <div style={{ padding: "20px 22px 0" }}>
-        <div style={{ fontSize: 16, fontWeight: 800 }}>{t("screen.grants.rotateModalTitle")}</div>
-        <div style={{ fontSize: 12, color: "var(--txt3)", marginTop: 2 }}>
+    <Modal onClose={onClose} width={600} labelledBy={titleId} describedBy={subId}>
+      <div style={{ padding: "24px 24px 16px" }}>
+        <h2
+          id={titleId}
+          style={{ margin: 0, fontSize: 18, fontWeight: 600, lineHeight: "24px", letterSpacing: "-0.025em" }}
+        >
+          {t("screen.grants.rotateModalTitle")}
+        </h2>
+        <p id={subId} style={{ margin: "8px 0 0", fontSize: 14, lineHeight: "20px", maxWidth: "72ch", ...MUTED }}>
           {t("screen.grants.rotateModalSub")}
-        </div>
+        </p>
       </div>
-      <div style={{ padding: "18px 22px" }}>
+
+      <div style={{ padding: "0 24px 16px" }}>
+        {/* What the rotation does, said before the click: the caution box (warning edge at 40 % on a 10 % fill). */}
         <div
+          role="note"
           style={{
             display: "flex",
-            gap: 10,
+            gap: 8,
             alignItems: "flex-start",
-            background: "color-mix(in srgb, var(--amber) 9%, transparent)",
-            border: "1px solid color-mix(in srgb, var(--amber) 30%, transparent)",
-            borderRadius: 10,
-            padding: "11px 13px",
-            marginBottom: 14,
+            padding: "8px 12px",
+            marginBottom: 12,
+            borderRadius: "var(--radius-lg)",
+            background: tint("var(--warning)", 10),
+            border: `1px solid ${tint("var(--warning)", 40)}`,
           }}
         >
-          <Icon name="alert" size={15} color="var(--amber)" style={{ marginTop: 1 }} />
-          <div style={{ fontSize: 12, color: "var(--txt2)", lineHeight: 1.5 }}>
+          <Icon name="alert" size={16} color="var(--warning)" style={{ marginTop: 2, flexShrink: 0 }} />
+          <p style={{ margin: 0, fontSize: 13, lineHeight: "20px", maxWidth: "72ch", color: "var(--foreground)" }}>
             <Trans
               i18nKey="screen.grants.rotateHint"
               values={{ next: currentEpoch + 1, cur: currentEpoch }}
               components={{
-                b: <b style={{ color: "var(--txt)" }} />,
-                code: <code style={{ color: "var(--amber)", fontFamily: MONO }} />,
+                b: <b style={{ fontWeight: 600 }} />,
+                code: <code style={{ fontFamily: MONO, fontSize: 12 }} />,
               }}
             />
-          </div>
+          </p>
         </div>
 
-        <div style={{ maxHeight: 280, overflowY: "auto", border: "1px solid var(--line)", borderRadius: 10 }}>
+        <div
+          style={{
+            maxHeight: 280,
+            overflowY: "auto",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius-md)",
+          }}
+        >
           {members.map((m) => {
             const role = (keep[m.pub] as VaultRole) || m.role;
             const removed = keep[m.pub] === "remove";
             return (
-              <div key={m.pub} style={{ display: "grid", gridTemplateColumns: "1fr 120px 140px 90px", gap: 10, padding: "10px 14px", borderBottom: "1px solid var(--line)", alignItems: "center", opacity: removed ? 0.5 : 1 }}>
-                <div style={{ minWidth: 0 }}>
+              <div key={m.pub} className="data-member">
+                {/* A member taken out stays in the list: dimmed, the handle struck, "restore" beside it. */}
+                <div style={{ minWidth: 0, opacity: removed ? 0.5 : undefined }}>
                   <PubkeyChip value={m.pub} />
-                  <div style={{ fontSize: 11, color: m.x25519 ? "var(--txt3)" : "var(--red)", fontFamily: MONO }}>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      lineHeight: "16px",
+                      fontFamily: m.who ? MONO : undefined,
+                      color: m.x25519 ? "var(--muted-foreground)" : "var(--destructive)",
+                      textDecoration: removed ? "line-through" : undefined,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
                     {m.who ?? (m.x25519 ? "—" : t("screen.grants.noAccount"))}
                   </div>
                 </div>
                 <select
+                  className="u-input"
                   value={role}
                   disabled={removed}
+                  aria-label={t("screen.grants.roleColumn")}
                   onChange={(e) => setKeep((k) => ({ ...k, [m.pub]: e.target.value as VaultRole }))}
-                  style={{ height: 30, borderRadius: 8, background: "var(--bg2)", border: "1px solid var(--line)", color: "var(--txt)", fontFamily: "inherit", fontSize: 12.5, padding: "0 8px" }}
+                  style={rowControl}
                 >
-                  <option value="viewer">viewer</option>
-                  <option value="editor">editor</option>
-                  <option value="admin">admin</option>
+                  {ROLES.map((r) => (
+                    <option key={r} value={r}>
+                      {t(`role.${r}`)}
+                    </option>
+                  ))}
                 </select>
                 <input
                   type="date"
+                  className="u-input"
                   value={expiry[m.pub] ?? ""}
                   disabled={removed}
                   min={new Date().toISOString().slice(0, 10)}
-                  title="Access expiry (optional) — after this date the member's grant is no longer active (enforced by both the server and the client). Must be a future date."
+                  aria-label={t("screen.grants.expiryLabel")}
+                  title={t("screen.grants.expiryTitle")}
                   onChange={(e) => setExpiry((x) => ({ ...x, [m.pub]: e.target.value }))}
-                  style={{ height: 30, borderRadius: 8, background: "var(--bg2)", border: "1px solid var(--line)", color: "var(--txt)", fontFamily: "inherit", fontSize: 12, padding: "0 8px" }}
+                  style={rowControl}
                 />
-                <Btn size="sm" variant={removed ? "soft" : "danger"} onClick={() => setKeep((k) => ({ ...k, [m.pub]: removed ? m.role : "remove" }))}>
+                <Btn
+                  size="sm"
+                  variant={removed ? "outline" : "danger"}
+                  onClick={() => setKeep((k) => ({ ...k, [m.pub]: removed ? m.role : "remove" }))}
+                >
                   {removed ? t("screen.grants.restore") : t("screen.grants.remove")}
                 </Btn>
               </div>
             );
           })}
-          {members.length === 0 ? <div style={{ padding: 20, textAlign: "center", color: "var(--txt3)", fontSize: 13 }}>{t("screen.grants.noMembersShort")}</div> : null}
+          {members.length === 0 ? (
+            <EmptyState compact flat icon="user" title={t("screen.grants.noMembersShort")} />
+          ) : null}
         </div>
 
         {error ? (
-          <div style={{ fontSize: 12.5, color: "var(--red)", margin: "14px 0 0", display: "flex", gap: 6, alignItems: "center" }}>
-            <Icon name="alert" size={14} color="var(--red)" />
-            {error}
+          <div style={{ marginTop: 12 }}>
+            <InlineError>{error}</InlineError>
           </div>
         ) : null}
+      </div>
 
-        <div style={{ display: "flex", gap: 9, marginTop: 16 }}>
-          <Btn full onClick={onClose}>
-            {t("common.cancel")}
-          </Btn>
-          <Btn full variant="primary" icon="shieldcheck" loading={busy} onClick={publish}>
-            {t("screen.grants.signAndPublish")}
-          </Btn>
-        </div>
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          justifyContent: "flex-end",
+          gap: 8,
+          padding: "16px 24px",
+          borderTop: "1px solid var(--rule)",
+        }}
+      >
+        <Btn variant="outline" onClick={onClose}>
+          {t("common.cancel")}
+        </Btn>
+        <Btn variant="primary" icon="shieldcheck" loading={busy} onClick={publish}>
+          {t("screen.grants.signAndPublish")}
+        </Btn>
       </div>
     </Modal>
   );
 }
+
+/** The roles a member can hold, the least first: the options of the role picker. */
+const ROLES: VaultRole[] = ["viewer", "editor", "admin"];
 
 function roleCode(r: VaultRole): number {
   return r === "admin" ? 2 : r === "editor" ? 1 : 0;

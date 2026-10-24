@@ -1,4 +1,5 @@
-import { useState } from "react";
+import "./access.css";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { claimInstance, type ClaimOutcome } from "../api/auth-service";
 import { ApiError } from "../api/errors";
@@ -6,8 +7,12 @@ import { CryptoUnavailableError } from "../crypto/provider";
 import { useCryptoReady } from "../crypto/wasm-provider";
 import { useUi } from "../store/ui";
 import { Icon } from "../ui/icons";
-import { Btn, Field, InlineError, TextInput } from "../ui/primitives";
+import { Btn, Field, InlineError, TextInput, ZkBanner } from "../ui/primitives";
 import { Modal } from "../ui/overlays";
+import { CautionLine, CopyWell, DialogFoot, DialogTitle } from "./kit";
+
+// Field's own bottom margin is dropped: the body's 16 px gap spaces the fields.
+const FIELD = { marginBottom: 0 };
 
 /**
  * First-run instance claim: setup code → genesis owner keyset. The keyset is
@@ -23,6 +28,14 @@ export function ClaimModal({
 }) {
   const { t } = useTranslation();
   const toast = useUi((s) => s.toast);
+  const titleId = useId();
+  const descId = useId();
+  const kitId = useId();
+  const codeId = useId();
+  const nameId = useId();
+  const handleId = useId();
+  const spaceId = useId();
+  const passwordId = useId();
 
   const [setupCode, setSetupCode] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -31,6 +44,8 @@ export function ClaimModal({
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The refusal names the setup-code field (said under it), not the server's answer.
+  const [codeMissing, setCodeMissing] = useState(false);
   const [result, setResult] = useState<ClaimOutcome | null>(null);
   // Gate "Continue" on the whole Emergency Kit: the recovery file is downloaded AND
   // the operator has explicitly acknowledged saving the Secret Key. The Secret Key is
@@ -45,8 +60,21 @@ export function ClaimModal({
 
   const cryptoReady = useCryptoReady();
 
-  const create = async () => {
-    if (!setupCode.trim()) return setError(t("access.onb.claim_err_no_code"));
+  // When the Secret Key appears the form is gone; the focus moves to the warning that
+  // says it is shown once, so it is read first and Tab stays inside the dialog.
+  const shownOnce = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (result) shownOnce.current?.focus();
+  }, [result]);
+
+  const create = async (e?: FormEvent) => {
+    e?.preventDefault();
+    if (busy) return;
+    if (!setupCode.trim()) {
+      setCodeMissing(true);
+      return setError(t("access.onb.claim_err_no_code"));
+    }
+    setCodeMissing(false);
     setError(null);
     setBusy(true);
     try {
@@ -90,13 +118,17 @@ export function ClaimModal({
     setDownloaded(true);
   };
 
-  const copySecret = async () => {
-    if (!result) return;
+  // Resolves whether the copy landed: the well shows the green check, or says the
+  // browser refused and how to copy by hand. Never a "copied" the clipboard did not take.
+  const copySecret = async (): Promise<boolean> => {
+    if (!result) return false;
     try {
       await navigator.clipboard.writeText(result.secretKeyHex);
       toast("success", t("access.onb.bs_copied_toast"));
+      return true;
     } catch {
       /* clipboard may be unavailable in this context */
+      return false;
     }
   };
 
@@ -127,129 +159,122 @@ export function ClaimModal({
   const kitSecured = downloaded && secretAck;
   const locked = result !== null && !kitSecured;
 
-  return (
-    <Modal onClose={onClose} width={460} dismissable={!locked}>
-      <div style={{ padding: "20px 22px 0" }}>
-        <div style={{ fontSize: 16, fontWeight: 800 }}>{t("access.onb.claim_title")}</div>
-        <div style={{ fontSize: 12, color: "var(--txt3)", marginTop: 2 }}>
-          {result ? t("access.onb.bs_done_step") : t("access.onb.claim_step1")}
-        </div>
-      </div>
+  const head = (
+    <DialogTitle
+      titleId={titleId}
+      title={t("access.onb.claim_title")}
+      descId={descId}
+      description={result ? t("access.onb.bs_done_step") : t("access.onb.claim_step1")}
+    />
+  );
 
-      <div style={{ padding: "18px 22px" }}>
-        {result ? (
-          <>
-            <div
-              style={{
-                display: "flex",
-                gap: 10,
-                alignItems: "flex-start",
-                background: "color-mix(in srgb, var(--amber) 10%, transparent)",
-                border: "1px solid color-mix(in srgb, var(--amber) 32%, transparent)",
-                borderRadius: 10,
-                padding: "11px 13px",
-                marginBottom: 16,
-              }}
-            >
-              <Icon name="alert" size={15} color="var(--amber)" style={{ marginTop: 1 }} />
-              <div style={{ fontSize: 12, color: "var(--txt2)", lineHeight: 1.5 }}>
-                {t("access.onb.bs_done_intro")}
-              </div>
+  return (
+    <Modal
+      onClose={onClose}
+      width={480}
+      dismissable={!locked}
+      labelledBy={titleId}
+      describedBy={descId}
+    >
+      {result ? (
+        <>
+          <div className="acc-dlg-body">
+            {head}
+            {/* The zero-knowledge warning, said first and loud. The wrapper takes the
+                focus on reveal; its negative margin cancels the banner's own. */}
+            <div ref={shownOnce} tabIndex={-1} className="acc-focus-target" style={{ marginBottom: -16 }}>
+              <ZkBanner tone="amber">{t("access.onb.bs_done_intro")}</ZkBanner>
             </div>
 
             {/* Emergency Kit — the Secret Key and its offline recovery file, grouped
-                as one labelled block; "Continue" gates on both being secured. */}
-            <div
-              style={{
-                border: "1px solid var(--line2)",
-                borderRadius: 12,
-                background: "var(--bg1)",
-                padding: "14px 15px 15px",
-                marginBottom: 14,
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-                <Icon name="shieldcheck" size={15} color="var(--accent)" />
-                <span style={{ fontSize: 12.5, fontWeight: 700, letterSpacing: 0.2 }}>
-                  {t("access.onb.bs_kit_label")}
-                </span>
+                as one labelled object; "Enter the panel" gates on both being secured. */}
+            <section aria-labelledby={kitId} className="acc-kit">
+              <div
+                id={kitId}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  lineHeight: "18px",
+                }}
+              >
+                <Icon name="shieldcheck" size={16} />
+                {t("access.onb.bs_kit_label")}
               </div>
 
-              <Field
+              <CopyWell
                 label={t("access.onb.bs_secretkey_label")}
                 tag={t("access.onb.bs_secretkey_tag")}
                 hint={t("access.onb.bs_secretkey_hint")}
-              >
-                <div style={{ display: "flex", gap: 8 }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <TextInput value={result.secretKeyHex} mono />
-                  </div>
-                  <Btn icon="copy" onClick={copySecret}>
-                    {t("access.onb.bs_copy_btn")}
-                  </Btn>
-                </div>
-              </Field>
+                value={result.secretKeyHex}
+                onCopy={copySecret}
+                copyLabel={t("access.onb.bs_copy_btn")}
+              />
 
-              <Btn
-                full
-                icon={downloaded ? "check" : "download"}
-                variant="soft"
-                onClick={downloadKeyset}
-                style={{ marginBottom: 13 }}
-              >
-                {t("access.onb.bs_download_btn")}
-              </Btn>
+              <div className="acc-stack" style={{ gap: 6 }}>
+                <Btn
+                  full
+                  variant="outline"
+                  icon={downloaded ? "check" : "download"}
+                  iconColor={downloaded ? "var(--success)" : undefined}
+                  onClick={downloadKeyset}
+                >
+                  {t("access.onb.bs_download_btn")}
+                </Btn>
+                {/* Said in a word, not only by the icon: the file half of the gate is done. */}
+                <p
+                  role="status"
+                  style={{ margin: 0, fontSize: 12, lineHeight: "16px", color: "var(--success)" }}
+                >
+                  {downloaded ? t("access.onb.bs_downloaded") : ""}
+                </p>
+              </div>
 
               <CheckRow
                 checked={secretAck}
                 onChange={setSecretAck}
                 label={t("access.onb.bs_secretack_label")}
               />
-            </div>
+            </section>
 
-            <Btn
-              full
-              variant="primary"
-              disabled={!kitSecured || finishing}
-              loading={finishing}
-              onClick={finish}
-            >
+            {finishError ? <InlineError>{finishError}</InlineError> : null}
+          </div>
+          <DialogFoot note={!kitSecured ? t("access.onb.bs_done_gate") : undefined}>
+            <Btn variant="primary" disabled={!kitSecured || finishing} loading={finishing} onClick={finish}>
               {t("access.onb.claim_enter_btn")}
             </Btn>
-            {finishError ? (
-              <div style={{ marginTop: 9 }}>
-                <InlineError>{finishError}</InlineError>
-              </div>
-            ) : null}
-            {!kitSecured ? (
-              <div style={{ fontSize: 11.5, color: "var(--txt3)", marginTop: 8, textAlign: "center" }}>
-                {t("access.onb.bs_done_gate")}
-              </div>
-            ) : null}
-          </>
-        ) : (
-          <>
-            <div
-              style={{
-                fontSize: 12.5,
-                color: "var(--txt2)",
-                lineHeight: 1.55,
-                marginBottom: 16,
-              }}
-            >
-              {t("access.onb.claim_intro")}
-            </div>
+          </DialogFoot>
+        </>
+      ) : (
+        <form className="acc-dlg-form" onSubmit={create} noValidate>
+          <div className="acc-dlg-body">
+            {head}
+            <p className="acc-copy">{t("access.onb.claim_intro")}</p>
 
             <Field
               label={t("access.onb.setup_label")}
               tag={t("access.onb.setup_tag")}
               hint={t("access.onb.setup_hint")}
+              error={codeMissing ? error : null}
+              htmlFor={codeId}
+              style={FIELD}
             >
               <TextInput
+                id={codeId}
                 value={setupCode}
-                onChange={setSetupCode}
+                onChange={(v) => {
+                  setSetupCode(v);
+                  if (codeMissing) {
+                    setCodeMissing(false);
+                    setError(null);
+                  }
+                }}
                 placeholder={t("access.onb.setup_ph")}
                 mono
+                invalid={codeMissing}
+                autoFocus
               />
             </Field>
 
@@ -257,8 +282,11 @@ export function ClaimModal({
               label={t("access.onb.bs_name_label")}
               tag={t("access.onb.bs_name_tag")}
               hint={t("access.onb.bs_name_hint")}
+              htmlFor={nameId}
+              style={FIELD}
             >
               <TextInput
+                id={nameId}
                 value={displayName}
                 onChange={setDisplayName}
                 placeholder={t("access.onb.bs_name_ph")}
@@ -269,12 +297,16 @@ export function ClaimModal({
               label={t("access.onb.bs_handle_label")}
               tag={t("access.onb.bs_handle_tag")}
               hint={t("access.onb.bs_handle_hint")}
+              htmlFor={handleId}
+              style={FIELD}
             >
               <TextInput
+                id={handleId}
                 value={handle}
                 onChange={setHandle}
                 placeholder={t("access.onb.bs_handle_ph")}
                 mono
+                autoComplete="username"
               />
             </Field>
 
@@ -282,8 +314,11 @@ export function ClaimModal({
               label={t("access.onb.space_label")}
               tag={t("access.onb.space_tag")}
               hint={t("access.onb.space_hint")}
+              htmlFor={spaceId}
+              style={FIELD}
             >
               <TextInput
+                id={spaceId}
                 value={spaceName}
                 onChange={setSpaceName}
                 placeholder={t("access.onb.space_ph")}
@@ -294,45 +329,33 @@ export function ClaimModal({
               label={t("access.onb.bs_pwd_label")}
               tag={t("access.onb.bs_pwd_tag")}
               hint={t("access.onb.bs_pwd_hint")}
+              htmlFor={passwordId}
+              style={FIELD}
             >
               <TextInput
+                id={passwordId}
                 type="password"
                 value={password}
                 onChange={setPassword}
                 placeholder="••••••••"
                 mono
+                autoComplete="new-password"
               />
             </Field>
 
-            {!cryptoReady ? (
-              <div
-                style={{
-                  fontSize: 11.5,
-                  color: "var(--amber)",
-                  marginBottom: 12,
-                  display: "flex",
-                  gap: 6,
-                  alignItems: "center",
-                }}
-              >
-                <Icon name="alert" size={13} color="var(--amber)" />
-                {t("access.onb.ks_crypto_warn")}
-              </div>
-            ) : null}
-
-            {error ? <InlineError>{error}</InlineError> : null}
-
-            <div style={{ display: "flex", gap: 9 }}>
-              <Btn full onClick={onClose}>
-                {t("common.cancel")}
-              </Btn>
-              <Btn full variant="primary" loading={busy} onClick={create}>
-                {t("access.onb.claim_create_btn")}
-              </Btn>
-            </div>
-          </>
-        )}
-      </div>
+            {!cryptoReady ? <CautionLine>{t("access.onb.ks_crypto_warn")}</CautionLine> : null}
+            {error && !codeMissing ? <InlineError>{error}</InlineError> : null}
+          </div>
+          <DialogFoot>
+            <Btn variant="outline" onClick={onClose}>
+              {t("common.cancel")}
+            </Btn>
+            <Btn variant="primary" type="submit" loading={busy}>
+              {t("access.onb.claim_create_btn")}
+            </Btn>
+          </DialogFoot>
+        </form>
+      )}
     </Modal>
   );
 }
@@ -354,36 +377,12 @@ function CheckRow({
       role="checkbox"
       aria-checked={checked}
       onClick={() => onChange(!checked)}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 9,
-        width: "100%",
-        background: "transparent",
-        border: "none",
-        padding: 0,
-        cursor: "pointer",
-        textAlign: "left",
-        fontFamily: "inherit",
-      }}
+      className="acc-check"
     >
-      <span
-        style={{
-          width: 18,
-          height: 18,
-          borderRadius: 6,
-          flexShrink: 0,
-          border: checked ? "1px solid var(--accent)" : "1px solid var(--line2)",
-          background: checked ? "var(--accent)" : "var(--bg2)",
-          color: "#fff",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
+      <span className="acc-check-box">
         {checked ? <Icon name="check" size={12} stroke={2.4} /> : null}
       </span>
-      <span style={{ fontSize: 12.5, color: "var(--txt2)", lineHeight: 1.4 }}>{label}</span>
+      <span className="acc-check-label">{label}</span>
     </button>
   );
 }

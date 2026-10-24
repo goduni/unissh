@@ -1,0 +1,376 @@
+/*
+ * The way in: the login page, the claim and the invite dialogs. Only what inline
+ * styles cannot say (hover, focus, media queries) and the layout the access screens
+ * share. Tokens only; controls come from the kit's u-* classes in theme/global.css,
+ * and its reduced-motion rule cuts the transitions here too.
+ */
+
+/* ── The split: a rail-coloured panel (5) beside the form (4) ─────────── */
+.acc-login {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto 1fr;
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--background);
+  color: var(--foreground);
+}
+.acc-panel {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 24px;
+  min-height: 160px;
+  padding: 24px 16px;
+  background: var(--rail);
+  border-bottom: 1px solid var(--rule);
+}
+.acc-panel-note {
+  position: relative;
+  display: none;
+  margin: 0;
+  max-width: 32ch;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--muted-foreground);
+}
+.acc-side {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.acc-topbar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  padding: 12px;
+}
+.acc-main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 16px 40px;
+}
+.acc-column {
+  width: 100%;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+@media (min-width: 768px) {
+  .acc-login {
+    grid-template-columns: minmax(0, 5fr) minmax(0, 4fr);
+    grid-template-rows: 1fr;
+  }
+  .acc-panel {
+    padding: 32px;
+    border-bottom: 0;
+    border-right: 1px solid var(--rule);
+  }
+  .acc-panel-note {
+    display: block;
+  }
+  .acc-main {
+    padding: 24px 32px 64px;
+  }
+}
+
+/* ── Prose and stacks ─────────────────────────────────────────────────── */
+.acc-copy {
+  margin: 0;
+  max-width: 72ch;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--muted-foreground);
+  text-wrap: pretty;
+}
+.acc-note {
+  margin: 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--muted-foreground);
+  text-wrap: pretty;
+}
+.acc-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin: 0;
+}
+.acc-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* ── A label head like Field's (for wells and groups) ─────────────────── */
+.acc-field-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.acc-label {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 16px;
+  color: var(--foreground);
+}
+.acc-tag {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+.acc-hint,
+.acc-error {
+  margin: 0;
+  max-width: 72ch;
+  font-size: 14px;
+  line-height: 20px;
+  text-wrap: pretty;
+}
+.acc-hint {
+  color: var(--muted-foreground);
+}
+.acc-error {
+  color: var(--destructive);
+}
+.acc-well-value {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--foreground);
+  word-break: break-all;
+  user-select: all;
+}
+
+/* A native select drawn as the kit's field, with its own chevron. */
+.acc-select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 32px;
+  cursor: pointer;
+}
+.acc-select option {
+  background: var(--popover);
+  color: var(--foreground);
+}
+
+/* An absent value holding a control's place: dashed, muted. */
+.acc-absent {
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 6px 12px;
+  border: 1px dashed var(--input);
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--muted-foreground);
+}
+
+/* ── Line tabs: a 36 px strip between two rules ──────────────────────── */
+.acc-tabs {
+  display: flex;
+  gap: 2px;
+  height: 36px;
+  overflow-x: auto;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  scrollbar-width: none;
+}
+.acc-tab {
+  position: relative;
+  flex: none;
+  height: 100%;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-out-soft);
+}
+.acc-tab:hover {
+  color: var(--foreground);
+}
+.acc-tab[aria-selected="true"] {
+  color: var(--foreground);
+  font-weight: 600;
+}
+.acc-tab[aria-selected="true"]::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 0;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--primary);
+}
+/* The ring is inset: the strip clips what is drawn outside a tab. */
+.acc-tab:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);
+}
+
+/* ── Checkbox (the Secret-Key acknowledgement) ───────────────────────── */
+.acc-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.acc-check:focus-visible {
+  outline: none;
+}
+.acc-check-box {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-sm);
+  background: var(--field-fill);
+  transition:
+    background-color var(--duration-fast) var(--ease-out-soft),
+    border-color var(--duration-fast) var(--ease-out-soft);
+}
+.acc-check[aria-checked="true"] .acc-check-box {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+.acc-check:focus-visible .acc-check-box {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);
+}
+.acc-check-label {
+  font-size: 14px;
+  line-height: 20px;
+}
+
+/* ── Caution: a solid amber box; and one amber line ──────────────────── */
+.acc-caution {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in oklch, var(--warning) 40%, transparent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in oklch, var(--warning) 10%, transparent);
+  color: var(--foreground);
+  font-size: 14px;
+  line-height: 20px;
+  text-wrap: pretty;
+}
+.acc-caution > svg {
+  color: var(--warning);
+}
+.acc-caution-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--warning);
+}
+.acc-focus-target:focus {
+  outline: none;
+}
+
+/* ── Dialog layout (inside the shared Modal, which scrolls) ──────────── */
+.acc-dlg-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px;
+}
+.acc-dlg-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 24px;
+  letter-spacing: -0.025em;
+  color: var(--foreground);
+}
+.acc-dlg-desc {
+  margin: 8px 0 0;
+  max-width: 72ch;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--muted-foreground);
+}
+.acc-dlg-form {
+  margin: 0;
+}
+/* The foot stays in view while a long body scrolls under it. */
+.acc-dlg-foot {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px 12px;
+  padding: 16px 24px;
+  border-top: 1px solid var(--rule);
+  background: var(--background);
+}
+.acc-dlg-foot-note {
+  flex: 1 1 200px;
+  min-width: 0;
+  margin: 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--muted-foreground);
+}
+.acc-dlg-foot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-left: auto;
+}
+@media (max-width: 480px) {
+  .acc-dlg-body {
+    padding: 16px;
+  }
+  .acc-dlg-foot {
+    padding-inline: 16px;
+  }
+}
+
+/* The Emergency Kit: one labelled object inside the claim dialog. */
+.acc-kit {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+}

@@ -1,5 +1,179 @@
+/*
+ * The Carbon Sheet: the admin's tokens, base and the few classes inline styles
+ * cannot express (:hover, :focus-visible, ::placeholder, media queries).
+ * Components use only these tokens, never a raw colour.
+ */
+
+/*
+ * The two families, served from this panel's own origin (src/assets/fonts, each
+ * with its licence, OFL-*.txt there): Google's variable subset files, each
+ * fetched only when a page has a character of its range. The URLs are relative,
+ * because the panel may be served from a sub-path (Vite's base is "./").
+ */
+@font-face {
+  font-family: "Geologica";
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url("../assets/fonts/geologica-cyrillic-ext.woff2") format("woff2");
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+@font-face {
+  font-family: "Geologica";
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url("../assets/fonts/geologica-cyrillic.woff2") format("woff2");
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+@font-face {
+  font-family: "Geologica";
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url("../assets/fonts/geologica-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Geologica";
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url("../assets/fonts/geologica-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("../assets/fonts/jetbrains-mono-cyrillic-ext.woff2") format("woff2");
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("../assets/fonts/jetbrains-mono-cyrillic.woff2") format("woff2");
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("../assets/fonts/jetbrains-mono-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("../assets/fonts/jetbrains-mono-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* ── Tokens that do not change with the theme ─────────────────────────── */
+:root {
+  --font-sans: "Geologica", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --radius-sm: 5px;
+  --radius-md: 7px;
+  --radius-lg: 10px;
+  --duration-fast: 120ms;
+  --duration-base: 160ms;
+  --duration-slow: 240ms;
+  --ease-out-soft: cubic-bezier(0.2, 0, 0, 1);
+}
+
+/*
+ * ── The dark sheet (native) ──────────────────────────────────────────────
+ * Also the value before ThemeProvider has set data-theme.
+ */
+:root,
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --background: oklch(0.125 0 0);
+  --foreground: oklch(0.97 0 0);
+  --rail: oklch(0.095 0 0);
+  --card: oklch(0.16 0 0);
+  --popover: oklch(0.19 0 0);
+  --elevated: oklch(0.215 0 0);
+  --muted-foreground: oklch(0.62 0 0);
+  --primary: oklch(0.57 0.2 262);
+  --primary-foreground: oklch(1 0 0);
+  --link: oklch(0.72 0.17 262);
+  --ring: var(--link);
+  --success: oklch(0.78 0.17 150);
+  --warning: oklch(0.8 0.15 85);
+  --destructive: oklch(0.66 0.21 22);
+  --destructive-foreground: oklch(1 0 0);
+  --series-4: oklch(0.75 0.13 305);
+  --border: oklch(1 0 0 / 10%);
+  --rule: oklch(1 0 0 / 7%);
+  --input: oklch(1 0 0 / 14%);
+  --overlay: oklch(0 0 0 / 55%);
+  --qr: oklch(1 0 0);
+  --qr-foreground: oklch(0 0 0);
+  --elev-card: 0 1px 0 oklch(1 0 0 / 3%) inset, 0 1px 3px oklch(0 0 0 / 12%);
+  --elev-popover: 0 10px 30px -10px oklch(0 0 0 / 70%), 0 1px 2px oklch(0 0 0 / 50%);
+
+  /* Component-private: how controls differ between the two sheets. */
+  --field-fill: color-mix(in oklch, var(--input) 30%, transparent);
+  --outline-edge: var(--input);
+  --outline-fill: color-mix(in oklch, var(--input) 30%, transparent);
+  --outline-hover: color-mix(in oklch, var(--input) 50%, transparent);
+  --destructive-fill: color-mix(in oklch, var(--destructive) 60%, transparent);
+  --destructive-hover: color-mix(in oklch, var(--destructive) 70%, transparent);
+  --switch-off: color-mix(in oklch, var(--input) 80%, transparent);
+  --switch-thumb-off: var(--foreground);
+}
+
+/* ── The same sheet in daylight ───────────────────────────────────────── */
+html[data-theme="light"] {
+  color-scheme: light;
+  --background: oklch(0.985 0 0);
+  --foreground: oklch(0.15 0 0);
+  --rail: oklch(0.965 0 0);
+  --card: oklch(1 0 0);
+  --popover: oklch(1 0 0);
+  --elevated: oklch(0.955 0 0);
+  --muted-foreground: oklch(0.5 0 0);
+  --primary: oklch(0.55 0.21 262);
+  --primary-foreground: oklch(1 0 0);
+  --link: oklch(0.5 0.2 262);
+  --ring: var(--link);
+  --success: oklch(0.45 0.16 150);
+  --warning: oklch(0.48 0.15 80);
+  --destructive: oklch(0.48 0.21 25);
+  --destructive-foreground: oklch(1 0 0);
+  --series-4: oklch(0.5 0.16 305);
+  --border: oklch(0.89 0 0);
+  --rule: oklch(0.925 0 0);
+  --input: oklch(0.85 0 0);
+  --overlay: oklch(0 0 0 / 40%);
+  --qr: oklch(1 0 0);
+  --qr-foreground: oklch(0 0 0);
+  --elev-card: 0 1px 3px oklch(0 0 0 / 8%);
+  --elev-popover: 0 10px 30px -10px oklch(0 0 0 / 22%), 0 1px 2px oklch(0 0 0 / 10%);
+
+  --field-fill: transparent;
+  --outline-edge: var(--border);
+  --outline-fill: var(--background);
+  --outline-hover: var(--elevated);
+  --destructive-fill: var(--destructive);
+  --destructive-hover: color-mix(in oklch, var(--destructive) 90%, transparent);
+  --switch-off: var(--input);
+  --switch-thumb-off: var(--background);
+}
+
+
+/* ── Base ─────────────────────────────────────────────────────────────── */
 * {
   box-sizing: border-box;
+  scrollbar-color: var(--elevated) transparent;
 }
 html,
 body {
@@ -7,62 +181,511 @@ body {
   height: 100%;
 }
 body {
-  background: var(--desk);
-  color: var(--txt);
-  font-family: "Hanken Grotesk", system-ui, -apple-system, sans-serif;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-size: 0.8125rem;
+  line-height: 1.25;
+  font-variant-numeric: tabular-nums;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 #root {
   height: 100%;
 }
+button,
+input,
+textarea,
+select {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--font-mono);
+}
+a {
+  color: var(--link);
+  text-underline-offset: 3px;
+}
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--primary);
+}
+input,
+textarea {
+  caret-color: var(--link);
+}
+::selection {
+  background: color-mix(in oklch, var(--link) 35%, transparent);
+}
 
+/* Scrollbars in the sheet's colours (WebKit; the rest read scrollbar-color). */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--line2);
-  border-radius: 6px;
+  background: var(--elevated);
+  border-radius: 9999px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
-::-webkit-scrollbar-track {
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--input);
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
   background: transparent;
 }
 
-button {
-  font-family: inherit;
+/* The focus ring: --ring, 3 px at 50 %. Controls also turn their edge to --ring. */
+:focus-visible {
+  outline: 3px solid color-mix(in oklch, var(--ring) 50%, transparent);
+  outline-offset: 0;
+}
+:focus:not(:focus-visible) {
+  outline: none;
 }
 
-/* Row + card hover affordances (inline styles can't express :hover). */
+/* Visually hidden, still read by assistive technology. */
+.u-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ── Buttons (Btn) ────────────────────────────────────────────────────── */
+.u-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--foreground);
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-out-soft),
+    border-color var(--duration-fast) var(--ease-out-soft),
+    color var(--duration-fast) var(--ease-out-soft),
+    box-shadow var(--duration-fast) var(--ease-out-soft);
+}
+.u-btn:focus-visible {
+  outline: none;
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);
+}
+.u-btn:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+/* Working: off, but at full strength, with its spinner. */
+.u-btn[aria-busy="true"]:disabled {
+  cursor: progress;
+  opacity: 1;
+}
+.u-btn--primary {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+.u-btn--primary:hover:not(:disabled) {
+  background: color-mix(in oklch, var(--primary) 90%, transparent);
+}
+.u-btn--outline {
+  background: var(--outline-fill);
+  border-color: var(--outline-edge);
+}
+.u-btn--outline:hover:not(:disabled) {
+  background: var(--outline-hover);
+}
+/* A row action whose press removes or revokes: outline, red word. */
+.u-btn--outline-destructive {
+  background: var(--outline-fill);
+  border-color: var(--outline-edge);
+  color: var(--destructive);
+}
+.u-btn--outline-destructive:hover:not(:disabled) {
+  background: color-mix(in oklch, var(--destructive) 10%, transparent);
+}
+.u-btn--ghost:hover:not(:disabled),
+.u-btn--ghost[aria-pressed="true"],
+.u-btn--ghost[aria-expanded="true"] {
+  background: var(--elevated);
+}
+.u-btn--destructive {
+  background: var(--destructive-fill);
+  color: var(--destructive-foreground);
+}
+.u-btn--destructive:hover:not(:disabled) {
+  background: var(--destructive-hover);
+}
+.u-btn--destructive:focus-visible {
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--destructive) 40%, transparent);
+}
+/* Icon buttons: muted at rest, full text under the pointer; a removal turns red. */
+.u-iconbtn {
+  color: var(--muted-foreground);
+}
+.u-iconbtn:hover:not(:disabled),
+.u-iconbtn:focus-visible,
+.u-iconbtn[aria-pressed="true"] {
+  color: var(--foreground);
+}
+.u-iconbtn--destructive:hover:not(:disabled),
+.u-iconbtn--destructive:focus-visible {
+  color: var(--destructive);
+}
+
+/* A text link, also when it is a button. */
+.u-link {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--link);
+  font: inherit;
+  font-weight: 500;
+  text-decoration: none;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.u-link:hover {
+  text-decoration: underline;
+}
+
+/* ── Fields ───────────────────────────────────────────────────────────── */
+.u-input {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 4px 12px;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-md);
+  background: var(--field-fill);
+  color: var(--foreground);
+  font-size: 0.8125rem;
+  line-height: 1.25;
+  outline: none;
+  transition:
+    border-color var(--duration-fast) var(--ease-out-soft),
+    box-shadow var(--duration-fast) var(--ease-out-soft);
+}
+.u-input::placeholder {
+  color: var(--muted-foreground);
+  opacity: 1;
+}
+/* A placeholder is the panel's words, even in a mono field: the value keeps
+   the field's own face. */
+input::placeholder,
+textarea::placeholder {
+  font-family: var(--font-sans);
+}
+.u-input:focus-visible {
+  outline: none;
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);
+}
+.u-input[aria-invalid="true"] {
+  border-color: var(--destructive);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--destructive) 20%, transparent);
+}
+.u-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.u-input[type="file"] {
+  padding: 3px 8px;
+  line-height: 24px;
+  color: var(--muted-foreground);
+}
+.u-input[type="file"]::file-selector-button {
+  height: 24px;
+  margin-right: 8px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--elevated);
+  color: var(--foreground);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+/* A secret is a text field masked, never a password field. */
+.u-input--secret {
+  -webkit-text-security: disc;
+}
+
+/* ── Toggle group (Segmented) ─────────────────────────────────────────── */
+.u-seg {
+  display: inline-flex;
+  align-items: stretch;
+  overflow: hidden;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-md);
+  background: var(--field-fill);
+}
+.u-seg__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 0;
+  border-left: 1px solid var(--input);
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-out-soft),
+    color var(--duration-fast) var(--ease-out-soft);
+}
+.u-seg__item:first-child {
+  border-left: 0;
+}
+.u-seg__item:hover {
+  color: var(--foreground);
+}
+/* The ring is inset: the frame clips what is drawn outside an item. */
+.u-seg__item:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);
+}
+.u-seg__item[aria-checked="true"] {
+  background: var(--elevated);
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+/* ── Switch (Toggle) ──────────────────────────────────────────────────── */
+.u-switch {
+  position: relative;
+  flex-shrink: 0;
+  width: 36px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 9999px;
+  background: var(--switch-off);
+  cursor: pointer;
+  transition: background-color var(--duration-base) var(--ease-out-soft);
+}
+.u-switch[aria-checked="true"] {
+  background: var(--primary);
+}
+.u-switch:focus-visible {
+  outline: none;
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);
+}
+.u-switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.u-switch__thumb {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 16px;
+  height: 16px;
+  border-radius: 9999px;
+  background: var(--switch-thumb-off);
+  transition:
+    transform var(--duration-base) var(--ease-out-soft),
+    background-color var(--duration-base) var(--ease-out-soft);
+}
+.u-switch[aria-checked="true"] .u-switch__thumb {
+  transform: translateX(16px);
+  background: var(--primary-foreground);
+}
+
+/* ── Tables (DataTable) ───────────────────────────────────────────────── */
+.dt-row {
+  transition: background-color var(--duration-fast) var(--ease-out-soft);
+}
+.dt-row:hover {
+  background: color-mix(in oklch, var(--elevated) 50%, transparent);
+}
 .dt-row.clickable {
   cursor: pointer;
 }
-.dt-row.clickable:hover {
-  background: var(--bg2);
+.dt-row.clickable:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);
 }
+.dt-row:last-child {
+  border-bottom: 0 !important;
+}
+.dt-skeleton-row:hover {
+  background: transparent;
+}
+
+/* A part of a summary line that narrows the list. */
+.u-summary-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  text-underline-offset: 3px;
+}
+.u-summary-link:hover {
+  color: var(--foreground);
+  text-decoration: underline;
+}
+
+/* ── Stat tiles: one card, columns divided by rules ───────────────────── */
+.u-tiles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  overflow: hidden;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  box-shadow: var(--elev-card);
+}
+.u-tiles > * {
+  border: 0 solid var(--rule);
+}
+.u-tiles > :nth-child(2n) {
+  border-left-width: 1px;
+}
+.u-tiles > :nth-child(n + 3) {
+  border-top-width: 1px;
+}
+@media (min-width: 1024px) {
+  .u-tiles > *,
+  .u-tiles > :nth-child(2n),
+  .u-tiles > :nth-child(n + 3) {
+    border-width: 0;
+  }
+  .u-tiles[data-cols="3"] {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .u-tiles[data-cols="3"] > :not(:nth-child(3n + 1)) {
+    border-left-width: 1px;
+  }
+  .u-tiles[data-cols="3"] > :nth-child(n + 4) {
+    border-top-width: 1px;
+  }
+  .u-tiles[data-cols="4"] {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .u-tiles[data-cols="4"] > :not(:nth-child(4n + 1)) {
+    border-left-width: 1px;
+  }
+  .u-tiles[data-cols="4"] > :nth-child(n + 5) {
+    border-top-width: 1px;
+  }
+  .u-tiles[data-cols="5"] {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+  .u-tiles[data-cols="5"] > :not(:nth-child(5n + 1)) {
+    border-left-width: 1px;
+  }
+  .u-tiles[data-cols="5"] > :nth-child(n + 6) {
+    border-top-width: 1px;
+  }
+  .u-tiles[data-cols="6"] {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+  .u-tiles[data-cols="6"] > :not(:nth-child(6n + 1)) {
+    border-left-width: 1px;
+  }
+  .u-tiles[data-cols="6"] > :nth-child(n + 7) {
+    border-top-width: 1px;
+  }
+}
+/* A tile that leads somewhere. A button centres its content vertically; a
+   column from the top keeps its label and figure on the same lines as those of
+   its neighbours, with or without a note line. Stretched across, so a long
+   label still ends in an ellipsis. */
+.u-tile-btn {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: stretch;
+  width: 100%;
+  margin: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-out-soft);
+}
+.u-tile-btn:hover {
+  background: color-mix(in oklch, var(--elevated) 50%, transparent);
+}
+.u-tile-btn:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);
+}
+/* A tile that leads somewhere and stands as a card of its own. */
+.u-tile-btn--card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  box-shadow: var(--elev-card);
+}
+.u-tile-btn--card:hover {
+  background: color-mix(in oklch, var(--elevated) 50%, var(--card));
+}
+.u-tile-btn--card:focus-visible {
+  border-color: var(--ring);
+  box-shadow:
+    var(--elev-card),
+    0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);
+}
+
+/* ── Skeleton ─────────────────────────────────────────────────────────── */
+.u-skeleton {
+  display: block;
+  border-radius: var(--radius-md);
+  background: var(--elevated);
+  animation: pulseDot 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* ── Hover helpers used by screens and the shell ──────────────────────── */
 .hoverable {
-  transition: border-color 0.12s;
+  transition: border-color var(--duration-fast) var(--ease-out-soft);
 }
 .hoverable:hover {
-  border-color: var(--accentLine) !important;
+  border-color: var(--input) !important;
+}
+.navitem {
+  transition:
+    background-color var(--duration-fast) var(--ease-out-soft),
+    color var(--duration-fast) var(--ease-out-soft);
 }
 .navitem:hover {
-  background: var(--bg3);
-}
-input,
-textarea,
-select {
-  font-family: inherit;
+  background: var(--elevated);
+  color: var(--foreground);
 }
 
-/* Accessible focus ring on the accent colour. */
-:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: 4px;
-}
-
+/* ── Motion: only as a response ───────────────────────────────────────── */
 @keyframes drawerIn {
   from {
     transform: translateX(24px);
@@ -75,11 +698,19 @@ select {
 }
 @keyframes popIn {
   from {
-    transform: translateY(10px) scale(0.98);
+    transform: scale(0.95);
     opacity: 0;
   }
   to {
-    transform: translateY(0) scale(1);
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
     opacity: 1;
   }
 }
@@ -95,5 +726,17 @@ select {
 @keyframes spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+/* Under reduced motion every animation and transition is cut to nothing. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
