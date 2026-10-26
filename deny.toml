@@ -27,7 +27,7 @@ ignore = [
 
     # crypto-bigint (RUSTSEC-2026-0387): some constant-time operations can
     # branch on secret data, depending on compiler and CPU. 0.7.x is patched
-    # (0.7.6, in the lockfile). 0.5.5 has no patched release and stays: it
+    # (0.7.10, in the lockfile). 0.5.5 has no patched release and stays: it
     # comes through elliptic-curve 0.13 (p256/p384/p521 0.13) from ssh-key 0.6,
     # which the embedded agent uses to sign with ECDSA keys, and from
     # jsonwebtoken on the server. Leaving it means the agent's ECDSA signing
