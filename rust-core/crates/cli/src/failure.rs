@@ -96,6 +96,7 @@ impl From<FfiError> for Failure {
             | FfiError::NotFound
             | FfiError::AlreadyExists
             | FfiError::AlreadyCloud
+            | FfiError::ReadOnlyVault
             | FfiError::NoServer
             | FfiError::PayloadTooLarge { .. }
             | FfiError::RotationInProgress { .. }

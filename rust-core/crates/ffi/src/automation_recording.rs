@@ -406,7 +406,7 @@ impl CommandRecording {
                 Vault::open(&state.storage, &state.keyset, &vault_key).map_err(FfiError::other)?;
             vault
                 .put_item(self.recording_id.as_bytes(), ITEM_TYPE_RECORDING, &json)
-                .map_err(FfiError::other)?;
+                .map_err(map_vault_err)?;
             if prune(state, &vault, &vault_key).is_err() {
                 log::warn!("MCP recording retention cleanup failed");
             }

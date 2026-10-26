@@ -146,6 +146,12 @@ starts with `0.`:
   - Removing a server in the app revokes this device on it, since nothing
     could sign in as it again. Both are best effort: a server the app cannot
     reach keeps the device until it is revoked by hand.
+- In a shared vault you can only view, editing or deleting an item (a host,
+  key, password, note, snippet, group, identity or recording), in the app or
+  the `unissh` CLI, is now refused with "you can only view this vault" and
+  changes nothing. It used to change this device's copy, which the server then
+  refused: the copy no longer matched the other devices, and every later sync
+  from this device failed. Bindings: new `FfiError::ReadOnlyVault`.
 
 ### Security
 

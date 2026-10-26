@@ -54,6 +54,11 @@ pub struct Vault<'a> {
     /// authority chain on this (NOT on the local keyset), so a member reading a
     /// shared vault verifies against the true owner. Resolved once in `open`.
     genesis_owner: Vec<u8>,
+    /// Whether this account may author item records here: always for the genesis
+    /// owner (always Admin of its own vault); for a member, its role in the verified
+    /// member set of the latest epoch is Editor or Admin. Resolved once in `open`;
+    /// checked by `require_writer` before every item write.
+    can_write: bool,
 }
 
 impl core::fmt::Debug for Vault<'_> {
@@ -177,6 +182,7 @@ impl<'a> Vault<'a> {
             key_epoch: Cell::new(0),
             // The creator is the genesis owner (own vault; no anchor row exists yet).
             genesis_owner: owner_ed.to_vec(),
+            can_write: true,
         })
     }
 
@@ -202,17 +208,20 @@ impl<'a> Vault<'a> {
         };
         let own_ed = keyset.signing.verifying.to_bytes();
 
-        let vk = if genesis_owner == own_ed {
+        // `can_write`: the owner may always write (always Admin of its own vault); a
+        // member's role is read off the verified set in the member branch.
+        let (vk, can_write) = if genesis_owner == own_ed {
             // Owner path (UNCHANGED): the owner wrapping is bound to (vault_id,
             // owner_ed, the record's key_epoch); the same info as at seal time.
             // read-fallback: current info binding, on failure — pre-round-2 (raw vault_id).
-            open_owner_vk(
+            let vk = open_owner_vk(
                 &keyset.encryption.secret,
                 &record.wrapped_vk,
                 &record.vault_id,
                 &own_ed,
                 record.key_epoch,
-            )?
+            )?;
+            (vk, true)
         } else {
             // Member path: this account is not the genesis owner. Acquire the VK from
             // this member's own grant at the latest membership epoch, anchoring
@@ -245,14 +254,17 @@ impl<'a> Vault<'a> {
                 .ok()
                 .and_then(|d| i64::try_from(d.as_secs()).ok())
                 .unwrap_or(i64::MAX);
-            open_grant(
+            let vk = open_grant(
                 &grant,
                 &record.vault_id,
                 &keyset.encryption.secret,
                 &own_ed,
                 epoch,
                 now,
-            )?
+            )?;
+            // The verified set of the latest epoch, which new records are stamped
+            // with (see `key_epoch` below): a Viewer reads, but may not author records.
+            (vk, members.can_write(&own_ed))
         };
         let name = aead_decrypt_compat(
             &vk,
@@ -279,6 +291,7 @@ impl<'a> Vault<'a> {
             version: record.version,
             key_epoch: Cell::new(key_epoch),
             genesis_owner,
+            can_write,
         })
     }
 
@@ -293,6 +306,19 @@ impl<'a> Vault<'a> {
             return Err(VaultError::AuthorityInvalid);
         }
         Ok(())
+    }
+
+    /// Every item write (put, put with history, delete, rename) goes through this: a
+    /// member whose role is Viewer may not author item records. The other members'
+    /// verify-before-apply (`verify_record_authority` requires `can_write`) and the
+    /// server's write-accept refuse such a record, and this device could not read it
+    /// back either, so it is refused here, before anything is stored or marked for push.
+    const fn require_writer(&self) -> Result<(), VaultError> {
+        if self.can_write {
+            Ok(())
+        } else {
+            Err(VaultError::ReadOnly)
+        }
     }
 
     /// Deletes the vault (tombstone with a bumped version). Owner-only (see `require_owner`).
@@ -371,6 +397,12 @@ impl<'a> Vault<'a> {
         &self.vault_id
     }
 
+    /// Whether this account may write items in this vault: `false` for a member
+    /// whose role is Viewer, whose item writes fail with [`VaultError::ReadOnly`].
+    pub const fn can_write(&self) -> bool {
+        self.can_write
+    }
+
     /// The decrypted vault name.
     pub fn name(&self) -> &[u8] {
         self.name.as_slice()
@@ -424,6 +456,7 @@ impl<'a> Vault<'a> {
         item_type: u32,
         content: &[u8],
     ) -> Result<u64, VaultError> {
+        self.require_writer()?;
         let item_id = item_id.as_ref();
         let existing = self.storage.get_item(&self.vault_id, item_id)?;
         let version = existing.map_or(Ok(1), |r| next_version(r.version))?;
@@ -522,6 +555,7 @@ impl<'a> Vault<'a> {
         item_type: u32,
         content: &[u8],
     ) -> Result<u64, VaultError> {
+        self.require_writer()?;
         let item_id = item_id.as_ref();
         let existing = self.storage.get_item(&self.vault_id, item_id)?;
         let version = existing.map_or(Ok(1), |r| next_version(r.version))?;
@@ -639,6 +673,7 @@ impl<'a> Vault<'a> {
     /// history are **atomic** (one transaction): a crash will not leave a tombstone with live
     /// history, otherwise the deleted plaintext would "resurrect" through `get_item_version`.
     pub fn delete_item(&self, item_id: &[u8]) -> Result<(), VaultError> {
+        self.require_writer()?;
         let existing = self
             .storage
             .get_item(&self.vault_id, item_id)?
@@ -659,6 +694,7 @@ impl<'a> Vault<'a> {
         if old_id == new_id {
             return Ok(());
         }
+        self.require_writer()?;
         if let Some(r) = self.storage.get_item(&self.vault_id, new_id)? {
             if !r.tombstone {
                 return Err(VaultError::AlreadyExists);

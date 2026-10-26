@@ -26,8 +26,8 @@ use unissh_ssh_agent::{ssh_key::HashAlg, InMemoryAgent};
 use unissh_vault::{DecryptedItem, Vault};
 
 use super::{
-    agent_key_id, drop_certificate, require_ssh_key, resolve_vid, store_new_ssh_key, Core,
-    CoreState, FfiError, ITEM_TYPE_SSH_KEY,
+    agent_key_id, drop_certificate, map_vault_err, require_ssh_key, resolve_vid, store_new_ssh_key,
+    Core, CoreState, FfiError, ITEM_TYPE_SSH_KEY,
 };
 
 /// Per-vault meta slot; the JSON maps original key id → [`Link`]. `v1` (id-only
@@ -221,7 +221,7 @@ impl Core {
                     ITEM_TYPE_SSH_KEY,
                     candidate.content.as_slice(),
                 )
-                .map_err(FfiError::other)?;
+                .map_err(map_vault_err)?;
             // Not one transaction (the vault layer opens its own): each step is
             // safe to repeat and the candidate is buried last, so a failure
             // part-way leaves a state that a second finish completes.
@@ -229,7 +229,7 @@ impl Core {
                 .and_then(|()| {
                     vault
                         .delete_item(candidate_id.as_bytes())
-                        .map_err(FfiError::other)
+                        .map_err(map_vault_err)
                 })
                 .and_then(|()| {
                     links.remove(&key_id);
@@ -282,7 +282,7 @@ impl Core {
                     }
                     vault
                         .delete_item(candidate_id.as_bytes())
-                        .map_err(FfiError::other)?;
+                        .map_err(map_vault_err)?;
                 }
                 // This device's link, but its candidate is gone or replaced:
                 // forget the link; a live replacement is abandoned as a key
@@ -297,7 +297,7 @@ impl Core {
                         require_ssh_key(&vault, &candidate_id)?;
                         vault
                             .delete_item(candidate_id.as_bytes())
-                            .map_err(FfiError::other)?;
+                            .map_err(map_vault_err)?;
                     }
                 }
                 None => {
@@ -305,7 +305,7 @@ impl Core {
                     require_ssh_key(&vault, &candidate_id)?;
                     vault
                         .delete_item(candidate_id.as_bytes())
-                        .map_err(FfiError::other)?;
+                        .map_err(map_vault_err)?;
                 }
             }
             if links
