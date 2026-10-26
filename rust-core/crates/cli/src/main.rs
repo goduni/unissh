@@ -23,6 +23,7 @@ mod login;
 mod manage;
 mod picker;
 mod server;
+mod tree;
 mod tty;
 
 use std::path::PathBuf;
@@ -103,11 +104,17 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
     },
-    /// Copy one file to or from a host: `host:path` on one side.
+    /// Copy a file, or a directory with -r, to or from a host: `host:path` on one side.
     Cp {
-        /// Replace the destination if it exists.
+        /// Replace destination files that exist.
         #[arg(long)]
         force: bool,
+        /// Copy a directory and everything in it; links inside are not followed.
+        #[arg(short = 'r', long)]
+        recursive: bool,
+        /// With -r: how many files to copy at once (1 to 16).
+        #[arg(long, default_value_t = tree::PARALLEL, value_parser = clap::value_parser!(u32).range(1..=16))]
+        parallel: u32,
         /// Source: a local path or host:path.
         source: String,
         /// Destination: a local path or host:path.
@@ -253,10 +260,17 @@ fn run(cli: Cli) -> Res<u8> {
         } => ssh(home, &credentials, offline, &host, &command, no_stdin),
         Command::Cp {
             force,
+            recursive,
+            parallel,
             source,
             destination,
         } => {
-            copy(home, &credentials, offline, &source, &destination, force)?;
+            let how = CopyHow {
+                force,
+                recursive,
+                parallel,
+            };
+            copy(home, &credentials, offline, &source, &destination, how)?;
             Ok(0)
         }
         Command::KnownHosts(action) => {
@@ -357,13 +371,20 @@ fn ssh(
     Ok(exit_code(status))
 }
 
+/// The options of `unissh cp`.
+struct CopyHow {
+    force: bool,
+    recursive: bool,
+    parallel: u32,
+}
+
 fn copy(
     home: Home,
     credentials: &Credentials,
     offline: bool,
     source: &str,
     destination: &str,
-    force: bool,
+    how: CopyHow,
 ) -> Res<()> {
     let (spec, direction) = match (Endpoint::parse(source), Endpoint::parse(destination)) {
         (Endpoint::Remote { host, path }, Endpoint::Local(local)) => (
@@ -374,9 +395,16 @@ fn copy(
             },
         ),
         (Endpoint::Local(local), Endpoint::Remote { host, path }) => {
-            if !local.is_file() {
+            if local.is_dir() {
+                if !how.recursive {
+                    return Err(Failure::msg(format!(
+                        "{} is a directory; pass -r to copy it",
+                        local.display()
+                    )));
+                }
+            } else if !local.is_file() {
                 return Err(Failure::msg(format!(
-                    "{} is not a file (one file at a time)",
+                    "{} is not a file or a directory",
                     local.display()
                 )));
             }
@@ -402,7 +430,14 @@ fn copy(
     let (user, name) = split_user(&spec);
     let host = hosts::find(&all, name)?;
     let target = hosts::resolve(&device.core, host, user)?;
-    connect::copy(&device.core, target, direction, force)
+    connect::copy(
+        &device.core,
+        target,
+        direction,
+        how.force,
+        how.recursive,
+        how.parallel,
+    )
 }
 
 #[cfg(test)]
