@@ -3,8 +3,12 @@
 //!
 //! The same rules as the app's `client/src/support/snippetParams.ts`, which
 //! the palette, Fleet and the startup path use; a client without a JavaScript
-//! side (the CLI) uses this module, so the two cannot drift apart unnoticed:
-//! their tests pin the same cases.
+//! side (the CLI) uses this module. The two are kept in sync by hand: a change
+//! to one goes into the other, and by convention each test here mirrors a case
+//! of `snippetParams.test.ts` (there is no shared fixture).
+//!
+//! Positions are byte offsets into the command; the TypeScript counts UTF-16
+//! units. They differ past non-ASCII text and are only used for ordering.
 //!
 //! Syntax: a name is `[A-Za-z_][A-Za-z0-9_]*`; a default runs to the first
 //! closing `}}`. `\{{` is a literal `{{`. Anything else — `{{ spaced }}`, a
@@ -23,7 +27,8 @@ pub struct SnippetParam {
     /// `None` for `{{name}}`, a (possibly empty) string for `{{name:...}}`.
     /// A repeated name keeps the default of its first occurrence.
     pub default: Option<String>,
-    /// Byte offset of the first occurrence in the command text.
+    /// Byte offset of the first occurrence in the command text (the app's
+    /// TypeScript gives a UTF-16 offset); only used for ordering.
     pub position: usize,
 }
 
@@ -381,6 +386,19 @@ mod tests {
         assert_eq!(
             resolve_command(cmd, &answers, &web2),
             "systemctl restart nginx # ops@web2:2222"
+        );
+    }
+
+    #[test]
+    fn a_builtin_every_target_answers_shadows_a_defaulted_param_of_that_name() {
+        let web1 = values(&[("host", "web1"), ("user", "deploy"), ("port", "22")]);
+        let web2 = values(&[("host", "web2"), ("user", "ops"), ("port", "2222")]);
+        assert_eq!(
+            split_fleet_params("ping {{host:localhost}} {{count:3}}", &[web1, web2]),
+            FleetParams {
+                ask: vec![param("count", Some("3"), 24)],
+                from_host: vec!["host".to_owned()],
+            }
         );
     }
 
