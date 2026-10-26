@@ -114,7 +114,7 @@ fn ask(tty: &mut Tty, device: &Device) -> Res<Option<String>> {
 
 /// Unlocks after an idle lock, allowing a mistyped password or two. An
 /// instance without a master password unlocks with its remembered Secret Key
-/// alone: it is only as locked as the files it is kept in.
+/// alone: it is only as locked as the files it is kept in. Ctrl-C ends it.
 fn unlock_again(device: &Device, credentials: &Credentials) -> Res<()> {
     const TRIES: u32 = 3;
     let mut tried = 0;
@@ -122,6 +122,7 @@ fn unlock_again(device: &Device, credentials: &Credentials) -> Res<()> {
         tried += 1;
         match device.unlock(credentials) {
             Ok(()) => return Ok(()),
+            Err(e) if e.is_cancelled() => return Err(e),
             Err(e) if tried < TRIES => eprintln!("unissh: {e}"),
             Err(e) => return Err(e),
         }
