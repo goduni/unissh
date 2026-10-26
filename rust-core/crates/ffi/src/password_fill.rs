@@ -260,21 +260,35 @@ enum Jump {
 /// A program that draws somewhere else and then jumps away again without
 /// writing more — tmux redrawing its status line or clock while `sudo` waits —
 /// has not touched the line the cursor goes back to: that write is dropped.
-/// A jump back to the row just written on keeps that write (a redraw ending on
-/// its prompt). Text written after the last jump is the cursor's line, whatever
-/// came before it.
+/// A jump back to a row the last write covered keeps that row of it (a redraw
+/// ending on its prompt, or tmux repainting the whole screen and returning to
+/// the prompt's row). Text written after the last jump is the cursor's line,
+/// whatever came before it.
 fn at_cursor(mut parts: Vec<(Option<Jump>, String)>) -> String {
     while parts.len() > 1 && parts.last().is_some_and(|(_, text)| text.is_empty()) {
         let back = parts.pop().and_then(|(jump, _)| jump);
         let went = parts.last().and_then(|(jump, _)| *jump);
-        if matches!((went, back), (Some(Jump::Row(a)), Some(Jump::Row(b))) if a == b) {
-            break;
+        if let (Some(Jump::Row(a)), Some(Jump::Row(b))) = (went, back) {
+            let row = b.checked_sub(a).and_then(|i| usize::try_from(i).ok());
+            let text = parts.last().map_or("", |(_, text)| text.as_str());
+            if let Some(line) = row.and_then(|i| text.split('\n').nth(i)) {
+                return line.trim_end_matches('\r').to_owned();
+            }
         }
         if parts.len() > 1 {
             parts.pop();
         }
     }
     parts.pop().map(|(_, text)| text).unwrap_or_default()
+}
+
+/// Whether output only draws away from the cursor's line and comes back — a
+/// status-line tick — so that it changes nothing [`at_cursor`] would find.
+/// Such output stays out of the tail: a clock ticking every second would
+/// otherwise push the prompt out of it within a few seconds. Output that does
+/// not start a sequence may finish one the tail ends inside, and is kept.
+fn draws_elsewhere(out: &[u8]) -> bool {
+    out.first() == Some(&0x1b) && strip_controls(&String::from_utf8_lossy(out)).is_empty()
 }
 
 /// The jump a CSI sequence with these parameters and final byte makes, if any.
@@ -696,6 +710,9 @@ impl GuardState {
     }
 
     fn push_tail(&mut self, out: &[u8]) {
+        if draws_elsewhere(out) {
+            return;
+        }
         self.tail.extend_from_slice(out);
         let excess = self.tail.len().saturating_sub(TAIL_MAX);
         if excess > 0 {
@@ -1280,6 +1297,39 @@ mod tests {
             now,
         );
         feed(&g, b"\x1b7\x1b[24;70H12:35\x1b8", now);
+        assert_eq!(ev.take(), vec![offered_sudo(1, false)]);
+    }
+
+    #[test]
+    fn a_clock_ticking_for_minutes_keeps_the_offer() {
+        // `status-interval 1`: each tick is one write that jumps to the status
+        // row and back. Enough of them would fill the tail past the prompt.
+        let (g, ev) = guard();
+        let now = Instant::now();
+        feed(&g, b"\x1b[1;1H[sudo] password for alice: ", now);
+        for s in 0..300 {
+            let tick = format!(
+                "\x1b[?25l\x1b[30m\x1b[42m\x1b[30;1H[r] 0:sudo*\x1b[101X\x1b[101C21:12:{:02}\
+                 \x1b(B\x1b[m\x1b[?12l\x1b[?25h\x1b[1;27H",
+                s % 60
+            );
+            feed(&g, tick.as_bytes(), now);
+        }
+        assert_eq!(ev.take(), vec![offered_sudo(1, false)]);
+    }
+
+    #[test]
+    fn a_full_repaint_returning_to_the_prompt_row_offers() {
+        // tmux repaints the whole screen (a resize, `refresh-client`): the
+        // prompt on row 1, blank rows, the status line, then back to row 1.
+        let (g, ev) = guard();
+        let now = Instant::now();
+        let mut repaint =
+            b"\x1b[1;30r\x1b[1;25H\x1b[?25l\x1b[H[sudo] password for alice:\x1b[K".to_vec();
+        repaint.extend(b"\r\n\x1b[K".repeat(28));
+        repaint.extend(b"\x1b[30m\x1b[42m\r\n[r] 0:sudo*\x1b[101X\x1b[101C21:12:17\x1b(B\x1b[m");
+        repaint.extend(b"\x1b[?12l\x1b[?25h\x1b[1;27H");
+        feed(&g, &repaint, now);
         assert_eq!(ev.take(), vec![offered_sudo(1, false)]);
     }
 
