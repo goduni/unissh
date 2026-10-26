@@ -53,8 +53,8 @@ no model request. The connection health check was verified with Claude Code
 2.1.252 on Linux. IDE interoperability and actual macOS/Windows lifecycle checks
 require validation on those applications/devices. Manual bearer-header
 provisioning is supported; OAuth discovery
-and browser login are not implemented. Clients requiring OAuth or stdio-only
-servers are unsupported.
+and browser login are not implemented. Clients requiring OAuth are unsupported.
+A client that only launches stdio servers can use the command-line server below.
 
 ### Client-specific setup
 
@@ -73,6 +73,27 @@ never embed the token automatically. Enable MCP before copying a configuration.
 Merge file-based examples with existing settings rather than replacing the whole
 file. Keep token-bearing configuration outside version control. Run the client on
 the same device as UniSSH; a remote agent cannot reach this loopback endpoint.
+
+## Command-line server
+
+The headless CLI serves the same tools from the same broker: `unissh mcp`
+([`rust-core/crates/cli/README.md`](../rust-core/crates/cli/README.md#mcp-server)).
+It speaks stdio by default, so an agent can launch it:
+
+```sh
+unissh mcp integrations add "Claude Code"
+unissh mcp grants set "Claude Code" web db
+claude mcp add unissh -- unissh mcp
+```
+
+`unissh mcp --http [--port N]` serves loopback HTTP with bearer tokens exactly as
+described here. What this page sets in the desktop's MCP screen is a subcommand
+there: `unissh mcp integrations`, `unissh mcp grants` (hosts, expiry, confirmation
+or trusted, command ceiling, per-grant limits) and `unissh mcp limits`. Commands of
+a confirm grant are asked about on the controlling terminal (`/dev/tty`) with the
+same exact-command review and two-minute expiry; without a terminal they are
+refused with `approval_unavailable`. The CLI keeps its own integrations and grants
+in its device directory; it does not share them with a desktop app on the same machine.
 
 ## Tools and connection lifetime
 

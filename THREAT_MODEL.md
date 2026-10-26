@@ -852,6 +852,19 @@ lock/suspend events can revoke immediately; desktops without those signals still
 have manual vault lock and native grant/runtime deadlines. Separate loopback
 namespaces (remote IDEs/containers/WSL) are unsupported, not exposed through LAN.
 
+The CLI's `unissh mcp` reuses this broker. Its stdio transport authenticates
+nobody: the process owner is the caller for the integration named at start, so an
+attacker who can launch processes as that user can act as any of its integrations,
+within their native grants and approval policy. That user can already read the
+unlocked CLI device, so this adds no authority beyond the grants themselves. Manual
+approval moves from a native dialog to the controlling terminal. The terminal is
+the boundary: a process that can write to it can fake prompt text or type an
+answer, as it could for `sudo` or `ssh`. When a full-screen agent shares that
+terminal, its input and the question compete; the README steers such setups to
+trusted grants or HTTP mode in a separate terminal. Without a terminal, manual
+commands fail closed. Grant edits from another process reach a running server
+through the storage revision (SQLite `data_version`), so revocation is immediate.
+
 This feature changes neither ciphertext sync nor vault/AAD formats. Its separately
 versioned local digest configuration is not synced. Temporary SQLite revision
 triggers observe security-relevant writes without a persistent schema migration.

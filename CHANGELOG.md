@@ -66,6 +66,15 @@ starts with `0.`:
   ever asked on the terminal or read from an owner-only file; no session token
   is stored. `unissh logout` revokes the device and deletes its data. The old
   core harness is now the `unissh-harness` binary.
+- `unissh mcp`: the desktop's MCP server in the CLI, with the same tools and
+  broker. It speaks stdio by default (`claude mcp add unissh -- unissh mcp`), or
+  loopback HTTP with bearer tokens (`--http`). `unissh mcp integrations`,
+  `grants` and `limits` do what the desktop's MCP screen does. Commands of a
+  confirm grant are asked about on the controlling terminal; without one they are
+  refused with the new `approval_unavailable` tool error. In the core, the MCP
+  crate gains a stdio transport (`serve_stdio`, rmcp `transport-io`), and the
+  broker gains `pending_approvals`, `set_manual_approval_available` and the
+  limits file helpers the desktop now uses too.
 - Bindings: `ExecHandleFfi::close_stdin` ends a streaming command's input and
   keeps its output coming; `Core::wait_for_recordings` waits for session
   recordings still to be written (a recorded session counts from the moment it

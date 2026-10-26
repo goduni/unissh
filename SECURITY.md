@@ -462,6 +462,18 @@ safe. Approved command output may go to the AI provider and can include remote
 secrets. Cancellation cannot guarantee termination of detached remote processes.
 See [desktop MCP setup and limits](docs/desktop-mcp.md) and the threat model.
 
+The headless CLI serves the same broker and tools (`unissh mcp`). Over stdio there
+is no token: the OS user who starts the process is the caller, acting for one
+integration chosen natively on the command line, and anyone able to run commands as
+that user already holds the unlocked device's authority. Its `--http` mode is the
+desktop's loopback transport and token scheme. Grants, revocation and limits are
+CLI subcommands writing the same versioned local formats in the CLI's device
+directory. Manual approvals are asked on the controlling terminal (`/dev/tty`) only,
+never on the protocol's stdin/stdout, with the exact command and inputs in escaped
+notation; type-ahead is discarded and only a typed `yes` allows. Without a
+controlling terminal, manual-grant commands are refused (`approval_unavailable`)
+rather than queued. Its stderr log applies the same `rmcp` suppression.
+
 When a host enables session recording, authorized MCP commands are also persisted
 as encrypted recording items in that host's vault. Command text, cwd, application
 label and captured output then follow normal vault sync/export policy. The caller

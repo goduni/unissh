@@ -61,6 +61,7 @@ unissh ssh web -- uptime       # one-off command; stdin is piped, the exit code 
 unissh cp web:/var/log/app.log .        # one file, either direction; --force replaces
 unissh known-hosts list|trust|forget
 unissh sync | status | logout
+unissh mcp                     # an MCP server for a local AI agent (see below)
 ```
 
 Hosts are named by label, `vault/label`, the start of a label, or their address.
@@ -83,6 +84,63 @@ temporary file beside the destination and renames it into place when the copy is
 complete, so a failed copy leaves an existing file as it was. An upload, as with
 `scp`, writes the remote file in place.
 
+## MCP server
+
+`unissh mcp` is the desktop app's MCP server (`docs/desktop-mcp.md`) in a terminal:
+the same nine tools, the same broker and grant policy, over this machine's vaults.
+An agent reaches only the hosts you grant it, and you decide how its commands are
+approved. Nothing the agent sends can grant, approve or widen anything.
+
+```bash
+unissh mcp integrations add "Claude Code"            # prints a token, used only with --http
+unissh mcp grants set "Claude Code" web db           # confirm each command (the default)
+unissh mcp grants set "Claude Code" web --trusted --for 8h --command-limit 30m
+unissh mcp grants list [--json] | unissh mcp grants rm "Claude Code" (or --all)
+unissh mcp limits [--max-connections 8] [--command-history 256] [--output-total 8]
+claude mcp add unissh -- unissh mcp                  # stdio: the agent starts the server
+unissh mcp --http [--port 8765]                      # loopback HTTP with bearer tokens
+```
+
+- **Transports.** By default it speaks MCP on stdin/stdout: the agent launches it,
+  and as the process owner it acts for one integration (`--integration NAME`, or the
+  only one there is), with no token. `--http` serves `http://127.0.0.1:<port>/mcp`
+  exactly like the desktop: every integration authenticates with its own
+  `Authorization: Bearer <token>`. The port is remembered for next time.
+- **Grants** mirror the desktop's access editor: hosts (named as for `unissh ssh`,
+  across vaults), an expiry (`--for 30m|8h|7d`, default none), confirmation or
+  `--trusted`, the longest a command may run (`--command-limit`, 1m–24h, default
+  10m) and the per-grant resource limits (`--max-connections`,
+  `--max-active-commands`, `--command-history`, `--session-history`,
+  `--output-per-command`). `grants set` replaces the integration's previous grant
+  and asks first (`--yes` skips the question, not the summary). A grant is saved in
+  the encrypted database and resumes after a restart while its hosts and the
+  security records are unchanged; `grants list` says when one needs granting again.
+  Granting, revoking, rotating or removing from another terminal applies to a
+  running server at once. A running `--http` server reads new tokens at its next start.
+- **Approvals.** A command under a confirm grant is asked about on the controlling
+  terminal (`/dev/tty`), never on stdout: the exact command, working directory,
+  environment and stdin in escaped string notation, the host, and the
+  application asking. Only a typed `yes` allows it; anything else denies, and an
+  unanswered question expires after two minutes, as in the app. Without a
+  controlling terminal (systemd, `nohup`, a detached agent) such commands are refused
+  with the `approval_unavailable` tool error; use `--trusted` grants for unattended
+  use. Sign-in prompts of the hosts an agent connects to (a typed password, one-time
+  codes) are asked on the same terminal, one question at a time.
+- **A full-screen agent shares the terminal.** When an agent such as Claude Code runs
+  `unissh mcp` over stdio, both read the same terminal: the master password at
+  start, approvals and sign-in prompts then compete with the agent's own screen.
+  Use `--password-file` (or a copy without a master password) for the unlock, and
+  either trusted grants or `unissh mcp --http` in a terminal of its own, where the
+  questions have the terminal to themselves.
+- **Lifetime.** The vaults are unlocked for the life of the process (the interactive
+  list's idle lock does not apply). It stops when the agent closes stdin, or on
+  Ctrl-C, SIGTERM or SIGHUP; access is revoked before the transport stops, recorded
+  commands are written and sent to the server (unless `--offline`), and the vaults
+  are locked. Hosts with **Record sessions** on record each command, as in the app.
+- **Logs** go to stderr: warnings, and with `--verbose` the broker's audit lines
+  (grants and authorized commands, by id). The MCP SDK's own diagnostics are never
+  logged at any level: they carry raw commands and output.
+
 ## Data
 
 Everything lives in one directory, created 0700: `--home`, `UNISSH_HOME`,
@@ -94,6 +152,7 @@ Everything lives in one directory, created 0700: `--home`, `UNISSH_HOME`,
 | `link.json` | which server, account and device; nothing secret |
 | `secret-key` | the account Secret Key, when kept (0600; refused if others can read it) |
 | `last-sync`, `sync.lock` | when it last synced; one sync at a time |
+| `mcp.json`, `mcp-limits.json` | `unissh mcp` integrations (token digests, never tokens) and its shared limits, in the desktop's formats |
 
 No session token is written to disk. Each command that needs the server signs in
 with the unlocked keyset, using the same challenge signature as the app, and signs
