@@ -185,7 +185,7 @@ export function InviteModal() {
             <Field label={t("screen.invites.roleLabel")} style={FIELD}>
               <Segmented
                 ariaLabel={t("screen.invites.roleLabel")}
-                options={ROLES.map((r) => ({ value: r, label: r }))}
+                options={ROLES.map((r) => ({ value: r, label: t(`role.${r}`) }))}
                 value={role}
                 onChange={setRole}
               />

@@ -43,7 +43,7 @@ export function Spaces() {
     },
     {
       key: "id",
-      label: "space_id",
+      label: t("screen.spaces.colId"),
       width: "1.6fr",
       render: (s) => <PubkeyChip value={s.space_id} head={10} tail={6} />,
     },
@@ -229,7 +229,7 @@ function AddMemberModal({
         </p>
         <div style={{ marginTop: 16 }}>
           {error ? <InlineError>{error}</InlineError> : null}
-          <Field label={t("screen.spaces.accountLabel")} htmlFor={accountFieldId}>
+          <Field label={t("screen.spaces.accountLabel")} hint={t("screen.spaces.accountHint")} htmlFor={accountFieldId}>
             <TextInput
               id={accountFieldId}
               mono

@@ -12,44 +12,47 @@ export interface NavItemDef {
 
 export interface NavGroupDef {
   key: string;
+  /** Hidden behind a disclosure until opened (or until one of its sections is the current one). */
+  collapsible?: boolean;
   items: NavItemDef[];
 }
 
+/** The sections by what an admin comes to do: the server, its people, their vaults; the internals fold away. */
 export const NAV: NavGroupDef[] = [
   {
-    key: "instance",
+    key: "server",
     items: [
       { route: "overview", icon: "grid", key: "overview" },
       { route: "health", icon: "activity", key: "health" },
-      { route: "metrics", icon: "zap", key: "metrics" },
+      { route: "audit", icon: "eye", key: "audit" },
       { route: "config", icon: "sliders", key: "config" },
-      { route: "maint", icon: "refresh", key: "maint" },
     ],
   },
   {
-    key: "identity",
+    key: "people",
     items: [
+      { route: "accounts", icon: "user", key: "accounts", count: "accounts" },
       { route: "spaces", icon: "box", key: "spaces" },
-      { route: "accounts", icon: "server", key: "accounts", count: "accounts" },
-      { route: "directory", icon: "user", key: "directory" },
+      { route: "invites", icon: "tag", key: "invites", count: "pending_invites" },
       { route: "devices", icon: "fingerprint", key: "devices" },
       { route: "sessions", icon: "clock", key: "sessions" },
-      { route: "invites", icon: "tag", key: "invites", count: "pending_invites" },
     ],
   },
   {
-    key: "access",
+    key: "storage",
     items: [
       { route: "vaults", icon: "lock", key: "vaults" },
       { route: "grants", icon: "shieldcheck", key: "grants" },
-      { route: "relay", icon: "link", key: "relay" },
     ],
   },
   {
-    key: "data",
+    key: "tech",
+    collapsible: true,
     items: [
+      { route: "metrics", icon: "zap", key: "metrics" },
+      { route: "maint", icon: "refresh", key: "maint" },
+      { route: "relay", icon: "link", key: "relay" },
       { route: "objects", icon: "layers", key: "objects" },
-      { route: "audit", icon: "eye", key: "audit" },
     ],
   },
 ];

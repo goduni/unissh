@@ -434,6 +434,33 @@ export function SectionLabel({
   );
 }
 
+// ── Term ───────────────────────────────────────────────────────
+/**
+ * A setting or a field named for a person: the plain words first, and under them, small in muted mono, the name the
+ * server, its config and its docs use, so it can still be searched for.
+ */
+export function Term({ label, code }: { label: ReactNode; code?: string }) {
+  return (
+    <>
+      <span style={{ display: "block", color: "var(--foreground)" }}>{label}</span>
+      {code ? (
+        <span
+          style={{
+            display: "block",
+            fontFamily: MONO,
+            fontSize: 11,
+            lineHeight: "16px",
+            color: "var(--muted-foreground)",
+            overflowWrap: "anywhere",
+          }}
+        >
+          {code}
+        </span>
+      ) : null}
+    </>
+  );
+}
+
 // ── Missing ────────────────────────────────────────────────────
 /** A missing value: a muted em dash. */
 export function Missing() {
@@ -873,7 +900,7 @@ export function ZkBanner({
         <Icon name={caution ? "alert" : "shieldcheck"} size={caution ? 16 : 14} />
       </span>
       <div style={{ ...COPY, minWidth: 0, paddingTop: 1, color: "var(--foreground)" }}>
-        <strong style={{ fontWeight: 600 }}>{t("zk.lead", { defaultValue: "Zero-knowledge." })}</strong> {children}
+        <strong style={{ fontWeight: 600 }}>{caution ? t("zk.leadCaution") : t("zk.lead")}</strong> {children}
       </div>
     </div>
   );

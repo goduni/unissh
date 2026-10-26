@@ -127,7 +127,7 @@ function RelayBody() {
               <TextInput
                 value={acc}
                 onChange={setAcc}
-                placeholder="account_id"
+                placeholder={t("screen.relay.accountFilter")}
                 ariaLabel={t("screen.relay.accountFilter")}
                 mono
                 style={{ width: 220, height: 28 }}

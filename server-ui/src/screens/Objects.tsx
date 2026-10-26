@@ -70,8 +70,8 @@ function ObjectsBody() {
   const columns: Column<ObjectMeta>[] = [
     {
       key: "server_seq",
-      // The server's sequence number, as the audit log names it: an identifier, so mono and lowercase.
-      label: <span className="data-head-mono">seq</span>,
+      // The server's record number, as the event log names it; its machine name on hover.
+      label: <span title="server_seq">{t("screen.objects.colSeq")}</span>,
       width: "80px",
       numeric: true,
       render: (row) => row.server_seq,
@@ -121,7 +121,7 @@ function ObjectsBody() {
     {
       key: "key_epoch",
       label: t("screen.objects.colEpoch"),
-      width: "64px",
+      width: "112px",
       numeric: true,
       render: (row) => row.key_epoch,
     },
