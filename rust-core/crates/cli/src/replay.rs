@@ -120,6 +120,8 @@ fn schedule(events: impl Iterator<Item = (f64, Zeroizing<String>)>, timing: Timi
 
 const ESC: char = '\x1b';
 const BEL: char = '\x07';
+/// ENQ: some terminals (PuTTY) answer it with their answerback string.
+const ENQ: char = '\x05';
 /// CAN and SUB: cancel a sequence in progress.
 const CAN: char = '\x18';
 const SUB: char = '\x1a';
@@ -129,6 +131,8 @@ const CSI_8BIT: char = '\u{9b}';
 const ST_8BIT: char = '\u{9c}';
 const DECID_8BIT: char = '\u{9a}';
 const STRING_8BIT: [char; 5] = ['\u{90}', '\u{98}', '\u{9d}', '\u{9e}', '\u{9f}'];
+/// The 8-bit (C1) controls.
+const C1: std::ops::RangeInclusive<char> = '\u{80}'..='\u{9f}';
 
 /// The longest control sequence kept, in bytes; a longer one is dropped.
 const SEQUENCE_MAX: usize = 256;
@@ -160,7 +164,12 @@ enum State {
 /// - the CSI queries a terminal answers as if typed: device attributes,
 ///   status and cursor reports, mode reports, window reports and moves,
 ///   its version, keyboard flags, and the rest in [`answers`];
-/// - DECID (`ESC Z`), which is device attributes again.
+/// - DECID (`ESC Z`), which is device attributes again, and ENQ;
+/// - the modes that change what the keyboard sends or lock it (see
+///   [`keyboard_mode`]).
+///
+/// An 8-bit control after `ESC` is that control, not `ESC` and a character:
+/// `ESC CSI` starts a CSI sequence, as a terminal reads it.
 ///
 /// Sequences are read across frames: one split over two events is held until
 /// it is whole. The filter also keeps track of the alternate screen, so the
@@ -204,7 +213,11 @@ impl Filter {
             State::CsiDropped => match c {
                 ESC => self.state = State::Escape,
                 CAN | SUB | '\x40'..='\x7e' => self.state = State::Ground,
-                c if c.is_ascii_control() => out.push(c),
+                c if c.is_ascii_control() => control(c, out),
+                c if C1.contains(&c) => {
+                    self.state = State::Ground;
+                    self.ground(c, out);
+                }
                 _ => {}
             },
             State::String => match c {
@@ -228,7 +241,7 @@ impl Filter {
             ESC => self.state = State::Escape,
             CSI_8BIT => self.start_csi(c),
             c if STRING_8BIT.contains(&c) => self.state = State::String,
-            DECID_8BIT | ST_8BIT => {}
+            DECID_8BIT | ST_8BIT | ENQ => {}
             c => out.push(c),
         }
     }
@@ -243,7 +256,12 @@ impl Filter {
             ESC => {}
             CAN | SUB => self.state = State::Ground,
             // A control in the middle is carried out there, as a terminal does.
-            c if c.is_ascii_control() => out.push(c),
+            c if c.is_ascii_control() => control(c, out),
+            // An 8-bit control replaces the `ESC`: `ESC CSI` is CSI.
+            c if C1.contains(&c) => {
+                self.state = State::Ground;
+                self.ground(c, out);
+            }
             c => {
                 // RIS, a full reset, also leaves the alternate screen.
                 if c == 'c' {
@@ -279,7 +297,7 @@ impl Filter {
                     .strip_prefix("\x1b[")
                     .or_else(|| self.sequence.strip_prefix(CSI_8BIT))
                     .unwrap_or_default();
-                if !answers(body) {
+                if !answers(body) && !keyboard_mode(body) {
                     if let Some(on) = alt_screen_switch(body) {
                         self.alt_screen = on;
                     }
@@ -289,13 +307,21 @@ impl Filter {
             }
             // DEL is ignored inside a sequence.
             '\x7f' => {}
-            c if c.is_ascii_control() => out.push(c),
+            c if c.is_ascii_control() => control(c, out),
             // Not part of a sequence: the sequence is broken, and dropped.
             c => {
                 self.state = State::Ground;
                 self.ground(c, out);
             }
         }
+    }
+}
+
+/// A C0 control met inside a sequence, carried out there as a terminal does
+/// — but ENQ, which a terminal may answer, is dropped.
+fn control(c: char, out: &mut String) {
+    if c != ENQ {
+        out.push(c);
     }
 }
 
@@ -330,6 +356,22 @@ fn answers(body: &str) -> bool {
     }
 }
 
+/// Whether the CSI sequence `body` sets or resets a mode that changes what
+/// the keyboard sends or locks it, which the reset could not be trusted to
+/// undo: KAM (2, keyboard locked), SRM (12, local echo), LNM (20, Enter sends
+/// CR LF), DECANM (`?2`, VT52 — after which no ANSI reset is read). The whole
+/// sequence goes, whatever else it sets.
+fn keyboard_mode(body: &str) -> bool {
+    let Some(params) = body.strip_suffix(['h', 'l']) else {
+        return false;
+    };
+    let (params, dangerous): (&str, &[&str]) = match params.strip_prefix('?') {
+        Some(params) => (params, &["2"]),
+        None => (params, &["2", "12", "20"]),
+    };
+    params.split(';').any(|p| dangerous.contains(&p))
+}
+
 /// `Some(true)` when the CSI sequence `body` switches to the alternate
 /// screen, `Some(false)` when it switches back, `None` otherwise.
 fn alt_screen_switch(body: &str) -> Option<bool> {
@@ -345,28 +387,33 @@ fn alt_screen_switch(body: &str) -> Option<bool> {
         .then_some(on)
 }
 
-/// What puts the terminal back after a replay. The main screen, only when
-/// the replay left it: leaving it otherwise restores a stale cursor. Then
-/// plain text in the ASCII set; a visible cursor; no mouse or focus
+/// What puts the terminal back after a replay. First out of VT52 mode
+/// (`ESC <`, ignored otherwise; the filter drops the switch into it, this is
+/// for a terminal left there before) and out of synchronized output, so the
+/// rest is read and shown. The main screen, only when the replay left it:
+/// leaving it otherwise restores a stale cursor. Then plain text in the ASCII
+/// set; a visible, default-shaped cursor; normal video; no mouse or focus
 /// reporting, no bracketed paste, no kitty or modifyOtherKeys keyboard
 /// modes; normal cursor and keypad keys; line wrap on, insert mode off. Last
-/// the scroll region and origin mode, between a cursor save and restore,
-/// since both move the cursor home. The shell that gets the terminal next
-/// sets what it wants.
+/// the left/right margins, the scroll region and origin mode, between a
+/// cursor save and restore (`ESC 7`/`ESC 8`, which mean the same with
+/// margins on), since they move the cursor home. The shell that gets the
+/// terminal next sets what it wants.
 fn reset_sequence(alt_screen: bool) -> String {
-    let mut reset = String::new();
+    let mut reset = String::from("\x1b<\x1b[?2026l");
     if alt_screen {
         reset.push_str("\x1b[?1049l");
     }
     reset.push_str(concat!(
         "\x1b[0m\x0f\x1b(B",
-        "\x1b[?25h",
-        "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l",
+        "\x1b[?25h\x1b[0 q\x1b[?5l",
+        "\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l",
+        "\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1016l",
         "\x1b[?1004l\x1b[?2004l",
         "\x1b[<99u\x1b[>4m",
         "\x1b[?1l\x1b>",
         "\x1b[?7h\x1b[4l",
-        "\x1b7\x1b[?6l\x1b[r\x1b8",
+        "\x1b7\x1b[?69l\x1b[?6l\x1b[r\x1b8",
     ));
     reset
 }
@@ -654,8 +701,9 @@ mod tests {
                 "\x1b]0;title\x1b\\c",
                 "\u{9d}8;;https://x\u{9c}d",
                 "\x1b]52;c;eA==\x1b[1me",
+                "\x1b\u{9d}52;c;QUJD\x07f",
             ]),
-            "abcd\x1b[1me"
+            "abcd\x1b[1mef"
         );
     }
 
@@ -669,14 +717,16 @@ mod tests {
                 "\x1bP$qm\x1b\\b",
                 "\x1bXsos\x1b\\\x1b^pm\x1b\\\x1b_Gapc\x1b\\c",
                 "\u{90}+q6b\u{9c}d",
+                "\x1b\u{90}$qm\x1b\\e",
             ]),
-            "abcd"
+            "abcde"
         );
     }
 
     /// Nothing that makes the terminal type an answer gets through: device
     /// attributes, status and cursor reports, mode and window reports, the
-    /// version, keyboard flags, DECID.
+    /// version, keyboard flags, DECID, ENQ — in 8-bit form too, also after
+    /// an `ESC` (`ESC CSI` is CSI) and one that ends a string.
     #[test]
     fn queries_the_terminal_would_answer_are_dropped() {
         let queries = [
@@ -698,6 +748,11 @@ mod tests {
             "\x1bZ",
             "\u{9b}6n",
             "\u{9a}",
+            "\x1b\u{9b}6n",
+            "\x1b\u{9a}",
+            "\x1b]0;x\x1b\u{9b}6n",
+            "\x05",
+            "\x1b[\x056n",
         ];
         for query in queries {
             assert_eq!(filtered(&["a", query, "b"]), "ab", "{query:?} is dropped");
@@ -712,6 +767,25 @@ mod tests {
                       \x1b[K\x1b7\x1b8\x1b[2;20r\x1b(0q\x1b(B\x1b[?25l\x1b[?1049h\
                       \x1b[?1000h\x1b[38;2;1;2;3m\x1b[3 q\x1bM\x07\x08\t";
         assert_eq!(filtered(&[output]), output);
+    }
+
+    /// The modes that change what the keyboard sends or lock it — KAM, SRM,
+    /// LNM, VT52 — never reach the terminal, even among other modes; modes
+    /// that only share a digit with them still pass.
+    #[test]
+    fn modes_that_change_the_keyboard_are_dropped() {
+        for mode in [
+            "\x1b[2h",
+            "\x1b[12l",
+            "\x1b[20h",
+            "\x1b[4;20h",
+            "\x1b[?2l",
+            "\x1b[?1;2l",
+        ] {
+            assert_eq!(filtered(&["a", mode, "b"]), "ab", "{mode:?} is dropped");
+        }
+        let kept = "\x1b[4h\x1b[?2004h\x1b[?12l\x1b[?20h";
+        assert_eq!(filtered(&[kept]), kept);
     }
 
     /// A sequence split between two events is judged as one: a query is
@@ -732,8 +806,9 @@ mod tests {
     }
 
     /// The alternate screen is left at the end only if the replay is still on
-    /// it, by the last switch, even one split across events; the reset puts
-    /// back charset, keyboard, mouse, wrap and scroll-region modes.
+    /// it, by the last switch, even one split across events; the reset leaves
+    /// VT52 and synchronized output first, and puts back charset, cursor
+    /// shape, video, keyboard, mouse, wrap, margin and scroll-region modes.
     #[test]
     fn the_reset_leaves_the_alternate_screen_only_when_the_replay_is_on_it() {
         let mut filter = Filter::new();
@@ -751,12 +826,17 @@ mod tests {
         filter.feed("\x1bc", &mut out);
         assert!(!filter.alt_screen, "a full reset leaves it");
 
-        assert!(reset_sequence(true).starts_with("\x1b[?1049l"));
+        assert!(reset_sequence(true).starts_with("\x1b<\x1b[?2026l\x1b[?1049l"));
         let reset = reset_sequence(false);
         assert!(!reset.contains("\x1b[?1049l"));
+        assert!(reset.starts_with("\x1b<"), "VT52 is left first");
         for part in [
             "\x0f\x1b(B",
             "\x1b[?25h",
+            "\x1b[0 q",
+            "\x1b[?5l",
+            "\x1b[?9l",
+            "\x1b[?1016l",
             "\x1b[?1000l",
             "\x1b[?1003l",
             "\x1b[?1004l",
@@ -768,7 +848,7 @@ mod tests {
             "\x1b[>4m",
             "\x1b[?7h",
             "\x1b[4l",
-            "\x1b7\x1b[?6l\x1b[r\x1b8",
+            "\x1b7\x1b[?69l\x1b[?6l\x1b[r\x1b8",
         ] {
             assert!(reset.contains(part), "the reset has {part:?}");
         }

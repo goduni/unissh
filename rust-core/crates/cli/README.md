@@ -111,9 +111,16 @@ host that was compromised, decides what is in it. So `play` passes on what draws
 on the screen and drops what reaches past it: every OSC string (the clipboard,
 the title), DCS, SOS, PM and APC strings, and the queries a terminal answers by
 typing the answer in (device attributes, cursor and status reports, mode and
-window reports, its version). Keys are read from the controlling terminal
+window reports, its version, ENQ), in their 8-bit forms too. It also drops the
+modes that change what the keyboard sends or lock it (keyboard lock, local echo,
+newline mode, VT52), and the reset at the end puts back the screen modes a
+recording may leave on (VT52, synchronized output, reverse video, cursor shape,
+margins). Keys are read from the controlling terminal
 itself, and when the replay ends what is still coming in is read and discarded
 before the keyboard is given back, so nothing reaches the shell as typed input.
+That last guarantee is Unix-only: on Windows, `play` writes to stdout and does
+not read the console, so an answer a console gives to something the filter let
+through could still land in the shell's input.
 
 `export` writes the recording exactly as the core keeps it: an
 [asciicast v2](https://docs.asciinema.org/manual/asciicast/v2/) document that
