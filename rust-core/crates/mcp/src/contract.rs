@@ -294,6 +294,9 @@ pub enum ToolError {
     Busy,
     ApprovalDenied,
     ApprovalExpired,
+    /// Manual confirmation is required, but nobody can be asked (a CLI server
+    /// without a terminal).
+    ApprovalUnavailable,
     OutputExpired,
     OutcomeUnknown,
 }
@@ -374,6 +377,7 @@ impl ToolError {
             Self::Busy => "A UniSSH limit on open connections or commands in progress is reached, or the session is running another command. Retry after current work finishes; get_access_status shows the limits, which the user can raise in UniSSH.",
             Self::ApprovalDenied => "The command was denied in UniSSH.",
             Self::ApprovalExpired => "The command approval request expired.",
+            Self::ApprovalUnavailable => "Commands under this grant need the user's confirmation, but this UniSSH MCP server has no terminal to ask on. The user can start it from a terminal or grant trusted access.",
             Self::OutputExpired => "The output cursor is invalid or unavailable. Read the retained command again without an output cursor; do not rerun the command.",
             Self::OutcomeUnknown => {
                 "The remote outcome is unknown. Do not automatically repeat the command."
