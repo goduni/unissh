@@ -1,7 +1,7 @@
-import { useId, useState, type CSSProperties } from "react";
+import { useId, useMemo, useState, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
-import type { SpaceInfo } from "../api/types";
+import type { AccountRow, SpaceInfo } from "../api/types";
 import { useUi } from "../store/ui";
 import { useAsync } from "../util/useAsync";
 import { DataTable, type Column } from "../ui/DataTable";
@@ -17,7 +17,9 @@ import {
   TextInput,
   initialsOf,
 } from "../ui/primitives";
+import { Icon } from "../ui/icons";
 import { Modal } from "../ui/overlays";
+import { MONO } from "../theme/tokens";
 import { Screen } from "./Screen";
 
 export function Spaces() {
@@ -193,7 +195,26 @@ function AddMemberModal({
   onDone: () => void;
 }) {
   const { t } = useTranslation();
+  // Pick the person by name; the bare account ID is the way in only when the list can't be read.
+  const accounts = useAsync(() => api.identity.accounts(), []);
+  const [query, setQuery] = useState("");
+  const [picked, setPicked] = useState<string | null>(null);
   const [accountId, setAccountId] = useState("");
+  const pickable = !accounts.error;
+  const matches = useMemo(() => {
+    const s = query.trim().toLowerCase();
+    return (accounts.data?.accounts ?? [])
+      .filter((a) => a.status === "active")
+      .filter(
+        (a) =>
+          !s ||
+          (a.display_name ?? "").toLowerCase().includes(s) ||
+          (a.handle ?? "").toLowerCase().includes(s) ||
+          a.account_id.toLowerCase() === s,
+      );
+  }, [accounts.data, query]);
+  // The choice never outlives the search: a person filtered out of sight is no longer the one being added.
+  const shownPick = picked && matches.some((a) => a.account_id === picked) ? picked : null;
   const [role, setRole] = useState<(typeof MEMBER_ROLES)[number]>("member");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -202,14 +223,15 @@ function AddMemberModal({
   const accountFieldId = useId();
 
   const add = async () => {
-    if (!accountId.trim()) {
-      setError(t("screen.spaces.errAccount"));
+    const target = pickable ? shownPick : accountId.trim();
+    if (!target) {
+      setError(pickable ? t("screen.spaces.errPerson") : t("screen.spaces.errAccount"));
       return;
     }
     setBusy(true);
     setError(null);
     try {
-      await api.spaces.addMember(space.space_id, accountId.trim(), role);
+      await api.spaces.addMember(space.space_id, target, role);
       onDone();
     } catch (e) {
       setError(e instanceof Error ? e.message : t("common.error"));
@@ -229,15 +251,34 @@ function AddMemberModal({
         </p>
         <div style={{ marginTop: 16 }}>
           {error ? <InlineError>{error}</InlineError> : null}
-          <Field label={t("screen.spaces.accountLabel")} hint={t("screen.spaces.accountHint")} htmlFor={accountFieldId}>
-            <TextInput
-              id={accountFieldId}
-              mono
-              value={accountId}
-              onChange={setAccountId}
-              placeholder={t("screen.spaces.accountPlaceholder")}
-            />
-          </Field>
+          {pickable ? (
+            <Field label={t("screen.spaces.personLabel")} hint={t("screen.spaces.personHint")} htmlFor={accountFieldId}>
+              <TextInput
+                id={accountFieldId}
+                value={query}
+                onChange={setQuery}
+                autoFocus
+                placeholder={t("screen.spaces.personPlaceholder")}
+              />
+              <PersonList
+                loading={accounts.loading && !accounts.data}
+                people={matches}
+                picked={shownPick}
+                onPick={setPicked}
+                label={t("screen.spaces.personLabel")}
+              />
+            </Field>
+          ) : (
+            <Field label={t("screen.spaces.accountLabel")} hint={t("screen.spaces.accountHint")} htmlFor={accountFieldId}>
+              <TextInput
+                id={accountFieldId}
+                mono
+                value={accountId}
+                onChange={setAccountId}
+                placeholder={t("screen.spaces.accountPlaceholder")}
+              />
+            </Field>
+          )}
           <Field label={t("screen.spaces.roleLabel")} style={{ marginBottom: 0 }}>
             <Segmented
               size="md"
@@ -260,6 +301,84 @@ function AddMemberModal({
     </Modal>
   );
 }
+
+/**
+ * The people a search finds, as a short scrolling list of choices: avatar, name, login. The chosen one is
+ * --elevated with a check; a click on it again keeps it chosen.
+ */
+function PersonList({
+  loading,
+  people,
+  picked,
+  onPick,
+  label,
+}: {
+  loading: boolean;
+  people: AccountRow[];
+  picked: string | null;
+  onPick: (id: string) => void;
+  label: string;
+}) {
+  const { t } = useTranslation();
+  if (loading) return <p style={LIST_NOTE}>{t("common.loading")}</p>;
+  if (people.length === 0) return <p style={LIST_NOTE}>{t("screen.spaces.personNone")}</p>;
+  return (
+    <div role="group" aria-label={label} style={PEOPLE}>
+      {people.map((a) => {
+        const name = a.display_name || a.handle || a.account_id;
+        const on = a.account_id === picked;
+        return (
+          <button
+            key={a.account_id}
+            type="button"
+            aria-pressed={on}
+            onClick={() => onPick(a.account_id)}
+            style={{ ...PERSON, background: on ? "var(--elevated)" : "transparent" }}
+          >
+            <Avatar label={initialsOf(name)} size={18} />
+            <span style={{ ...NAME, fontWeight: on ? 600 : 500 }}>{name}</span>
+            {a.display_name && a.handle ? <span style={HANDLE}>{a.handle}</span> : null}
+            {on ? <Icon name="check" size={14} style={{ marginLeft: "auto", flexShrink: 0 }} /> : null}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+const PEOPLE: CSSProperties = {
+  display: "grid",
+  marginTop: 8,
+  maxHeight: 200,
+  overflowY: "auto",
+  border: "1px solid var(--border)",
+  borderRadius: "var(--radius-md)",
+};
+const PERSON: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  minWidth: 0,
+  minHeight: 36,
+  padding: "6px 10px",
+  border: 0,
+  borderBottom: "1px solid var(--rule)",
+  color: "var(--foreground)",
+  font: "inherit",
+  fontSize: 13,
+  textAlign: "left",
+  cursor: "pointer",
+};
+const HANDLE: CSSProperties = {
+  minWidth: 0,
+  fontFamily: MONO,
+  fontSize: 12,
+  color: "var(--muted-foreground)",
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+};
+const LIST_NOTE: CSSProperties = { margin: "8px 0 0", fontSize: 13, color: "var(--muted-foreground)" };
 
 /** A name in a row: 13/500, cut with an ellipsis. */
 const NAME: CSSProperties = {
