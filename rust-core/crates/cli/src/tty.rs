@@ -10,20 +10,32 @@ use std::time::{Duration, Instant};
 
 use zeroize::Zeroizing;
 
-pub use imp::{read_stdin, wait_for_input, window_size, RawMode, Tty, SUPPORTED};
+pub use imp::{
+    read_stdin, stdin_is_controlling_terminal, wait_for_input, window_size, RawMode, Tty, SUPPORTED,
+};
 
 /// `text` without control characters, for one line that came from a server,
 /// a vault or a remote host: printed raw, an escape sequence in it could move
-/// the cursor, rewrite what is on screen or fake a prompt.
+/// the cursor, rewrite what is on screen or fake a prompt. Bidi controls and
+/// zero-width characters go too: they could reorder or hide part of a name.
 pub fn one_line(text: &str) -> String {
-    text.chars().filter(|c| !c.is_control()).collect()
+    text.chars().filter(|c| shown(*c)).collect()
 }
 
 /// [`one_line`] for text that may span lines: line breaks stay.
 pub fn lines(text: &str) -> String {
-    text.chars()
-        .filter(|c| *c == '\n' || !c.is_control())
-        .collect()
+    text.chars().filter(|c| *c == '\n' || shown(*c)).collect()
+}
+
+/// Whether a character of untrusted text may reach the terminal: not a C0, DEL
+/// or C1 control, not a bidi embedding, override, isolate or mark, and not a
+/// zero-width character (U+200B–U+200F, U+FEFF).
+fn shown(c: char) -> bool {
+    !c.is_control()
+        && !matches!(
+            c,
+            '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}'
+        )
 }
 
 // The quiet-prompt line editor is the Unix terminal's (Windows has no `Tty`);
@@ -111,6 +123,7 @@ impl QuietLine {
 
     /// How many characters the line holds (UTF-8 continuation bytes are part
     /// of the character before them).
+    #[cfg(unix)]
     fn chars(&self) -> usize {
         self.text.iter().filter(|b| **b & 0xC0 != 0x80).count()
     }
@@ -452,6 +465,13 @@ mod imp {
         ready(io::stdin().as_fd(), timeout)
     }
 
+    /// Whether stdin is this process's controlling terminal: not a pipe, and
+    /// not some other terminal. (`tcgetpgrp` answers only for the controlling
+    /// terminal; on any other descriptor it fails.)
+    pub fn stdin_is_controlling_terminal() -> bool {
+        rustix::termios::tcgetpgrp(io::stdin().as_fd()).is_ok()
+    }
+
     /// Waits up to `timeout` for `fd` to become readable. A signal arriving
     /// meanwhile does not end the wait early: it goes on for the time left.
     fn ready(fd: BorrowedFd<'_>, timeout: Duration) -> io::Result<bool> {
@@ -556,6 +576,11 @@ mod imp {
         None
     }
 
+    /// No terminal to speak of here.
+    pub const fn stdin_is_controlling_terminal() -> bool {
+        false
+    }
+
     /// Always "ready": the read that follows blocks instead.
     pub const fn wait_for_input(_timeout: Duration) -> io::Result<bool> {
         Ok(true)
@@ -617,6 +642,15 @@ mod tests {
         let hostile = "web\x1b[2J\x1b[1;1H\u{9b}31m\x07\nMaster password: ";
         assert_eq!(one_line(hostile), "web[2J[1;1H31mMaster password: ");
         assert_eq!(lines(hostile), "web[2J[1;1H31m\nMaster password: ");
+    }
+
+    /// A label that reverses or hides part of itself: `exe.txt` shown as
+    /// `txt.exe`, a zero-width space splitting a word, a byte-order mark.
+    #[test]
+    fn untrusted_text_loses_its_bidi_and_zero_width_characters() {
+        let hostile = "\u{202e}txt.exe\u{202c} pro\u{200b}d\u{2066}\u{200f}\u{feff}";
+        assert_eq!(one_line(hostile), "txt.exe prod");
+        assert_eq!(lines(hostile), "txt.exe prod");
     }
 
     #[test]

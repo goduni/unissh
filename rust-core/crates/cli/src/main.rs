@@ -25,6 +25,7 @@ mod mcp;
 mod mcp_tty;
 mod picker;
 mod server;
+mod system_lock;
 mod tty;
 
 use std::path::PathBuf;

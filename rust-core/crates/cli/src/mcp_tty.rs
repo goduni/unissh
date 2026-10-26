@@ -1,10 +1,11 @@
 //! The terminal side of `unissh mcp`: command approvals, sign-in prompts for
 //! the hosts an agent connects to, and the stderr log.
 //!
-//! With the stdio transport, stdin and stdout carry the protocol, so every
-//! question goes to the controlling terminal (`/dev/tty`) and everything else
-//! to stderr. The broker decides; this only asks the person and reports back
-//! through the broker's native API ([`Broker::approve`]).
+//! Questions are asked only by an HTTP server the user started in a terminal of
+//! their own (stdin is the controlling terminal), and only on `/dev/tty`. Over
+//! stdio the terminal belongs to the client that launched the process, so
+//! nothing is asked at all ([`attended`]). The broker decides; this only asks
+//! the person and reports back through its native API ([`Broker::approve`]).
 
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,14 +17,21 @@ use unissh_ffi::{AuthPromptRequest, AuthPrompter};
 use unissh_mcp::contract::ToolError;
 
 use crate::device::prompt_intro;
-use crate::tty::{lines, one_line, Tty};
+use crate::tty::{lines, one_line, stdin_is_controlling_terminal, Tty};
 
 /// How often the approver looks for new requests.
 const POLL: Duration = Duration::from_millis(200);
 
-/// Whether this process has a controlling terminal to ask on.
-pub fn has_terminal() -> bool {
-    Tty::open().is_ok()
+/// How long a withdrawn question stays on screen before the next one, so that
+/// an answer being typed to it does not land on its successor.
+const SWAP_PAUSE: Duration = Duration::from_secs(1);
+
+/// Whether anyone may be asked: only an HTTP server whose stdin is the
+/// controlling terminal, i.e. one the user started in a terminal of their own.
+/// A stdio server shares its terminal with the client that spawned it (a
+/// full-screen agent, say), where whatever types into the terminal could answer.
+pub fn attended(http: bool) -> bool {
+    http && stdin_is_controlling_terminal()
 }
 
 /// One question on the terminal at a time: an approval and a sign-in prompt
@@ -55,7 +63,7 @@ impl Terminal {
 /// Asks about every command that waits for approval, oldest first, until
 /// `stop`. A question nobody answers lets the request expire, as the desktop
 /// dialog does; one the agent withdraws (cancel, revocation) is dropped.
-pub fn approve_until_stopped(broker: &Broker, terminal: &Terminal, stop: &AtomicBool) {
+pub fn approve_until_stopped(broker: &Arc<Broker>, terminal: &Terminal, stop: &AtomicBool) {
     let mut asked = BTreeSet::new();
     while !stop.load(Ordering::SeqCst) {
         let pending = broker.pending_approvals();
@@ -66,28 +74,41 @@ pub fn approve_until_stopped(broker: &Broker, terminal: &Terminal, stop: &Atomic
             continue;
         };
         asked.insert(request.run_id.clone());
-        ask(broker, terminal, stop, &request);
+        if ask(broker, terminal, stop, &request) == Asked::Withdrawn {
+            // The next question's prompt also discards what was typed meanwhile
+            // (`line_until` flushes type-ahead).
+            std::thread::sleep(SWAP_PAUSE);
+        }
     }
 }
 
-fn ask(broker: &Broker, terminal: &Terminal, stop: &AtomicBool, request: &PendingApproval) {
+/// How a question ended.
+#[derive(PartialEq, Eq)]
+enum Asked {
+    /// Answered, or refused for want of an answer.
+    Decided,
+    /// Withdrawn (cancelled, revoked, expired) or never shown.
+    Withdrawn,
+}
+
+fn ask(
+    broker: &Arc<Broker>,
+    terminal: &Terminal,
+    stop: &AtomicBool,
+    request: &PendingApproval,
+) -> Asked {
     let deadline = Instant::now() + request.expires_in;
-    let gone = || {
-        stop.load(Ordering::SeqCst)
-            || !broker
-                .pending_approvals()
-                .iter()
-                .any(|p| p.run_id == request.run_id)
-    };
+    let gone = || stop.load(Ordering::SeqCst) || !broker.is_pending(&request.run_id);
     let Some(_turn) = terminal.turn(deadline, &gone) else {
-        return;
+        return Asked::Withdrawn;
     };
     let mut decided = false;
     let asked = Tty::open().and_then(|mut tty| {
         tty.say(&question(request).replace('\n', "\r\n"))?;
+        // Counted from the deadline: waiting for the terminal took some of it.
         let prompt = format!(
             "Allow it? Type yes to allow, anything else denies ({} s left): ",
-            request.expires_in.as_secs()
+            deadline.saturating_duration_since(Instant::now()).as_secs()
         );
         let outcome = match tty.line_until(&prompt, true, deadline, &gone) {
             Ok(Some(text)) => {
@@ -108,11 +129,17 @@ fn ask(broker: &Broker, terminal: &Terminal, stop: &AtomicBool, request: &Pendin
     if asked.is_err() && !decided {
         // No terminal to ask after all: nobody approved it.
         decide(broker, &request.run_id, false);
+        decided = true;
+    }
+    if decided {
+        Asked::Decided
+    } else {
+        Asked::Withdrawn
     }
 }
 
 /// Records the decision; the words for the person at the terminal.
-fn decide(broker: &Broker, run_id: &str, allowed: bool) -> &'static str {
+fn decide(broker: &Arc<Broker>, run_id: &str, allowed: bool) -> &'static str {
     let decided = broker.approve(run_id, allowed);
     if decided.is_ok() {
         if allowed {
@@ -220,9 +247,14 @@ impl AuthPrompter for AttributedPrompt {
 /// ([`unissh_mcp::diagnostics_allowed`]), whatever the level.
 struct StderrLog;
 
+/// Whether a record passes the log at `max`: never the SDK's diagnostics.
+fn passes(metadata: &log::Metadata<'_>, max: log::LevelFilter) -> bool {
+    metadata.level() <= max && unissh_mcp::diagnostics_allowed(metadata.target())
+}
+
 impl log::Log for StderrLog {
     fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
-        metadata.level() <= log::max_level() && unissh_mcp::diagnostics_allowed(metadata.target())
+        passes(metadata, log::max_level())
     }
 
     fn log(&self, record: &log::Record<'_>) {
@@ -255,7 +287,7 @@ pub fn log_to_stderr(verbose: bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{allows, question, StderrLog};
+    use super::{allows, passes, question};
     use std::time::Duration;
     use unissh_automation::{PendingApproval, TargetInfo};
     use zeroize::Zeroizing;
@@ -318,10 +350,11 @@ mod tests {
     /// The SDK's diagnostics hold raw commands and output; no level lets them out.
     #[test]
     fn mcp_sdk_diagnostics_never_reach_the_log() {
-        use log::Log;
-        log::set_max_level(log::LevelFilter::Info);
         let at = |target: &str, level| {
-            StderrLog.enabled(&log::Metadata::builder().target(target).level(level).build())
+            passes(
+                &log::Metadata::builder().target(target).level(level).build(),
+                log::LevelFilter::Info,
+            )
         };
         assert!(!at("rmcp", log::Level::Error));
         assert!(!at("rmcp::service", log::Level::Warn));
