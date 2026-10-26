@@ -79,20 +79,67 @@ pub fn filter<'h>(hosts: &'h [Host], filter: Option<&str>, tag: Option<&str>) ->
         .collect()
 }
 
+/// A vault item people name on the command line: a host, a snippet, a group.
+pub trait Named {
+    /// What it is, for messages ("host").
+    const KIND: &'static str;
+    /// The command that lists them, for the "no match" hint.
+    const LISTED_BY: Option<&'static str>;
+    /// The name of the vault it is in.
+    fn vault_name(&self) -> &str;
+    /// Its label.
+    fn label(&self) -> &str;
+    /// Another name it answers to after the labels (a host's address).
+    fn address(&self) -> Option<&str> {
+        None
+    }
+    /// What the list of candidates shows after `vault/label`.
+    fn detail(&self) -> String {
+        String::new()
+    }
+}
+
+impl Named for Host {
+    const KIND: &'static str = "host";
+    const LISTED_BY: Option<&'static str> = Some("unissh hosts");
+
+    fn vault_name(&self) -> &str {
+        &self.vault_name
+    }
+
+    fn label(&self) -> &str {
+        &self.profile.label
+    }
+
+    fn address(&self) -> Option<&str> {
+        Some(&self.profile.host)
+    }
+
+    fn detail(&self) -> String {
+        self.target_text()
+    }
+}
+
 /// The host `query` names: `vault/label`, else a label (any case), else the
 /// one label it begins, else a host name. Several matches are an error that
 /// lists them, never a guess.
 pub fn find<'h>(hosts: &'h [Host], query: &str) -> Res<&'h Host> {
+    find_named(hosts, query)
+}
+
+/// The item `query` names, by the rules of [`find`]: `vault/label`, a label,
+/// the one label it begins, an address.
+pub fn find_named<'i, T: Named>(items: &'i [T], query: &str) -> Res<&'i T> {
     let q = query.trim().to_lowercase();
-    let by = |pred: &dyn Fn(&Host) -> bool| hosts.iter().filter(|&h| pred(h)).collect::<Vec<_>>();
+    let by = |pred: &dyn Fn(&T) -> bool| items.iter().filter(|&i| pred(i)).collect::<Vec<_>>();
     let qualified = q.split_once('/').map_or_else(Vec::new, |(vault, label)| {
-        by(&|h| h.vault_name.to_lowercase() == vault && h.profile.label.to_lowercase() == label)
+        by(&|i| i.vault_name().to_lowercase() == vault && i.label().to_lowercase() == label)
     });
     let rounds = [
         qualified,
-        by(&|h| h.profile.label.to_lowercase() == q),
-        by(&|h| h.profile.label.to_lowercase().starts_with(&q)),
-        by(&|h| h.profile.host.to_lowercase() == q),
+        by(&|i| i.label().to_lowercase() == q),
+        by(&|i| i.label().to_lowercase().starts_with(&q)),
+        by(&|i| i.address().is_some_and(|a| a.to_lowercase() == q)),
     ];
     for found in rounds {
         match found.as_slice() {
@@ -101,21 +148,29 @@ pub fn find<'h>(hosts: &'h [Host], query: &str) -> Res<&'h Host> {
             many => return Err(Failure::msg(ambiguous(query, many))),
         }
     }
+    let hint = T::LISTED_BY.map_or_else(String::new, |cmd| format!(" (`{cmd}` lists them)"));
     Err(Failure::msg(format!(
-        "no host matches \"{query}\" (`unissh hosts` lists them)"
+        "no {} matches \"{query}\"{hint}",
+        T::KIND
     )))
 }
 
-fn ambiguous(query: &str, many: &[&Host]) -> String {
-    let mut text = format!("\"{query}\" matches several hosts; name one as vault/label:");
-    for h in many {
+fn ambiguous<T: Named>(query: &str, many: &[&T]) -> String {
+    let mut text = format!(
+        "\"{query}\" matches several {}s; name one as vault/label:",
+        T::KIND
+    );
+    for i in many {
         let _ = write!(
             text,
-            "\n  {}/{}  {}",
-            one_line(&h.vault_name),
-            one_line(&h.profile.label),
-            one_line(&h.target_text())
+            "\n  {}/{}",
+            one_line(i.vault_name()),
+            one_line(i.label())
         );
+        let detail = i.detail();
+        if !detail.is_empty() {
+            let _ = write!(text, "  {}", one_line(&detail));
+        }
     }
     text
 }

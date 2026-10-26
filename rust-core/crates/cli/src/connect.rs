@@ -122,7 +122,7 @@ fn forget_password(target: &mut Target) {
 }
 
 /// Whether this machine has pinned a key for `host:port` already.
-fn is_known(core: &Core, host: &str, port: u16) -> bool {
+pub fn is_known(core: &Core, host: &str, port: u16) -> bool {
     core.list_known_hosts()
         .map(|known| {
             known
@@ -134,7 +134,7 @@ fn is_known(core: &Core, host: &str, port: u16) -> bool {
 
 /// Says that a first connection pinned the host's key — trust on first use is
 /// a decision, and the person making it should see the fingerprint once.
-fn announce_pinned(core: &Core, host: &str, port: u16) {
+pub fn announce_pinned(core: &Core, host: &str, port: u16) {
     let Ok(known) = core.list_known_hosts() else {
         return;
     };

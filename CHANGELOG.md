@@ -66,6 +66,14 @@ starts with `0.`:
   ever asked on the terminal or read from an owner-only file; no session token
   is stored. `unissh logout` revokes the device and deletes its data. The old
   core harness is now the `unissh-harness` binary.
+- `unissh run` runs one command on many hosts, as the app's Fleet does: by tag,
+  by group (nested groups included) or by name, a bounded number at a time with
+  a per-host deadline, each output line led by the host's label (or `--json`),
+  a summary at the end and a non-zero exit when any host failed; `--dry-run`
+  shows the plan without connecting. `unissh snippets list` and
+  `unissh snippets run` run saved snippets the same way, filling their
+  parameters as the app does (`--set name=value`, else asked on the terminal).
+  The parameter rules now also live in the core (`unissh_ffi::snippet_params`).
 - Bindings: `ExecHandleFfi::close_stdin` ends a streaming command's input and
   keeps its output coming; `Core::wait_for_recordings` waits for session
   recordings still to be written (a recorded session counts from the moment it
