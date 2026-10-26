@@ -1911,3 +1911,69 @@ fn saved_access_keeps_custom_limits_and_the_old_form_for_defaults() {
     let old: SavedAccess = serde_json::from_value(saved).unwrap();
     assert!(serde_json::to_value(&old).unwrap().get("limits").is_none());
 }
+
+/// A server without anyone to ask (the CLI without a terminal) refuses a manual
+/// grant's command at submission, with a code saying why, and records nothing;
+/// a trusted grant needs no approver and still runs.
+#[tokio::test]
+async fn manual_commands_are_refused_when_nobody_can_approve() {
+    let fake = Arc::new(Fake::default());
+    let b = Broker::new(fake.clone());
+    b.set_manual_approval_available(false);
+    let t = target(&b, "a").await;
+    assert_eq!(
+        call(
+            &b,
+            "a",
+            "run_command",
+            json!({"session_id":null,"target_id":t,"command":"pwd","request_key":"k"})
+        )
+        .await
+        .unwrap_err(),
+        ToolError::ApprovalUnavailable
+    );
+    assert!(b.review()["runs"].as_array().unwrap().is_empty());
+    let t = trusted_target(&b, "b").await;
+    assert_eq!(
+        run(&b, "b", &t, "ok", "k").await.unwrap()["state"],
+        "completed"
+    );
+    assert_eq!(fake.execs.load(Ordering::SeqCst), 1);
+}
+
+/// A native approver outside the desktop sees the exact command, inputs,
+/// destination and application, and a request the agent cancels drops out.
+#[tokio::test]
+async fn pending_approvals_show_the_exact_request_until_it_is_withdrawn() {
+    let b = Broker::new(Arc::new(Fake::default()));
+    let t = target(&b, "a").await;
+    let submitted = call(
+        &b,
+        "a",
+        "run_command",
+        json!({"session_id":null,"target_id":t,"command":"rm -rf x\n\u{1b}[2K","cwd":"/srv",
+            "stdin":"in","env":{"MODE":"prod"},"timeout_ms":5000,"request_key":"k"}),
+    )
+    .await
+    .unwrap();
+    let pending = b.pending_approvals();
+    let [p] = pending.as_slice() else {
+        panic!("one pending approval");
+    };
+    assert_eq!(p.run_id, submitted["run_id"].as_str().unwrap());
+    assert_eq!(
+        (p.integration_id.as_str(), p.application.as_str()),
+        ("a", "a")
+    );
+    assert_eq!(p.target.host, "localhost");
+    assert_eq!(p.command.as_str(), "rm -rf x\n\u{1b}[2K");
+    assert_eq!(p.cwd.as_deref().map(String::as_str), Some("/srv"));
+    assert_eq!(p.stdin.as_deref().map(String::as_str), Some("in"));
+    assert_eq!(p.env.len(), 1);
+    assert_eq!(p.timeout_ms, 5000);
+    assert!(p.expires_in > Duration::from_secs(100));
+    call(&b, "a", "cancel_command", json!({"run_id":p.run_id}))
+        .await
+        .unwrap();
+    assert!(b.pending_approvals().is_empty());
+}
