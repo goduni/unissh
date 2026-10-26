@@ -16,6 +16,7 @@ import {
   EmptyState,
   ErrorCard,
   IconBtn,
+  Missing,
   PubkeyChip,
   SectionLabel,
   Segmented,
@@ -111,7 +112,7 @@ function AccountsBody() {
         </span>
       ),
     },
-    { key: "pub", label: "member_pubkey", width: "1.6fr", render: (a) => <PubkeyChip value={a.member_pubkey} /> },
+    { key: "pub", label: t("screen.accounts.colPubkey"), width: "1.6fr", render: (a) => <PubkeyChip value={a.member_pubkey} /> },
     { key: "dev", label: t("screen.accounts.colDevices"), width: "96px", numeric: true, render: (a) => a.device_count },
     {
       key: "status",
@@ -408,11 +409,14 @@ function AccountDrawer({
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: 16, display: "grid", alignContent: "start", gap: 16 }}>
-        <DrawerRow label="account_id">
+        <DrawerRow label={t("screen.accounts.accountIdLabel")} code="account_id">
           <PubkeyChip value={account.account_id} />
         </DrawerRow>
-        <DrawerRow label={t("screen.accounts.memberPubkeyLabel")}>
+        <DrawerRow label={t("screen.accounts.memberPubkeyLabel")} code="member_pubkey">
           <PubkeyChip value={account.member_pubkey} />
+        </DrawerRow>
+        <DrawerRow label={t("screen.accounts.x25519Label")} code="x25519_pub">
+          {account.x25519_pub ? <PubkeyChip value={account.x25519_pub} /> : <Missing />}
         </DrawerRow>
         <DrawerRow label={t("common.status")}>
           <AccountState a={account} />
@@ -444,10 +448,13 @@ function AccountDrawer({
   );
 }
 
-function DrawerRow({ label, children }: { label: string; children: ReactNode }) {
+function DrawerRow({ label, code, children }: { label: string; code?: string; children: ReactNode }) {
   return (
     <div style={{ display: "grid", gap: 8, minWidth: 0 }}>
-      <SectionLabel>{label}</SectionLabel>
+      <SectionLabel>
+        {label}
+        {code ? <span style={{ ...HANDLE, display: "inline", marginLeft: 8, textTransform: "none" }}>{code}</span> : null}
+      </SectionLabel>
       <div style={{ minWidth: 0 }}>{children}</div>
     </div>
   );

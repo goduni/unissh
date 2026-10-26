@@ -64,6 +64,15 @@ function GrantsBody() {
     [grants.data],
   );
   const members = decoded?.members ?? [];
+  // The manifest names members by key only; the accounts list puts a name to each key.
+  const accounts = useAsync(() => api.identity.accounts(), [reloadTick]);
+  const nameByKey = useMemo(
+    () =>
+      new Map(
+        (accounts.data?.accounts ?? []).map((a) => [a.member_pubkey ?? "", a.display_name || a.handle || null]),
+      ),
+    [accounts.data],
+  );
 
   const [rotating, setRotating] = useState(false);
 
@@ -75,7 +84,19 @@ function GrantsBody() {
       key: "member_pubkey",
       label: t("screen.grants.colMember"),
       width: "minmax(0, 1.6fr)",
-      render: (m) => <PubkeyChip value={m.ed25519_pub} />,
+      render: (m) => {
+        const name = nameByKey.get(m.ed25519_pub);
+        return (
+          <span style={{ display: "grid", gap: 2, minWidth: 0 }}>
+            {name ? (
+              <span style={{ fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {name}
+              </span>
+            ) : null}
+            <PubkeyChip value={m.ed25519_pub} />
+          </span>
+        );
+      },
     },
     {
       key: "role",
@@ -160,7 +181,7 @@ function GrantsBody() {
               </div>
               <p style={{ ...NOTE, margin: "4px 0 0" }}>{t("screen.grants.membersSummary", { count: members.length })}</p>
               <p style={{ ...NOTE, margin: "12px 0 0", paddingTop: 12, borderTop: "1px solid var(--rule)" }}>
-                {t("screen.grants.rotateModalSub")}
+                {t("screen.grants.rotateSummary")}
               </p>
             </div>
           </Card>
@@ -256,20 +277,14 @@ function RotateModal({
       const owners = (accounts.data?.accounts ?? []).filter((a) => a.is_owner);
       const genesis = owners.length === 1 ? owners[0].member_pubkey : null;
       if (!genesis) {
-        throw new Error(
-          "cannot verify members: the instance does not have exactly one owner to anchor trust",
-        );
+        throw new Error(t("screen.grants.errNoSingleOwner"));
       }
       // Pin per-instance (discriminated by the instance URL): a global key would
       // raise a false MITM alarm across different instances the panel connects to.
       const PIN_KEY = `unissh.ownerPin:${usePrefs.getState().instanceUrl}`;
       const pinned = localStorage.getItem(PIN_KEY);
       if (pinned && pinned !== genesis) {
-        throw new Error(
-          "owner pin mismatch — the server reported a different instance owner than " +
-            "first seen. Possible MITM; rotation blocked. Clear the pin only if you " +
-            "intentionally re-claimed this instance.",
-        );
+        throw new Error(t("screen.grants.errOwnerPin"));
       }
       if (!pinned) localStorage.setItem(PIN_KEY, genesis); // trust-on-first-use
       // Fetch the FULL manifest chain (epoch 1..current) and verify it from the
@@ -284,22 +299,19 @@ function RotateModal({
           if (!g.manifest) throw new Error(`missing manifest for epoch ${e}`);
           envelopes.push(g.manifest);
         }
-        if (envelopes.length === 0) throw new Error("vault has no membership manifest to verify");
+        if (envelopes.length === 0) throw new Error(t("screen.grants.errNoManifest"));
         const vm = await cr.verifyManifestChain(genesis, envelopes.join("\n"), vaultId);
         verifiedEds = new Set(vm.members.map((mm) => mm.ed25519_pub));
       } catch (e) {
-        throw new Error(
-          "manifest authority chain failed verification from the pinned genesis owner — " +
-            "refusing to rotate to an unverified member set" +
-            (e instanceof Error && e.message ? ` (${e.message})` : ""),
-          { cause: e },
-        );
+        throw new Error(t("screen.grants.errChain") + (e instanceof Error && e.message ? ` (${e.message})` : ""), {
+          cause: e,
+        });
       }
 
       const chosen = members.filter((m) => keep[m.pub] !== "remove");
       // Belt-and-suspenders: every retained member must be in the verified set.
       if (chosen.some((m) => !verifiedEds.has(m.pub))) {
-        throw new Error("a retained member is not in the cryptographically-verified manifest");
+        throw new Error(t("screen.grants.errNotVerified"));
       }
       if (chosen.length === 0) throw new Error(t("screen.grants.needAtLeastOneMember"));
       const missing = chosen.filter((m) => !m.x25519);
@@ -323,19 +335,13 @@ function RotateModal({
         const acc = byEd.get(m.pub);
         const who = acc?.handle ?? m.pub.slice(0, 12);
         if (!acc?.reg_payload || !acc?.reg_signature) {
-          throw new Error(
-            `member ${who}: no registration binding on file — cannot prove its x25519 is ` +
-              `genuine; refusing to wrap the vault key (rotate after the member re-enrolls)`,
-          );
+          throw new Error(t("screen.grants.errNoBinding", { who }));
         }
         try {
           const x = await cr.verifyMemberBinding(acc.reg_payload, acc.reg_signature, m.pub);
           attestedX.set(m.pub, x);
         } catch {
-          throw new Error(
-            `member ${who}: x25519 key is not attested by the registration signature — ` +
-              `refusing to wrap the vault key to a possibly substituted key`,
-          );
+          throw new Error(t("screen.grants.errBadBinding", { who }));
         }
       }
 
@@ -353,9 +359,7 @@ function RotateModal({
         const secs = Math.floor(new Date(`${s}T23:59:59Z`).getTime() / 1000);
         if (!Number.isFinite(secs) || secs <= nowSec) {
           const who = byEd.get(m.pub)?.handle ?? m.pub.slice(0, 12);
-          throw new Error(
-            `member ${who}: expiry "${s}" is invalid or in the past — pick a future date or clear it`,
-          );
+          throw new Error(t("screen.grants.errBadExpiry", { who, date: s }));
         }
         notAfter.set(m.pub, secs);
       }

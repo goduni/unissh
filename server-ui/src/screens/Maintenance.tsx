@@ -127,7 +127,7 @@ function SeqBumpCard() {
       return;
     }
     askConfirm({
-      title: "seq-bump",
+      title: t("screen.maint.seqBumpConfirmTitle"),
       desc: t("screen.maint.seqBumpConfirmDesc"),
       danger: true,
       confirmLabel: t("screen.maint.seqBumpConfirmLabel"),
@@ -142,7 +142,7 @@ function SeqBumpCard() {
 
   return (
     <Card pad={false}>
-      <CardHeader title="Anti-rollback · seq-bump" />
+      <CardHeader title={t("screen.maint.seqBumpTitle")} />
       <div style={{ padding: 16 }}>
         {/* The consequence, before the click. */}
         <p

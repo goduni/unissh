@@ -160,12 +160,19 @@ fn announce_pinned(core: &Core, host: &str, port: u16) {
     }
 }
 
-/// Connects to `target` and runs `connect`, announcing a newly pinned key.
+/// Connects to `target` and runs `connect`, announcing every newly pinned key:
+/// each jump host's as well as the target's, since each is trusted on first use.
 pub fn connecting<T>(core: &Core, target: &Target, connect: impl FnOnce() -> Res<T>) -> Res<T> {
-    let new_host = !is_known(core, &target.host, target.port);
+    let new_hosts: Vec<(&str, u16)> = target
+        .jumps
+        .iter()
+        .map(|jump| (jump.host.as_str(), jump.port))
+        .chain(std::iter::once((target.host.as_str(), target.port)))
+        .filter(|&(host, port)| !is_known(core, host, port))
+        .collect();
     let connected = connect().map_err(Failure::connecting)?;
-    if new_host {
-        announce_pinned(core, &target.host, target.port);
+    for (host, port) in new_hosts {
+        announce_pinned(core, host, port);
     }
     Ok(connected)
 }

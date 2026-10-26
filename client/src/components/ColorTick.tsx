@@ -17,6 +17,15 @@ export const colorName = (id: TagColor): string => tDyn(`appearance.colors.${id}
  *  session", and two dots one glance apart would make colour the only thing
  *  telling them apart. Named for assistive tech, so the tag is never sight-only.
  *  Renders nothing for no colour / an id this build does not know. */
+/** The tick in a fixed slot, so tagged and untagged rows keep their names on one line. */
+export function ColorTickSlot({ color, height }: { color: string | null | undefined; height?: number }) {
+  return (
+    <span style={{ width: rem(3), flexShrink: 0, display: "inline-flex" }}>
+      <ColorTick color={color} height={height} />
+    </span>
+  );
+}
+
 export function ColorTick({ color, height = 14 }: { color: string | null | undefined; height?: number }) {
   const p = usePalette();
   const { t } = useTranslation();
