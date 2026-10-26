@@ -242,7 +242,10 @@ export function TermTabStrip({
                 borderRight: `1px solid ${p.line}`,
                 background: on ? p.bg0 : "transparent",
                 color: on ? p.txt : p.txt3,
-                borderBottom: `2px solid ${on ? p.accent : "transparent"}`,
+                // A tagged active tab is underlined in the text colour: a tag in
+                // the accent's hue (pink in barbie, blue elsewhere) and an accent
+                // underline would read as one frame, and the tag would be lost.
+                borderBottom: `2px solid ${on ? (tagColor ? p.txt : p.accent) : "transparent"}`,
                 // Tag = a top line, active = the bottom one: two edges, so a
                 // tagged active tab shows both and neither hides the other. An
                 // inset shadow, not a border: it takes no layout, so the strip

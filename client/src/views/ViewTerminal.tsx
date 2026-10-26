@@ -43,7 +43,6 @@ import {
 import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
 import { isMac, isPhoneOs } from "@/bridge/platform";
 import { matchesShortcut, useShortcutLabel, useShortcuts } from "@/store/shortcuts";
-import { toast } from "@/store/toast";
 import { ContextMenu } from "@/components/ContextMenu";
 import { TermTabStrip } from "@/views/TermTabStrip";
 import { ColorTick, useLiveHost } from "@/components/ColorTick";
@@ -340,7 +339,7 @@ function TerminalPane({
   // it is waiting at, and the notice the last fill left behind. Every decision
   // is the core's — this only shows them, and the password never comes here.
   const [fillOffer, setFillOffer] = useState<FillOffer | null>(null);
-  const [fillNotice, setFillNotice] = useState<"rejected" | "echoed" | null>(null);
+  const [fillNotice, setFillNotice] = useState<FillNotice | null>(null);
   // Named on the offer, so the user can tell which saved password would go.
   const [fillCredential, setFillCredential] = useState("");
   // Which edge the bar is on: away from the cursor, chosen when an offer or a
@@ -434,7 +433,14 @@ function TerminalPane({
     // the terminal the password was typed into.
     const term = xtermRef.current;
     if (term && !hostRef.current?.contains(document.activeElement)) term.focus();
-    void api.sessionFillPassword(id, offer.offerId).catch(() => toast(t("terminal.fill.failed"), "err"));
+    // A refusal is said in the bar, where the offer was, not in a toast that
+    // could cover the next offer's buttons. After a rejection on this session
+    // the likely reason is that the password has not been changed since.
+    void api.sessionFillPassword(id, offer.offerId).catch(() => {
+      clearFillNoticeTimer();
+      placeFillBar();
+      setFillNotice(offer.rejectedBefore ? "refused" : "failed");
+    });
   };
   acceptFillRef.current = acceptFill;
   // The parameter form for the startup snippet being asked about, if any. The
@@ -1677,6 +1683,11 @@ async function fillCredentialLabel(profile: ConnectionProfile, auth: AuthMethod)
   }
 }
 
+/** What a fill left to say: the prompt came back (`rejected`), the password
+ *  echoed (`echoed`), or the insert itself was refused (`refused` after a
+ *  rejection on this session, otherwise `failed`). */
+type FillNotice = "rejected" | "echoed" | "refused" | "failed";
+
 /** The saved-password offer the pane is showing (#135). */
 interface FillOffer {
   kind: FillPromptKind;
@@ -1708,7 +1719,7 @@ function PasswordFillBar({
   onDismissNotice,
 }: {
   offer: FillOffer | null;
-  notice: "rejected" | "echoed" | null;
+  notice: FillNotice | null;
   credential: string;
   shortcut: string;
   touch: boolean;
@@ -1772,8 +1783,8 @@ function PasswordFillBar({
       }}
     >
       {notice && (
-        <div style={{ ...row, border: `1px solid ${notice === "echoed" ? p.amber : p.line2}` }}>
-          <Icon name="alert" size={16} color={notice === "echoed" ? p.amber : p.txt2} />
+        <div style={{ ...row, border: `1px solid ${notice === "echoed" || notice === "refused" ? p.amber : p.line2}` }}>
+          <Icon name="alert" size={16} color={notice === "echoed" || notice === "refused" ? p.amber : p.txt2} />
           <span style={{ flex: 1, minWidth: 0 }}>{t(`terminal.fill.${notice}`)}</span>
           <button
             type="button"
