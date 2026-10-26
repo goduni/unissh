@@ -504,7 +504,11 @@ fn transfer(sftp: &SftpFfi, direction: Direction, force: bool, recursive: Option
             } else {
                 local
             };
-            let is_dir = || sftp.stat(remote.clone()).is_ok_and(|s| s.is_dir);
+            // `web:` is the login directory, as the walk names it.
+            let is_dir = || {
+                sftp.stat(tree::remote_path(&remote, ""))
+                    .is_ok_and(|s| s.is_dir)
+            };
             if let Some(parallel) = recursive.filter(|_| is_dir()) {
                 return tree::download_tree(sftp, &remote, &local, force, parallel);
             }

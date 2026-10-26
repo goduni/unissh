@@ -90,8 +90,13 @@ copy would, four at a time over one connection (`--parallel 1` to `16`, as the
 app's Parallel transfers setting). Directories that exist are merged into; a
 file that exists is replaced only with `--force`. Symbolic links inside the tree
 are not followed, and they and anything else that is not a regular file or a
-directory (sockets, pipes, devices) are named as skipped. A file that fails is
-named and the copy goes on; the command then exits 1.
+directory (sockets, pipes, devices) are named as skipped; the app's SFTP pane
+copies links as links, the CLI does not copy them at all. A file that fails is
+named and the copy goes on; the command then exits 1. Unlike `scp`, a download
+creates the destination's missing parent directories. A remote name this system
+cannot hold (on Windows, one with `\` or `:`) is skipped, and on macOS and
+Windows so is a name that differs from another in its directory only in case.
+A copy stopped with Ctrl-C can leave `.unissh-part` files behind.
 
 ## Data
 

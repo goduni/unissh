@@ -8,11 +8,15 @@
 //! through a temporary file renamed into place, an upload written in place. An
 //! existing file is replaced only with `--force`; existing directories are
 //! merged into.
+//!
+//! A remote name becomes a local path only when it is one plain name on this
+//! system; one that is not, or (on the case-insensitive systems) one that
+//! would land on the same file as another in its directory, is skipped.
 
 use std::collections::{BTreeSet, VecDeque};
 use std::fs;
 use std::io::{self, IsTerminal, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -95,6 +99,42 @@ const fn special(_file_type: fs::FileType) -> bool {
     false
 }
 
+/// What a walk checks before a listed name becomes a local path.
+#[derive(Debug, Clone, Copy)]
+struct Names {
+    /// Refuse what Windows reads into a name: `\` between names, `:` for a
+    /// drive or an alternate data stream.
+    windows: bool,
+    /// Refuse a name that differs from another in its directory only in case,
+    /// which a case-insensitive file system would merge into one file.
+    fold_case: bool,
+}
+
+impl Names {
+    /// Names that go to this system's disk, from a remote listing. macOS and
+    /// Windows file systems are case-insensitive by default.
+    const HERE: Self = Self {
+        windows: cfg!(windows),
+        fold_case: cfg!(not(target_os = "linux")),
+    };
+    /// Names read from this system's own disk, which it can hold already.
+    const OWN: Self = Self {
+        windows: false,
+        fold_case: false,
+    };
+
+    /// Whether `name` is one plain name, nothing a path join could read as a
+    /// root, a drive, a parent or a second component.
+    fn holds(self, name: &str) -> bool {
+        let mut parts = Path::new(name).components();
+        let single = matches!(
+            (parts.next(), parts.next()),
+            (Some(Component::Normal(part)), None) if part == name
+        );
+        single && !(self.windows && name.contains(['\\', ':']))
+    }
+}
+
 /// One entry of a directory listing.
 struct Entry {
     name: String,
@@ -117,8 +157,8 @@ struct Tree {
 
 /// Walks the tree breadth-first from its root; `list` reads one directory,
 /// given by its relative path. A directory that cannot be read is noted and
-/// the walk goes on.
-fn walk(mut list: impl FnMut(&str) -> Result<Vec<Entry>, String>) -> Tree {
+/// the walk goes on. A name `names` refuses is skipped, never joined.
+fn walk(names: Names, mut list: impl FnMut(&str) -> Result<Vec<Entry>, String>) -> Tree {
     let mut tree = Tree::default();
     let mut queue = VecDeque::from([String::new()]);
     while let Some(dir) = queue.pop_front() {
@@ -130,14 +170,20 @@ fn walk(mut list: impl FnMut(&str) -> Result<Vec<Entry>, String>) -> Tree {
             }
         };
         entries.sort_by(|a, b| a.name.cmp(&b.name));
+        // The names this directory holds so far, case-folded.
+        let mut folded = BTreeSet::new();
         for entry in entries {
-            // The transport refuses names with a `/`; these two are all that
-            // could still lead a download outside its root.
+            // Servers list these two; they are not entries to copy.
             if entry.name == "." || entry.name == ".." {
                 continue;
             }
             let rel = rel_join(&dir, &entry.name);
-            if let Some(why) = entry.kind.skipped() {
+            if !names.holds(&entry.name) {
+                tree.skipped.push((rel, "a name this system cannot hold"));
+            } else if names.fold_case && !folded.insert(entry.name.to_lowercase()) {
+                tree.skipped
+                    .push((rel, "differs only in case from another name here"));
+            } else if let Some(why) = entry.kind.skipped() {
                 tree.skipped.push((rel, why));
             } else if entry.kind == Kind::Dir {
                 tree.dirs.push(rel.clone());
@@ -175,8 +221,8 @@ fn under(cut: &BTreeSet<String>, rel: &str) -> bool {
     false
 }
 
-/// `rel` under the remote `root`.
-fn remote_path(root: &str, rel: &str) -> String {
+/// `rel` under the remote `root`; `""` for both is the login directory.
+pub fn remote_path(root: &str, rel: &str) -> String {
     match (root.is_empty(), rel.is_empty()) {
         (true, true) => ".".to_owned(),
         (false, true) => root.to_owned(),
@@ -242,7 +288,8 @@ fn make_remote_dir(sftp: &SftpFfi, path: &str) -> Result<bool, String> {
         // `lstat`: a link to a directory is not one here.
         Err(e) => match sftp.lstat(path.to_owned()) {
             Ok(stat) if stat.is_dir => Ok(false),
-            Ok(_) | Err(_) => Err(Failure::from(e).message),
+            Ok(_) => Err("exists and is not a directory".to_owned()),
+            Err(_) => Err(Failure::from(e).message),
         },
     }
 }
@@ -344,8 +391,12 @@ impl Board {
         }
     }
 
-    /// One file's outcome.
-    fn settle(&self, path: &str, outcome: Res<bool>) {
+    /// One file's outcome; `sent` is what its leg moved, taken back off the
+    /// total when the file did not make it.
+    fn settle(&self, path: &str, outcome: Res<bool>, sent: u64) {
+        if !matches!(outcome, Ok(true)) {
+            self.moved.fetch_sub(sent, Ordering::Relaxed);
+        }
         match outcome {
             Ok(true) => {
                 self.copied.fetch_add(1, Ordering::Relaxed);
@@ -386,11 +437,19 @@ struct Leg {
 }
 
 impl Leg {
-    fn observer(board: &Arc<Board>) -> Arc<dyn SftpProgressObserver> {
+    fn new(board: &Arc<Board>) -> Arc<Self> {
         Arc::new(Self {
             board: Arc::clone(board),
             sent: AtomicU64::new(0),
         })
+    }
+
+    fn observer(self: &Arc<Self>) -> Arc<dyn SftpProgressObserver> {
+        Arc::<Self>::clone(self)
+    }
+
+    fn sent(&self) -> u64 {
+        self.sent.load(Ordering::Relaxed)
     }
 }
 
@@ -420,7 +479,9 @@ pub fn download_tree(
     force: bool,
     parallel: u32,
 ) -> Res<()> {
-    let tree = walk(|rel| list_remote(sftp, remote_path(remote, rel)));
+    let tree = walk(Names::HERE, |rel| {
+        list_remote(sftp, remote_path(remote, rel))
+    });
     readable_root(&tree, remote)?;
     make_local_dir(local).map_err(|why| Failure::msg(format!("{}: {why}", local.display())))?;
     let board = Arc::new(Board::new(&tree));
@@ -444,6 +505,7 @@ pub fn download_tree(
     each(&files, parallel, |(rel, size)| {
         let to = local_path(local, rel);
         let shown = to.display().to_string();
+        let leg = Leg::new(&board);
         let outcome = if !force && fs::symlink_metadata(&to).is_ok() {
             Err(exists(&shown))
         } else {
@@ -452,10 +514,10 @@ pub fn download_tree(
                 remote_path(remote, rel),
                 &to,
                 *size,
-                Some(Leg::observer(&board)),
+                Some(leg.observer()),
             )
         };
-        board.settle(&shown, outcome);
+        board.settle(&shown, outcome, leg.sent());
     });
     board.finish(tree.skipped.len(), &local.display().to_string())
 }
@@ -468,7 +530,7 @@ pub fn upload_tree(
     force: bool,
     parallel: u32,
 ) -> Res<()> {
-    let tree = walk(|rel| list_local(&local_path(local, rel)));
+    let tree = walk(Names::OWN, |rel| list_local(&local_path(local, rel)));
     readable_root(&tree, &local.display().to_string())?;
     let root_made = make_remote_dir(sftp, &remote_path(remote, ""))
         .map_err(|why| Failure::msg(format!("{}: {why}", tty::one_line(remote))))?;
@@ -504,6 +566,7 @@ pub fn upload_tree(
     each(&files, parallel, |(rel, _)| {
         let to = remote_path(remote, rel);
         let taken = !force && !fresh.contains(parent_rel(rel)) && sftp.lstat(to.clone()).is_ok();
+        let leg = Leg::new(&board);
         let outcome = if taken {
             Err(exists(&to))
         } else {
@@ -511,19 +574,22 @@ pub fn upload_tree(
                 local_path(local, rel).to_string_lossy().into_owned(),
                 to.clone(),
                 0,
-                Some(Leg::observer(&board)),
+                Some(leg.observer()),
                 None,
             )
             .map_err(Failure::from)
         };
-        board.settle(&to, outcome);
+        board.settle(&to, outcome, leg.sent());
     });
     board.finish(tree.skipped.len(), remote)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{each, local_path, remote_path, summary, under, walk, Entry, Kind, Tree};
+    use super::{
+        each, local_path, remote_path, summary, under, walk, Board, Entry, Kind, Names, Tree,
+    };
+    use crate::failure::{Failure, EXIT_FAILURE};
     use std::collections::BTreeSet;
     use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -550,7 +616,7 @@ mod tests {
     /// without stopping the walk.
     #[test]
     fn walk_skips_links_and_goes_on_past_an_unreadable_directory() {
-        let tree = walk(|dir| match dir {
+        let tree = walk(Names::OWN, |dir| match dir {
             "" => Ok(vec![
                 entry(".", Kind::Dir),
                 entry("..", Kind::Dir),
@@ -575,6 +641,87 @@ mod tests {
                 ],
                 unread: vec![("locked".into(), "permission denied".into())],
             }
+        );
+    }
+
+    /// A listed name joins a local path only as one plain name: the Windows
+    /// rules are checked here on any host through the flag, the path syntax
+    /// of the host itself through `Path`.
+    #[test]
+    fn a_name_that_is_not_one_plain_name_is_skipped_never_joined() {
+        let windows = Names {
+            windows: true,
+            fold_case: false,
+        };
+        for names in [Names::OWN, windows] {
+            assert!(names.holds("a.txt"), "{names:?}");
+            assert!(names.holds("..."), "{names:?}");
+            for bad in ["", ".", "..", "a/b", "/etc", "a/", "./a"] {
+                assert!(!names.holds(bad), "{bad:?} with {names:?}");
+            }
+        }
+        for bad in [r"..\x", r"a\b", "C:x", "C:", "f.txt:stream"] {
+            assert!(!windows.holds(bad), "{bad:?}");
+        }
+        #[cfg(unix)]
+        assert!(Names::OWN.holds(r"a\b"), "a plain name on unix");
+        #[cfg(windows)]
+        assert!(!Names::OWN.holds("C:x"), "a drive prefix on windows");
+        let tree = walk(windows, |_| {
+            Ok(vec![entry(r"..\up", Kind::File), entry("ok", Kind::File)])
+        });
+        assert_eq!(tree.files, vec![("ok".into(), Some(3))]);
+        assert_eq!(
+            tree.skipped,
+            vec![(r"..\up".into(), "a name this system cannot hold")]
+        );
+    }
+
+    /// On a case-insensitive disk two names that differ only in case would be
+    /// one file (and two downloads racing on one part file): the first, in
+    /// name order, is copied and the other skipped, directories and files
+    /// alike.
+    #[test]
+    fn names_that_differ_only_in_case_are_copied_once() {
+        let names = Names {
+            windows: false,
+            fold_case: true,
+        };
+        let tree = walk(names, |dir| match dir {
+            "" => Ok(vec![
+                entry("a", Kind::File),
+                entry("A", Kind::Dir),
+                entry("b.txt", Kind::File),
+                entry("B.TXT", Kind::File),
+            ]),
+            "A" => Ok(vec![entry("a", Kind::File)]),
+            other => panic!("listed {other}"),
+        });
+        let why = "differs only in case from another name here";
+        assert_eq!(
+            tree,
+            Tree {
+                dirs: vec!["A".into()],
+                files: vec![("B.TXT".into(), Some(3)), ("A/a".into(), Some(3))],
+                skipped: vec![("a".into(), why), ("b.txt".into(), why)],
+                unread: vec![],
+            }
+        );
+    }
+
+    #[test]
+    fn a_file_that_fails_lets_the_rest_go_on_and_fails_the_copy() {
+        let board = Board::new(&Tree {
+            files: vec![("a".into(), Some(3)), ("b".into(), Some(3))],
+            ..Tree::default()
+        });
+        board.settle("out/a", Ok(true), 0);
+        board.settle("out/b", Err(Failure::msg("permission denied")), 0);
+        let failure = board.finish(0, "out").unwrap_err();
+        assert_eq!(failure.exit, EXIT_FAILURE, "exit code");
+        assert_eq!(
+            failure.message,
+            "copied 1 of 2 files to out; 1 could not be copied (see above)"
         );
     }
 
