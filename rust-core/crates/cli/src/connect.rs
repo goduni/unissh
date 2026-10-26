@@ -15,7 +15,7 @@ use zeroize::Zeroize;
 
 use crate::device::ask_secret;
 use crate::escape::{Escape, Escapes, HELP};
-use crate::failure::{best_effort, Failure, Res, EXIT_CONNECT};
+use crate::failure::{best_effort, Failure, Res, EXIT_BROKEN_PIPE, EXIT_CONNECT};
 use crate::hosts::{Host, Target};
 use crate::tty::{self, RawMode, INPUT_TICK};
 
@@ -95,7 +95,7 @@ pub fn exit_code(status: i32) -> u8 {
 }
 
 /// Asks for the password a host wants typed at every connection.
-pub fn fill_password(target: &mut Target) -> Res<()> {
+fn fill_password(target: &mut Target) -> Res<()> {
     if target.ask_password {
         let prompt = format!(
             "Password for {}@{}: ",
@@ -115,10 +115,20 @@ pub fn fill_password(target: &mut Target) -> Res<()> {
 }
 
 /// Forgets a typed password once the connection no longer needs it.
-pub fn forget_password(target: &mut Target) {
+fn forget_password(target: &mut Target) {
     if let AuthMethod::Password { password } = &mut target.auth {
         password.zeroize();
     }
+}
+
+/// Runs `connect` against `target` with the password the host wants typed at
+/// every connection, asked once here, and forgets that password afterwards
+/// whatever `connect` returned.
+pub fn with_password<T>(target: &mut Target, connect: impl FnOnce(&Target) -> Res<T>) -> Res<T> {
+    fill_password(target)?;
+    let connected = connect(&*target);
+    forget_password(target);
+    connected
 }
 
 /// Whether this machine has pinned a key for `host:port` already.
@@ -212,7 +222,6 @@ pub fn shell(core: &Core, host: &Host, mut target: Target) -> Res<i32> {
     if host.profile.agent_forward {
         eprintln!("unissh: agent forwarding is not available in the CLI; connecting without it");
     }
-    fill_password(&mut target)?;
     let size = tty::window_size().unwrap_or((80, 24));
     let recorded = host.profile.record_sessions;
     let recording = recorded.then(|| RecordingRequest {
@@ -224,24 +233,25 @@ pub fn shell(core: &Core, host: &Host, mut target: Target) -> Res<i32> {
     let observer: Arc<dyn SessionObserver> = Arc::new(Screen {
         ended: Arc::clone(&ended),
     });
-    let session = connecting(core, &target, || {
-        Ok(core.open_session(
-            target.host.clone(),
-            target.port,
-            target.user.clone(),
-            target.auth.clone(),
-            target.jumps.clone(),
-            target.proxy.clone(),
-            term(),
-            size.0,
-            size.1,
-            observer,
-            recording,
-            false,
-            PasswordFillMode::Off,
-        )?)
+    let session = with_password(&mut target, |target| {
+        connecting(core, target, || {
+            Ok(core.open_session(
+                target.host.clone(),
+                target.port,
+                target.user.clone(),
+                target.auth.clone(),
+                target.jumps.clone(),
+                target.proxy.clone(),
+                term(),
+                size.0,
+                size.1,
+                observer,
+                recording,
+                false,
+                PasswordFillMode::Off,
+            )?)
+        })
     })?;
-    forget_password(&mut target);
 
     let (status, hung_up) = {
         // Raw only while the session runs: the terminal is back to normal
@@ -335,10 +345,6 @@ struct Streams {
     ended: Arc<Ended>,
 }
 
-/// The status of a command whose output nobody reads any more, as a shell
-/// reports one killed by SIGPIPE (128 + 13) — what `ssh` itself would die of.
-const EXIT_BROKEN_PIPE: i32 = 141;
-
 impl ExecObserver for Streams {
     fn on_stdout(&self, data: Vec<u8>) {
         let mut out = io::stdout().lock();
@@ -346,7 +352,9 @@ impl ExecObserver for Streams {
             // `| head`, `| grep -m1`: the reader is gone, and Rust ignores
             // SIGPIPE, so ending here is ours to do — or a `tail -f` streams on
             // into nothing until the remote command ends.
-            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => self.ended.closed(EXIT_BROKEN_PIPE),
+            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {
+                self.ended.closed(i32::from(EXIT_BROKEN_PIPE));
+            }
             Ok(()) | Err(_) => {}
         }
     }
@@ -364,24 +372,24 @@ impl ExecObserver for Streams {
 /// Runs `command` on the target without a terminal, like `ssh host command`.
 /// Our stdin goes to the command unless `no_stdin`; returns its exit status.
 pub fn run(core: &Core, mut target: Target, command: String, no_stdin: bool) -> Res<i32> {
-    fill_password(&mut target)?;
     let ended = Arc::new(Ended::new());
     let observer: Arc<dyn ExecObserver> = Arc::new(Streams {
         ended: Arc::clone(&ended),
     });
-    let handle = connecting(core, &target, || {
-        Ok(core.ssh_exec_stream(
-            target.host.clone(),
-            target.port,
-            target.user.clone(),
-            target.auth.clone(),
-            command,
-            target.jumps.clone(),
-            target.proxy.clone(),
-            observer,
-        )?)
+    let handle = with_password(&mut target, |target| {
+        connecting(core, target, || {
+            Ok(core.ssh_exec_stream(
+                target.host.clone(),
+                target.port,
+                target.user.clone(),
+                target.auth.clone(),
+                command,
+                target.jumps.clone(),
+                target.proxy.clone(),
+                observer,
+            )?)
+        })
     })?;
-    forget_password(&mut target);
     if no_stdin {
         handle.close_stdin()?;
     } else {
@@ -461,19 +469,19 @@ pub enum Direction {
 /// Copies one file over SFTP. An existing destination is replaced only with
 /// `force`.
 pub fn copy(core: &Core, mut target: Target, direction: Direction, force: bool) -> Res<()> {
-    fill_password(&mut target)?;
-    let sftp = connecting(core, &target, || {
-        Ok(core.open_sftp(
-            target.host.clone(),
-            target.port,
-            target.user.clone(),
-            target.auth.clone(),
-            target.jumps.clone(),
-            target.proxy.clone(),
-            1,
-        )?)
+    let sftp = with_password(&mut target, |target| {
+        connecting(core, target, || {
+            Ok(core.open_sftp(
+                target.host.clone(),
+                target.port,
+                target.user.clone(),
+                target.auth.clone(),
+                target.jumps.clone(),
+                target.proxy.clone(),
+                1,
+            )?)
+        })
     })?;
-    forget_password(&mut target);
     let done = transfer(&sftp, direction, force);
     sftp.close();
     done

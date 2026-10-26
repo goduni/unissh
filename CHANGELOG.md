@@ -67,10 +67,10 @@ starts with `0.`:
   is stored. `unissh logout` revokes the device and deletes its data. The old
   core harness is now the `unissh-harness` binary.
 - `unissh tunnel <host>` forwards ports as `ssh -N` does: `-L`, `-R` and `-D`
-  (SOCKS5), any number of each, through the core's forwards with the app's
-  rules: loopback unless an address is named, SOCKS on loopback only. It prints
-  a line per forward once it listens, fails as a whole if one cannot open, and
-  closes them cleanly on Ctrl-C or SIGTERM.
+  (SOCKS5), any number of each, through the core's forwards. A forward listens
+  on `127.0.0.1` unless an address is given, and SOCKS listens on loopback only.
+  It prints a line per forward once it listens, fails as a whole if one cannot
+  open, and closes them cleanly on Ctrl-C or SIGTERM.
 - Bindings: `ExecHandleFfi::close_stdin` ends a streaming command's input and
   keeps its output coming; `Core::wait_for_recordings` waits for session
   recordings still to be written (a recorded session counts from the moment it

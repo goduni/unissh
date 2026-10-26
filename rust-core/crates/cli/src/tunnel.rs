@@ -5,18 +5,17 @@
 //! one connection per forward, as in the app. The address rules are the
 //! core's too: a SOCKS forward listens only on loopback, and nothing here
 //! widens what the core allows. A forward that names no address listens on
-//! `127.0.0.1`, the app's default.
+//! `127.0.0.1`.
 
 use std::fmt;
-use std::io;
+use std::io::{self, Write};
 use std::sync::Arc;
+use std::thread;
 
 use unissh_ffi::{Core, SshTunnel};
 
-use crate::connect::{connecting, fill_password, forget_password};
-#[cfg(not(unix))]
-use crate::failure::best_effort;
-use crate::failure::{Failure, Res};
+use crate::connect::{connecting, with_password};
+use crate::failure::{Failure, Res, EXIT_BROKEN_PIPE};
 use crate::hosts::Target;
 use crate::tty::one_line;
 
@@ -66,24 +65,14 @@ impl fmt::Display for Forward {
                 port,
                 to_host,
                 to_port,
-            } => write!(
-                f,
-                "-L {}:{}",
-                socket(bind, *port),
-                socket(to_host, *to_port)
-            ),
+            } => write!(f, "-L {}:{}", shown(bind, *port), shown(to_host, *to_port)),
             Self::Remote {
                 bind,
                 port,
                 to_host,
                 to_port,
-            } => write!(
-                f,
-                "-R {}:{}",
-                socket(bind, *port),
-                socket(to_host, *to_port)
-            ),
-            Self::Dynamic { bind, port } => write!(f, "-D {}", socket(bind, *port)),
+            } => write!(f, "-R {}:{}", shown(bind, *port), shown(to_host, *to_port)),
+            Self::Dynamic { bind, port } => write!(f, "-D {}", shown(bind, *port)),
         }
     }
 }
@@ -95,6 +84,12 @@ fn socket(host: &str, port: u16) -> String {
     } else {
         format!("{host}:{port}")
     }
+}
+
+/// [`socket`] for the terminal: a typed address shown without control
+/// characters.
+fn shown(host: &str, port: u16) -> String {
+    socket(&one_line(host), port)
 }
 
 /// The `:`-separated fields of a spec; `[...]` keeps an IPv6 address whole
@@ -209,12 +204,17 @@ pub fn dynamic(spec: &str) -> Result<Forward, String> {
 }
 
 /// The line printed once `forward` listens on `bound` (the core's
-/// `bind_address`: the real port, also when 0 was asked for).
+/// `bind_address`: the real port, also when 0 was asked for). `label` is
+/// already one line.
 fn listening(forward: &Forward, bound: &str, label: &str) -> String {
     match forward {
         Forward::Local {
             to_host, to_port, ..
-        } => format!("{bound} -> {} (via {label})", socket(to_host, *to_port)),
+        } => format!(
+            "{} -> {} (via {label})",
+            one_line(bound),
+            shown(to_host, *to_port)
+        ),
         Forward::Remote {
             bind,
             to_host,
@@ -225,10 +225,10 @@ fn listening(forward: &Forward, bound: &str, label: &str) -> String {
             let on = bound
                 .rsplit_once(':')
                 .and_then(|(_, p)| p.parse::<u16>().ok())
-                .map_or_else(|| bound.to_owned(), |p| socket(bind, p));
-            format!("{on} on {label} -> {}", socket(to_host, *to_port))
+                .map_or_else(|| one_line(bound), |p| shown(bind, p));
+            format!("{on} on {label} -> {}", shown(to_host, *to_port))
         }
-        Forward::Dynamic { .. } => format!("{bound} SOCKS5 (via {label})"),
+        Forward::Dynamic { .. } => format!("{} SOCKS5 (via {label})", one_line(bound)),
     }
 }
 
@@ -287,47 +287,116 @@ fn close_all(tunnels: &[Arc<SshTunnel>]) {
     }
 }
 
-/// Opens every forward through `target` (the host labelled `label`), prints
-/// a line for each as it listens, and keeps them until Ctrl-C, SIGTERM or a
-/// hang-up, then closes them. A forward that fails to open fails the command
-/// with its reason, after closing the ones already open.
-pub fn run(core: &Core, mut target: Target, label: &str, forwards: &[Forward]) -> Res<()> {
-    let label = one_line(label);
-    // A password asked at every connection is asked once for all of them.
-    fill_password(&mut target)?;
-    let mut open = Vec::with_capacity(forwards.len());
+/// How opening the forwards ended, short of a failure.
+#[derive(Debug, PartialEq, Eq)]
+enum Opened<T> {
+    /// Every forward listens.
+    All(Vec<T>),
+    /// Stdout is a pipe nobody reads any more (`| head -n1` has the port it
+    /// wanted); every forward was closed again.
+    ReaderGone,
+}
+
+/// Opens the forwards in order with `open`, which gives each tunnel and the
+/// address it listens on, and writes a line to `out` for each one as it
+/// listens. A forward that fails to open, or a line that cannot be written,
+/// closes with `close` the ones already open.
+fn open_each<T>(
+    forwards: &[Forward],
+    label: &str,
+    out: &mut impl Write,
+    mut open: impl FnMut(&Forward) -> Res<(T, String)>,
+    close: impl Fn(&[T]),
+) -> Res<Opened<T>> {
+    let mut opened = Vec::with_capacity(forwards.len());
     for forward in forwards {
-        match connecting(core, &target, || open_one(core, &target, forward)) {
-            Ok(tunnel) => {
-                println!("{}", listening(forward, &tunnel.bind_address(), &label));
-                open.push(tunnel);
-            }
+        let (tunnel, bound) = match open(forward) {
+            Ok(it) => it,
             Err(mut failure) => {
-                forget_password(&mut target);
-                close_all(&open);
+                close(&opened);
                 failure.message = format!("{forward}: {}", failure.message);
                 return Err(failure);
             }
+        };
+        opened.push(tunnel);
+        let line = listening(forward, &bound, label);
+        if let Err(e) = writeln!(out, "{line}").and_then(|()| out.flush()) {
+            close(&opened);
+            // Rust ignores SIGPIPE, so leaving when the reader has gone is
+            // ours to do, with the status `ssh` would die with.
+            return if e.kind() == io::ErrorKind::BrokenPipe {
+                Ok(Opened::ReaderGone)
+            } else {
+                Err(Failure::msg(format!("cannot write to stdout: {e}")))
+            };
         }
     }
-    forget_password(&mut target);
-    let waited = wait_for_stop();
-    close_all(&open);
-    waited.map_err(|e| Failure::msg(format!("cannot wait for Ctrl-C: {e}")))
+    Ok(Opened::All(opened))
 }
 
-/// Blocks until Ctrl-C, SIGTERM or SIGHUP (Ctrl-C elsewhere).
+/// Opens every forward through `target` (the host labelled `label`), prints
+/// a line for each as it listens, and keeps them until Ctrl-C or SIGTERM,
+/// then closes them; returns the exit code. A forward that fails to open
+/// fails the command with its reason, after closing the ones already open.
+///
+/// A hang-up is not caught: it ends the process as it would any other, and
+/// under `nohup` the tunnels stay up.
+pub fn run(core: &Core, mut target: Target, label: &str, forwards: &[Forward]) -> Res<u8> {
+    let label = one_line(label);
+    // A password asked at every connection is asked once for all of them.
+    let opened = with_password(&mut target, |target| {
+        open_each(
+            forwards,
+            &label,
+            &mut io::stdout(),
+            |forward| {
+                let tunnel = connecting(core, target, || open_one(core, target, forward))?;
+                let bound = tunnel.bind_address();
+                Ok((tunnel, bound))
+            },
+            close_all,
+        )
+    })?;
+    let Opened::All(open) = opened else {
+        return Ok(EXIT_BROKEN_PIPE);
+    };
+    let waited = wait_for_stop();
+    close_all(&open);
+    waited
+        .map(|()| 0)
+        .map_err(|e| Failure::msg(format!("cannot wait for Ctrl-C: {e}")))
+}
+
+/// The status of a process that a second Ctrl-C ended (128 + SIGINT).
+const EXIT_INTERRUPTED: i32 = 130;
+
+/// Blocks until Ctrl-C or SIGTERM (Ctrl-C elsewhere). From then on, another
+/// one ends the process at once, so that a close that hangs on a dead
+/// connection never holds the terminal.
 fn wait_for_stop() -> io::Result<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    runtime.block_on(async {
-        let stop = Stop::install()?;
-        eprintln!("unissh: forwarding; Ctrl-C closes the tunnels");
-        stop.wait().await;
-        eprintln!("unissh: closing the tunnels");
-        Ok::<(), io::Error>(())
-    })
+    let mut stop = {
+        let _context = runtime.enter();
+        Stop::install()?
+    };
+    eprintln!("unissh: forwarding; Ctrl-C closes the tunnels");
+    runtime.block_on(stop.next());
+    eprintln!("unissh: closing the tunnels (Ctrl-C again to quit at once)");
+    thread::spawn(move || {
+        runtime.block_on(stop.next());
+        quit_now();
+    });
+    Ok(())
+}
+
+#[expect(
+    clippy::exit,
+    reason = "a second Ctrl-C quits without waiting for the close; the OS closes the sockets"
+)]
+fn quit_now() {
+    std::process::exit(EXIT_INTERRUPTED);
 }
 
 /// The signals that end the tunnels, caught so that they close cleanly.
@@ -335,41 +404,46 @@ fn wait_for_stop() -> io::Result<()> {
 struct Stop {
     interrupt: tokio::signal::unix::Signal,
     terminate: tokio::signal::unix::Signal,
-    hangup: tokio::signal::unix::Signal,
 }
 
 #[cfg(unix)]
 impl Stop {
+    /// Needs the runtime's context.
     fn install() -> io::Result<Self> {
         use tokio::signal::unix::{signal, SignalKind};
         Ok(Self {
             interrupt: signal(SignalKind::interrupt())?,
             terminate: signal(SignalKind::terminate())?,
-            hangup: signal(SignalKind::hangup())?,
         })
     }
 
-    async fn wait(mut self) {
+    /// The next Ctrl-C or SIGTERM.
+    async fn next(&mut self) {
         tokio::select! {
             _ = self.interrupt.recv() => {}
             _ = self.terminate.recv() => {}
-            _ = self.hangup.recv() => {}
         }
     }
 }
 
+/// Ctrl-C, caught so that the tunnels close cleanly.
 #[cfg(not(unix))]
-struct Stop;
+struct Stop {
+    interrupt: tokio::signal::windows::CtrlC,
+}
 
 #[cfg(not(unix))]
 impl Stop {
-    // The same shape as the Unix one, which can fail.
-    const fn install() -> io::Result<Self> {
-        Ok(Self)
+    /// Needs the runtime's context.
+    fn install() -> io::Result<Self> {
+        Ok(Self {
+            interrupt: tokio::signal::windows::ctrl_c()?,
+        })
     }
 
-    async fn wait(self) {
-        best_effort(tokio::signal::ctrl_c().await);
+    /// The next Ctrl-C.
+    async fn next(&mut self) {
+        self.interrupt.recv().await;
     }
 }
 
@@ -426,9 +500,13 @@ mod tests {
     fn only_the_listening_port_may_be_zero() {
         assert!(local("0:db:5432").is_ok(), "any free port here");
         assert!(remote("0:localhost:3000").is_ok(), "the host picks one");
-        assert!(local("8080:db:0").is_err());
-        assert!(local("8080:db:http").is_err());
-        assert!(dynamic("70000").is_err());
+        assert!(local("8080:db:0").is_err(), "nothing listens on port 0");
+    }
+
+    #[test]
+    fn a_port_is_a_number_up_to_65535() {
+        assert!(local("8080:db:http").is_err(), "a service name");
+        assert!(dynamic("70000").is_err(), "out of range");
     }
 
     #[test]
@@ -455,5 +533,81 @@ mod tests {
             listening(&d, "127.0.0.1:1080", "web"),
             "127.0.0.1:1080 SOCKS5 (via web)"
         );
+    }
+
+    #[test]
+    fn typed_addresses_reach_the_terminal_without_control_characters() {
+        let l = local("local\u{1b}host:8080:d\u{7}b:5432").unwrap();
+        assert_eq!(l.to_string(), "-L localhost:8080:db:5432");
+        assert_eq!(
+            listening(&l, "127.0.0.1:8080", "web"),
+            "127.0.0.1:8080 -> db:5432 (via web)"
+        );
+    }
+
+    /// A stdout whose reader has gone.
+    struct Gone;
+
+    impl Write for Gone {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::ErrorKind::BrokenPipe.into())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::ErrorKind::BrokenPipe.into())
+        }
+    }
+
+    fn three() -> Vec<Forward> {
+        vec![
+            local("8080:db:5432").unwrap(),
+            remote("9000:localhost:3000").unwrap(),
+            dynamic("1080").unwrap(),
+        ]
+    }
+
+    #[test]
+    fn a_forward_that_fails_closes_the_ones_already_open() {
+        let closed = std::cell::RefCell::new(Vec::new());
+        let mut out = Vec::new();
+        let mut next = 0;
+        let result = open_each(
+            &three(),
+            "web",
+            &mut out,
+            |_| {
+                next += 1;
+                if next == 3 {
+                    Err(Failure::msg("refused"))
+                } else {
+                    Ok((next, "127.0.0.1:1".to_owned()))
+                }
+            },
+            |open: &[i32]| closed.borrow_mut().extend_from_slice(open),
+        );
+        let Err(failure) = result else {
+            panic!("the third forward failed");
+        };
+        assert_eq!(failure.message, "-D 127.0.0.1:1080: refused");
+        assert_eq!(*closed.borrow(), [1, 2]);
+    }
+
+    #[test]
+    fn a_reader_that_has_gone_closes_every_forward() {
+        let closed = std::cell::RefCell::new(Vec::new());
+        let mut opened = 0;
+        let result = open_each(
+            &three(),
+            "web",
+            &mut Gone,
+            |_| {
+                opened += 1;
+                Ok((opened, "127.0.0.1:1".to_owned()))
+            },
+            |open: &[i32]| closed.borrow_mut().extend_from_slice(open),
+        );
+        assert_eq!(result.map_err(|f| f.message), Ok(Opened::ReaderGone));
+        assert_eq!(opened, 1, "nothing more opens once nobody reads");
+        assert_eq!(*closed.borrow(), [1]);
     }
 }

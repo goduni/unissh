@@ -86,14 +86,19 @@ complete, so a failed copy leaves an existing file as it was. An upload, as with
 
 `unissh tunnel` takes `-L [bind:]port:host:hostport`, `-R [bind:]port:host:hostport`
 and `-D [bind:]port`, each as often as needed (IPv6 addresses in brackets), and
-needs at least one. A forward that names no address listens on `127.0.0.1` (for
-`-R`, on the host), as in the app; every interface has to be spelled out as
-`0.0.0.0`, never an empty address or `*`, and a SOCKS proxy (`-D`) listens only on
-loopback. Port 0 asks for any free port. Each forward is its own connection,
-and prints one line once it listens, with the real port; a forward that cannot
-open fails the command and closes the ones already open. The tunnels stay up
-until Ctrl-C, SIGTERM or a hang-up, then close cleanly. A connection that drops
-is not reopened.
+needs at least one. A forward listens on `127.0.0.1` (for `-R`, on the host)
+unless an address is given; every interface has to be spelled out as `0.0.0.0`,
+never an empty address or `*`, and a SOCKS proxy (`-D`) listens only on loopback.
+Port 0 asks for any free port. The forwards open in groups, whatever order they
+were typed in: every `-L`, then every `-R`, then every `-D`. Each one prints a
+line once it listens, with the real port, so `| head -n1` reads the first port
+(when nobody reads the lines any more, the forwards close and the exit status
+is 141). Each forward is its own connection, so a host with two-factor sign-in
+asks once per forward. A forward that cannot open fails the command and closes
+the ones already open. The tunnels stay up until Ctrl-C or SIGTERM, then close
+cleanly; a second Ctrl-C while they close quits at once (status 130). A hang-up
+ends the process as usual, without the clean close, and under `nohup` the tunnels
+stay up. A connection that drops is not reopened.
 
 ## Data
 

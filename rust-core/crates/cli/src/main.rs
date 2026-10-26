@@ -290,9 +290,15 @@ fn run(cli: Cli) -> Res<u8> {
             remote,
             dynamic,
         } => {
+            // Grouped by kind, as clap collects them: -L, then -R, then -D.
             let forwards: Vec<Forward> = local.into_iter().chain(remote).chain(dynamic).collect();
-            forward_ports(home, &credentials, offline, &host, &forwards)?;
-            Ok(0)
+            let named = named_host(home, &credentials, offline, &host)?;
+            tunnel::run(
+                &named.device.core,
+                named.target,
+                &named.host.profile.label,
+                &forwards,
+            )
         }
         Command::KnownHosts(action) => {
             let device = unlocked(home, &credentials)?;
@@ -368,6 +374,32 @@ fn split_user(spec: &str) -> (Option<&str>, &str) {
     }
 }
 
+/// A host named on the command line, ready to connect to.
+struct Named {
+    /// The device, unlocked (and synced unless fresh or `--offline`).
+    device: Device,
+    /// The host the name matched; its label is `host.profile.label`.
+    host: hosts::Host,
+    /// How to connect to it, with the user `user@host` named, if any.
+    target: hosts::Target,
+}
+
+/// Unlocks the device and finds and resolves the host `spec` names (a label,
+/// `vault/label`, a prefix or an address; `user@host` picks the user), as
+/// `unissh ssh` names hosts.
+fn named_host(home: Home, credentials: &Credentials, offline: bool, spec: &str) -> Res<Named> {
+    let device = ready(home, credentials, offline)?;
+    let all = hosts::load(&device.core)?;
+    let (user, name) = split_user(spec);
+    let host = hosts::find(&all, name)?.clone();
+    let target = hosts::resolve(&device.core, &host, user)?;
+    Ok(Named {
+        device,
+        host,
+        target,
+    })
+}
+
 fn ssh(
     home: Home,
     credentials: &Credentials,
@@ -376,16 +408,16 @@ fn ssh(
     command: &[String],
     no_stdin: bool,
 ) -> Res<u8> {
-    let device = ready(home, credentials, offline)?;
-    let all = hosts::load(&device.core)?;
-    let (user, name) = split_user(spec);
-    let host = hosts::find(&all, name)?;
-    let target = hosts::resolve(&device.core, host, user)?;
+    let Named {
+        device,
+        host,
+        target,
+    } = named_host(home, credentials, offline, spec)?;
     if !command.is_empty() {
         let status = connect::run(&device.core, target, command.join(" "), no_stdin)?;
         return Ok(exit_code(status));
     }
-    let status = connect::shell(&device.core, host, target)?;
+    let status = connect::shell(&device.core, &host, target)?;
     if host.profile.record_sessions && !offline {
         server::push_recording(&device);
     }
@@ -432,27 +464,8 @@ fn copy(
             return Err(Failure::msg("one side must be a host, as host:path"))
         }
     };
-    let device = ready(home, credentials, offline)?;
-    let all = hosts::load(&device.core)?;
-    let (user, name) = split_user(&spec);
-    let host = hosts::find(&all, name)?;
-    let target = hosts::resolve(&device.core, host, user)?;
-    connect::copy(&device.core, target, direction, force)
-}
-
-fn forward_ports(
-    home: Home,
-    credentials: &Credentials,
-    offline: bool,
-    spec: &str,
-    forwards: &[Forward],
-) -> Res<()> {
-    let device = ready(home, credentials, offline)?;
-    let all = hosts::load(&device.core)?;
-    let (user, name) = split_user(spec);
-    let host = hosts::find(&all, name)?;
-    let target = hosts::resolve(&device.core, host, user)?;
-    tunnel::run(&device.core, target, &host.profile.label, forwards)
+    let named = named_host(home, credentials, offline, &spec)?;
+    connect::copy(&named.device.core, named.target, direction, force)
 }
 
 #[cfg(test)]
