@@ -16,7 +16,7 @@ use unissh_automation::{core::PromptFactory, visible, Broker, Cancel, PendingApp
 use unissh_ffi::{AuthPromptRequest, AuthPrompter};
 use unissh_mcp::contract::ToolError;
 
-use crate::device::prompt_intro;
+use crate::device::{is_silent, prompt_intro};
 use crate::tty::{lines, one_line, stdin_is_controlling_terminal, Tty};
 
 /// How often the approver looks for new requests.
@@ -225,6 +225,11 @@ struct AttributedPrompt {
 
 impl AuthPrompter for AttributedPrompt {
     fn prompt(&self, mut request: AuthPromptRequest) -> Option<Vec<String>> {
+        // The silent last round of a keyboard-interactive exchange takes no
+        // turn at the terminal.
+        if request.prompts.is_empty() && is_silent(&request) {
+            return Some(Vec::new());
+        }
         let gone = || self.cancel.load(Ordering::SeqCst);
         let _turn = self.terminal.turn(self.deadline, &gone)?;
         let mut tty = Tty::open().ok()?;

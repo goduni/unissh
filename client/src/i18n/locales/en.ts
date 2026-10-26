@@ -2174,8 +2174,9 @@ export const en = {
       "anyMachine": "UniSSH can't tell which machine is asking — after `ssh` to another host this goes there.",
       "dismiss": "Dismiss",
       "rejected": "The password prompt came back right away — the saved password may have been rejected.",
-      "rejectedBefore": "This saved password was rejected on this session. It is typed again only after you change it in the vault.",
+      "rejectedBefore": "A saved password was rejected on this session. It is typed again only if you have changed it in the vault since.",
       "failed": "Couldn't insert the saved password.",
+      "refused": "Not inserted: this saved password was already rejected on this session. Change it in the vault, then insert again.",
       "echoed": "That prompt echoed the password, so UniSSH hid it and cleared the line. It probably wasn't a password prompt."
     },
     "noSessions": "No active sessions",

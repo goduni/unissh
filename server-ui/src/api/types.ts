@@ -25,15 +25,6 @@ export const CODE_BY_ROLE: Record<VaultRole, number> = {
   admin: 2,
 };
 
-export const SYNC_TARGET_LABEL: Record<number, string> = {
-  0: "Local",
-  1: "Cloud",
-};
-export const CACHE_POLICY_LABEL: Record<number, string> = {
-  0: "OfflineAllowed",
-  1: "OnlineOnly",
-};
-
 export type InviteState = "pending" | "redeemed" | "expired" | "revoked";
 export type AccountStatus = "active" | "disabled";
 /** `expired`: past its expiry (a 30-day panel device). Revoked and expired devices

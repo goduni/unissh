@@ -35,11 +35,17 @@ import { MONO } from "../theme/tokens";
 import "./data.css";
 
 interface DecodedEvent {
-  /** Event name (server-observed) or a placeholder for opaque/client blobs. */
+  /** What happened, in the reader's words (or a placeholder for opaque/client blobs). */
   type: string;
+  /** The server's own name for it (`account_disable`), for the hover; null when the entry has none. */
+  code: string | null;
+  /** True when the server could not read the entry: said muted. */
+  unnamed: boolean;
   /** Short human-readable summary of the relevant fields, or null. */
   detail: string | null;
 }
+
+type Translate = ReturnType<typeof useTranslation>["t"];
 
 type EventBlob = {
   event?: string;
@@ -53,7 +59,9 @@ type EventBlob = {
 };
 
 /** Human summary for a single server-observed event. */
-function eventDetail(ev: EventBlob): string | null {
+function eventDetail(ev: EventBlob, t: Translate): string | null {
+  const acct = t("screen.audit.detail.account", { id: truncId(ev.account_id) });
+  const by = ev.by ? t("screen.audit.detail.by", { who: ev.by }) : null;
   switch (ev.event) {
     case "bootstrap_admin":
     case "login":
@@ -62,23 +70,29 @@ function eventDetail(ev: EventBlob): string | null {
     case "device_label":
     case "device_remove":
     case "keyset_publish":
-      return `acct ${truncId(ev.account_id)} · dev ${truncId(ev.device_id)}`;
+      return `${acct} · ${t("screen.audit.detail.device", { id: truncId(ev.device_id) })}`;
     case "admin_grant":
     case "admin_revoke":
     case "account_disable":
     case "account_enable":
-      return `acct ${truncId(ev.account_id)}`;
+      return acct;
     case "tenant_suspend":
     case "tenant_activate":
-      return ev.by ? `by ${ev.by}` : null;
-    case "tenant_rename":
-      return `${ev.display_name ? `«${ev.display_name}»` : "(reset)"}${
-        ev.by ? ` · by ${ev.by}` : ""
-      }`;
+      return by;
+    case "tenant_rename": {
+      const name = ev.display_name
+        ? t("screen.audit.detail.renamedTo", { name: ev.display_name })
+        : t("screen.audit.detail.renameReset");
+      return by ? `${name} · ${by}` : name;
+    }
     case "access_grant":
-      return `vault ${truncId(ev.vault_id)} · epoch ${ev.new_epoch}${
-        ev.revoke_epoch != null ? ` (revoke ≤ ${ev.revoke_epoch})` : ""
-      }`;
+      return [
+        t("screen.audit.detail.vault", { id: truncId(ev.vault_id) }),
+        t("screen.audit.detail.epoch", { n: ev.new_epoch }),
+        ev.revoke_epoch != null ? t("screen.audit.detail.revokeUpTo", { n: ev.revoke_epoch }) : null,
+      ]
+        .filter(Boolean)
+        .join(" · ");
     default: {
       // Unknown server-observed event — surface remaining keys generically.
       const keys = Object.keys(ev).filter((k) => k !== "event" && k !== "ts");
@@ -92,15 +106,19 @@ function eventDetail(ev: EventBlob): string | null {
  * only `server-observed` blobs are UTF-8 JSON (discriminated by `event`);
  * `client-signed` blobs are opaque binary and must NOT be JSON.parse'd.
  */
-function decodeEvent(entry: AuditEntry): DecodedEvent {
+function decodeEvent(entry: AuditEntry, t: Translate): DecodedEvent {
+  const opaque = { type: t("screen.audit.event.opaque"), code: null, unnamed: true, detail: null };
   if (entry.source !== "server-observed") {
-    return { type: "(client-signed)", detail: null };
+    return { type: t("screen.audit.event.signed"), code: entry.source, unnamed: true, detail: null };
   }
   try {
     const ev = JSON.parse(atob(entry.entry_blob)) as EventBlob;
-    return { type: ev.event || "(opaque)", detail: eventDetail(ev) };
+    if (!ev.event) return opaque;
+    // An event this panel has no words for yet is shown by its server name.
+    const type = t(`screen.audit.event.${ev.event}`, { defaultValue: ev.event });
+    return { type, code: ev.event, unnamed: false, detail: eventDetail(ev, t) };
   } catch {
-    return { type: "(opaque)", detail: null };
+    return opaque;
   }
 }
 
@@ -641,24 +659,25 @@ function RowClock({ at }: { at: number }) {
 }
 
 /**
- * What happened, in one line: the event's name in mono in the text colour
- * (muted for an entry the server cannot read), then its fields muted, cut at
- * the cell's end; the whole line is the title. An event is a fact, not a
- * state: a removal is not a failure, so no event name is ever red.
+ * What happened, in one line: the event in words in the text colour (muted for
+ * an entry the server cannot read), then its fields muted, cut at the cell's
+ * end; the whole line and the server's name for the event are the title. An
+ * event is a fact, not a state: a removal is not a failure, so no event is ever red.
  */
 function EventCell({ row }: { row: AuditEntry }) {
-  const ev = decodeEvent(row);
-  const unnamed = ev.type.startsWith("(");
+  const { t } = useTranslation();
+  const ev = decodeEvent(row, t);
+  const unnamed = ev.unnamed;
+  const line = ev.detail ? `${ev.type} · ${ev.detail}` : ev.type;
   return (
     <span
-      title={ev.detail ? `${ev.type} · ${ev.detail}` : ev.type}
+      title={ev.code ? `${line}\n${ev.code}` : line}
       style={{
         display: "flex",
         alignItems: "baseline",
         gap: 8,
         minWidth: 0,
-        fontFamily: MONO,
-        fontSize: 12,
+        fontSize: 13,
         lineHeight: "16px",
         whiteSpace: "nowrap",
       }}
@@ -672,7 +691,9 @@ function EventCell({ row }: { row: AuditEntry }) {
       >
         {ev.type}
       </span>
-      {ev.detail ? <span style={{ ...ELLIPSIS, minWidth: 0, ...MUTED }}>{ev.detail}</span> : null}
+      {ev.detail ? (
+        <span style={{ ...ELLIPSIS, minWidth: 0, ...MUTED, fontFamily: MONO, fontSize: 12 }}>{ev.detail}</span>
+      ) : null}
     </span>
   );
 }
@@ -720,8 +741,8 @@ function AuditBody() {
   const columns: Column<AuditEntry>[] = [
     {
       key: "seq",
-      // The field the export bounds and the chain's verdicts name: an identifier, so mono and lowercase.
-      label: <span className="data-head-mono">seq</span>,
+      // The record number the export bounds and the chain's verdicts name; its machine name on hover.
+      label: <span title="seq">{t("screen.audit.colSeq")}</span>,
       width: "72px",
       numeric: true,
       render: (row) => row.seq,
@@ -742,8 +763,12 @@ function AuditBody() {
       key: "source",
       label: t("screen.audit.colSource"),
       width: "136px",
-      // Who wrote it down is a fact, not a state: one neutral chip for both sources.
-      render: (row) => <Tag mono>{row.source}</Tag>,
+      // Who wrote it down is a fact, not a state: one neutral chip for both sources, the server's word on hover.
+      render: (row) => (
+        <span title={row.source}>
+          <Tag>{t(`screen.audit.source.${row.source}`, { defaultValue: row.source })}</Tag>
+        </span>
+      ),
     },
     {
       key: "author_pubkey",
@@ -845,11 +870,8 @@ function DayLog({
         {firstLoad ? null : (
           <>
             <SummaryCount>{hasMore ? t("common.shownMore", { n }) : t("common.inAll", { n })}</SummaryCount>
-            <SummaryPart label={<span style={{ fontFamily: MONO }}>client-signed</span>} value={fmtNum(signed)} />
-            <SummaryPart
-              label={<span style={{ fontFamily: MONO }}>server-observed</span>}
-              value={fmtNum(rows.length - signed)}
-            />
+            <SummaryPart label={t("screen.audit.source.client-signed")} value={fmtNum(signed)} />
+            <SummaryPart label={t("screen.audit.source.server-observed")} value={fmtNum(rows.length - signed)} />
           </>
         )}
       </SummaryLine>

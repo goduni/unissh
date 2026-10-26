@@ -187,9 +187,19 @@ pub fn prompt_intro(request: &AuthPromptRequest) -> String {
     text
 }
 
+/// Whether a request carries neither a title nor an instruction.
+pub fn is_silent(request: &AuthPromptRequest) -> bool {
+    one_line(&request.name).trim().is_empty() && lines(&request.instruction).trim().is_empty()
+}
+
 impl AuthPrompter for TtyPrompter {
     fn prompt(&self, request: AuthPromptRequest) -> Option<Vec<String>> {
         let mut tty = Tty::open().ok()?;
+        // A request with nothing to ask and nothing to say (the last round of a
+        // keyboard-interactive exchange) is answered without a word.
+        if request.prompts.is_empty() && is_silent(&request) {
+            return Some(Vec::new());
+        }
         tty.say(&prompt_intro(&request)).ok()?;
         let mut answers = Vec::with_capacity(request.prompts.len());
         for field in request.prompts {

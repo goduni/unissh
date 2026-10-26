@@ -8,7 +8,6 @@ export type Route =
   | "maint"
   | "spaces"
   | "accounts"
-  | "directory"
   | "devices"
   | "sessions"
   | "invites"

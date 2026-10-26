@@ -44,7 +44,7 @@ function DevicesBody() {
   const summary = (
     <>
       <SummaryCount n={rows.length} />
-      {acc ? <SummaryPart label="account_id" value={truncId(acc)} active /> : null}
+      {acc ? <SummaryPart label={t("screen.devices.accountFilterLabel")} value={truncId(acc)} active /> : null}
     </>
   );
 
@@ -122,7 +122,7 @@ function DevicesBody() {
                     confirmLabel: t("common.revoke"),
                     onConfirm: async () => {
                       await api.identity.deviceRevoke(row.device_id);
-                      toast("success", t("common.revoke"));
+                      toast("success", t("common.revoked"));
                       x.reload();
                     },
                   }),
