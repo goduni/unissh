@@ -93,7 +93,8 @@ enum Command {
     Hosts {
         #[command(subcommand)]
         action: Option<Box<HostsAction>>,
-        /// Only hosts whose label, address, vault or tags contain this.
+        /// Only hosts whose label, address, vault or tags contain this (after
+        /// `--` when it is add, edit or rm: `unissh hosts -- add`).
         filter: Option<String>,
         /// Only hosts with this tag.
         #[arg(long)]

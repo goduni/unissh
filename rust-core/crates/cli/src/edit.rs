@@ -4,21 +4,22 @@
 //!
 //! The item kinds (`hosts`, `groups`, `secrets`, `keys`, `identities`,
 //! `snippets`) each map their own flags onto the core's records; finding an
-//! item by name is [`crate::hosts::find_named`], the same lookup `unissh ssh`
-//! uses for hosts.
+//! item by name is [`take`] over [`crate::hosts::find_named`], the same
+//! lookup `unissh ssh` uses for hosts.
 
 use std::fmt::Write as _;
-use std::io::{self, Read as _};
+use std::io;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::{Args, ValueEnum};
-use unissh_ffi::{Core, VaultInfo};
+use unissh_ffi::{Core, FfiError, FfiSyncTarget, VaultInfo};
 use zeroize::Zeroizing;
 
-use crate::device::Device;
+use crate::device::{without_line_ending, Device};
 use crate::failure::{Failure, Res};
 use crate::home::read_private;
+use crate::hosts::{find_named, Named};
 use crate::server;
 use crate::tty::{one_line, Tty};
 
@@ -52,6 +53,28 @@ impl VaultArg {
 /// Whether an item of vault `vault_id` is within `scope` (no scope: all are).
 pub fn in_scope(scope: Option<&str>, vault_id: &str) -> bool {
     scope.is_none_or(|s| s == vault_id)
+}
+
+/// The one of `items` that `query` names, taken out of the list: the item
+/// whose id (`id_of`) is exactly `query` when only one is — so "web" beside
+/// "web-2" is not ambiguous — else [`find_named`]'s lookup by name.
+pub fn take<T: Named>(mut items: Vec<T>, query: &str, id_of: impl Fn(&T) -> &str) -> Res<T> {
+    let mut exact = items
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| id_of(item) == query)
+        .map(|(i, _)| i);
+    let index = match (exact.next(), exact.next()) {
+        (Some(only), None) => only,
+        _ => {
+            let found = find_named(&items, query)?;
+            items
+                .iter()
+                .position(|item| std::ptr::eq(item, found))
+                .ok_or_else(|| Failure::msg(format!("no {} matches \"{query}\"", T::KIND)))?
+        }
+    };
+    Ok(items.swap_remove(index))
 }
 
 /// The vault `wanted` names (by name, any case, or by id), else `preferred`,
@@ -231,9 +254,7 @@ impl SecretFrom {
             read_private(path)?
                 .ok_or_else(|| Failure::msg(format!("{} does not exist", path.display())))?
         } else if self.stdin {
-            let mut text = Zeroizing::new(String::with_capacity(4096));
-            io::stdin().read_to_string(&mut text)?;
-            text
+            read_secret(io::stdin().lock())?
         } else {
             ask(what, prompt, shape)?
         };
@@ -268,10 +289,41 @@ fn ask(what: &str, prompt: &str, shape: Shape) -> Res<Zeroizing<String>> {
     })
 }
 
-/// `text` without one trailing `\n` or `\r\n`.
-pub fn without_line_ending(text: &str) -> &str {
-    let line = text.strip_suffix('\n').unwrap_or(text);
-    line.strip_suffix('\r').unwrap_or(line)
+/// All of `input` (stdin), for a secret. It is read into a buffer that is
+/// wiped when it is dropped; when the secret outgrows it, a buffer twice the
+/// size takes over and the old one is wiped, so no copy of the secret is left
+/// behind in freed memory. (`read_to_string` would grow its string by
+/// reallocating, leaving each smaller copy unwiped.)
+fn read_secret(mut input: impl io::Read) -> Res<Zeroizing<String>> {
+    let mut buf = Zeroizing::new(vec![0_u8; 8192]);
+    let mut filled = 0_usize;
+    loop {
+        if filled == buf.len() {
+            let mut bigger = Zeroizing::new(vec![0_u8; buf.len().saturating_mul(2)]);
+            if let (Some(to), Some(from)) = (bigger.get_mut(..filled), buf.get(..filled)) {
+                to.copy_from_slice(from);
+            }
+            buf = bigger;
+        }
+        let Some(rest) = buf.get_mut(filled..) else {
+            break;
+        };
+        match input.read(rest) {
+            Ok(0) => break,
+            Ok(n) => filled = filled.saturating_add(n),
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    buf.truncate(filled);
+    // `from_utf8` takes the bytes over without copying them.
+    match String::from_utf8(std::mem::take(&mut *buf)) {
+        Ok(text) => Ok(Zeroizing::new(text)),
+        Err(e) => {
+            drop(Zeroizing::new(e.into_bytes()));
+            Err(Failure::msg("what came on stdin is not text (UTF-8)"))
+        }
+    }
 }
 
 /// Rows as aligned columns, each cell on one line without control characters
@@ -318,33 +370,54 @@ pub fn print_json(value: &serde_json::Value) -> Res<()> {
     Ok(())
 }
 
-/// Sends a change just written on this machine to the server, as the app does
-/// after an edit, and says so with `done` ("Added host web"). With `offline`
-/// it stays here until the next sync. A server that refuses it (an account
-/// that may only view the vault, say) fails the command with the server's
-/// reason: the change is then on this machine only.
-pub fn commit(device: &Device, offline: bool, done: &str) -> Res<()> {
-    if offline {
-        println!("{done} on this machine; it goes to the server with the next sync.");
-        return Ok(());
-    }
-    match server::sync(device) {
-        Ok(report) => {
-            server::warn_about(&report);
-            println!("{done}.");
-            Ok(())
-        }
-        Err(e) => Err(Failure::msg(format!(
-            "{done} on this machine, but the server did not take it: {e}\n\
-             The change stays here and is offered again at every sync."
-        ))),
-    }
+/// What a write to vault `vault_name` failed with, saying which vault: the
+/// core's own words name no vault, and a command may write to several.
+pub fn stored<T>(vault_name: &str, result: Result<T, FfiError>) -> Res<T> {
+    result.map_err(|e| {
+        let mut failure = Failure::from(e);
+        failure.message = format!("vault \"{}\": {}", one_line(vault_name), failure.message);
+        failure
+    })
+}
+
+/// Whether vault `vault_id` syncs with a server. One this device no longer
+/// lists is taken to: the sync then says what became of it.
+pub fn syncs(core: &Core, vault_id: &str) -> Res<bool> {
+    Ok(core
+        .list_vaults()?
+        .iter()
+        .find(|v| v.vault_id == vault_id)
+        .is_none_or(|v| v.sync_target == FfiSyncTarget::Cloud))
+}
+
+/// Sends a change just written to vault `vault_id` to the server, as the app
+/// does after an edit, and says so with `done` ("Added host web"): see
+/// [`server::push_after_write`] for where the change then stands.
+pub fn commit(device: &Device, vault_id: &str, offline: bool, done: &str) -> Res<()> {
+    let cloud = syncs(&device.core, vault_id)?;
+    server::push_after_write(device, cloud, offline, done)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{choose_vault, list, slug, without_line_ending};
+    use super::{choose_vault, list, read_secret, slug, take};
+    use crate::hosts::Named;
     use unissh_ffi::{FfiSyncTarget, VaultInfo};
+
+    struct Item(&'static str);
+
+    impl Named for Item {
+        const KIND: &'static str = "item";
+        const LISTED_BY: Option<&'static str> = None;
+
+        fn vault_name(&self) -> &str {
+            "v"
+        }
+
+        fn label(&self) -> &str {
+            self.0
+        }
+    }
 
     fn vault(id: &str, name: &str) -> VaultInfo {
         VaultInfo {
@@ -392,9 +465,20 @@ mod tests {
         assert_eq!(slug(&"a".repeat(50), "host").len(), 40);
     }
 
+    /// An item whose id is exactly what was typed is the one meant, though
+    /// another one's name begins with it.
     #[test]
-    fn exactly_one_line_ending_is_dropped() {
-        assert_eq!(without_line_ending("pw\r\n"), "pw");
-        assert_eq!(without_line_ending("pw\n\n"), "pw\n");
+    fn an_exact_id_is_taken_before_a_name_it_begins() {
+        let items = || vec![Item("web-2"), Item("web")];
+        assert_eq!(take(items(), "web", |i| i.0).unwrap().0, "web");
+        assert!(take(vec![Item("web-2"), Item("web-3")], "web", |i| i.0).is_err());
+    }
+
+    /// A secret longer than the first buffer is read whole.
+    #[test]
+    fn a_secret_on_stdin_is_read_whole_past_the_first_buffer() {
+        let long = "k".repeat(20_000);
+        assert_eq!(read_secret(long.as_bytes()).unwrap().as_str(), long);
+        assert!(read_secret(&[0xff_u8, 0xfe][..]).is_err(), "not text");
     }
 }

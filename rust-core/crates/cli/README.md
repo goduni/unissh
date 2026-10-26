@@ -96,7 +96,7 @@ unissh hosts rm web
 unissh groups list | add <label> [--parent G] | edit <group> | rm <group>
 unissh secrets list [--json]
 unissh secrets add-password <name> | add-note <name>            # asked on the terminal
-unissh secrets show <name> [--reveal]                           # --reveal prints the secret
+unissh secrets show <name> [--reveal [--yes]]                   # --reveal prints the secret
 unissh secrets rm <name>
 unissh keys generate <name> | import <name> <file|-> | public <name> | certificate <name> <file|->
 unissh keys rotate <name>                                       # a new pair in place
@@ -106,30 +106,48 @@ unissh snippets add [--label L] [--command C | --stdin]         # else $EDITOR
 unissh snippets edit <name> | rm <name>
 ```
 
+`add`, `edit` and `rm` after `unissh hosts` are subcommands now. To list the
+hosts that mention one of those words, put `--` first: `unissh hosts -- add`.
+
 A new item goes into the account's only vault, or the one `--vault` names; for an
 existing one, `--vault` narrows the lookup. Items are named as hosts are: by
 label (a secret by its name), `vault/label`, the start of a label, or their id.
 A host's `--key`, `--password-item`, `--agent-key` or `--identity` also says how
-it logs in; `--auth` says it outright. A jump host is a saved host (referenced, so
-its own settings apply) or `user@host[:port]` with `--jump-key` or
-`--jump-password-item`. A list flag such as `--tags` replaces the list, and an
-empty value (`--tags ""`) clears it, as it clears `--color`, `--group` or
-`--proxy`.
+it logs in; `--auth` says it outright.
+
+A jump host is either `user@host[:port]` with `--jump-key` or
+`--jump-password-item`, or another saved host of the same vault, referenced so
+that its own settings apply. A saved host can be a jump host only if it logs in
+with a key, a stored password or the system ssh-agent, the same hosts the app
+offers. `--jump` gives the whole chain, and on `edit` it replaces the chain, so
+`--jump-key` and `--jump-password-item` go with `--jump` there too.
+
+A list flag such as `--tags` replaces the list, and an empty value (`--tags ""`)
+clears it, as it clears `--color`, `--group` or `--proxy`. `--color` and
+`--icon` take the ids the app's picker offers, listed in `--help`.
 
 A password, note or private key is never an argument: it is asked on the
 terminal (a password twice), read from stdin with `--stdin`, or from an owner-only
 file with `--from-file`. `secrets show` prints only what an item is; with
 `--reveal` it prints the password, the note or the private key, and nothing else.
+A private key is printed only after you confirm the app's export warning on the
+terminal. `--yes` skips the question, and without a terminal it is required.
 `keys public` prints a public key freely. `keys import` asks for a passphrase on
 the terminal when the key has one.
 
-Every change syncs right away, as in the app; with `--offline` it stays on this
-machine until the next sync. A change the server refuses (an account that may
-only view that vault, say) fails the command with the server's reason, and stays
-here to be offered again. Deleting asks first on the terminal; `--yes` skips the
-question. `keys rotate` replaces a key at once, which locks out every host that
-has only the old public key; the app's guided rotation moves each machine over
-first, and the rotations it begins can be listed and abandoned here.
+Every change syncs right away, as in the app. With `--offline`, or when the
+server cannot be reached, the change is saved here and goes with the next sync;
+a local vault does not sync at all. A vault this account can only view refuses
+the change on this machine, before anything is stored. A change the server
+refuses fails the command with its reason. A `hosts add` or `hosts edit` that
+saved the host but not all that goes with it (the identity link, the group) says
+what is missing and fails. Do not run `add` again then: finish the host with
+`hosts edit`.
+
+Deleting asks first on the terminal; `--yes` skips the question. `keys rotate`
+replaces a key at once, which locks out every host that has only the old public
+key. The app's guided rotation moves each machine over first; the rotations it
+begins can be listed and abandoned here.
 
 ## Data
 

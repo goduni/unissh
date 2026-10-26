@@ -6,6 +6,7 @@
 //! argument. It comes back out only through `secrets show --reveal`, the
 //! CLI's form of the app's gated reveal; a public key is printed freely.
 
+use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -13,74 +14,76 @@ use clap::{Args, Subcommand};
 use serde_json::{json, Value};
 use unissh_ffi::{
     AuthMethod, Core, FfiError, Identity, ItemInfo, KeyRotationLink, ProfileAuth, ProxyPassword,
+    VaultInfo, ITEM_TYPE_IDENTITY as IDENTITY, ITEM_TYPE_NOTE as NOTE,
+    ITEM_TYPE_PASSWORD as PASSWORD, ITEM_TYPE_SSH_KEY as SSH_KEY,
 };
 use zeroize::Zeroizing;
 
 use crate::device::{ask_secret, Device};
-use crate::edit::{self, columns, commit, print_json, SecretFrom, Shape, VaultArg};
+use crate::edit::{self, columns, commit, print_json, stored, take, SecretFrom, Shape, VaultArg};
 use crate::failure::{Failure, Res};
 use crate::home::read_private;
-use crate::hosts::{find_named, Kind, Named};
-use crate::manage::{ago, confirm};
-use crate::tty::one_line;
+use crate::hosts::{self, Named};
+use crate::manage::ago;
+use crate::tty::{confirm, one_line};
 
-/// The core's item type of an SSH key.
-pub const SSH_KEY: u32 = 1;
-/// The core's item type of a stored password.
-pub const PASSWORD: u32 = 4;
-/// The core's item type of a note.
-pub const NOTE: u32 = 6;
-/// The core's item type of a personal identity.
-pub const IDENTITY: u32 = 7;
+/// Which secrets a lookup is after: the item types, and what one is called.
+pub trait Sort {
+    /// What one is called in messages ("SSH key").
+    const KIND: &'static str;
+    /// The core's item types it covers.
+    const TYPES: &'static [u32];
+}
 
-/// What `unissh secrets list` shows; certificates show on their key.
-const SECRET_TYPES: [u32; 4] = [SSH_KEY, PASSWORD, NOTE, IDENTITY];
+/// Any secret: what `unissh secrets` shows (certificates show on their key).
+pub struct AnySecret;
+impl Sort for AnySecret {
+    const KIND: &'static str = "secret";
+    const TYPES: &'static [u32] = &[SSH_KEY, PASSWORD, NOTE, IDENTITY];
+}
 
-/// Any secret, for lookups.
-pub const SECRETS: Kind = Kind {
-    one: "secret",
-    many: "secrets",
-    list: "unissh secrets list",
-};
-/// SSH keys, for lookups.
-pub const KEYS: Kind = Kind {
-    one: "SSH key",
-    many: "SSH keys",
-    list: "unissh secrets list",
-};
-/// Stored passwords, for lookups.
-pub const PASSWORDS: Kind = Kind {
-    one: "stored password",
-    many: "stored passwords",
-    list: "unissh secrets list",
-};
-/// Personal identities, for lookups.
-pub const IDENTITIES: Kind = Kind {
-    one: "identity",
-    many: "identities",
-    list: "unissh identities list",
-};
+/// An SSH key.
+pub struct Key;
+impl Sort for Key {
+    const KIND: &'static str = "SSH key";
+    const TYPES: &'static [u32] = &[SSH_KEY];
+}
 
-/// A secret and the vault it lives in. Its name is its item id, as in the app.
-pub struct Entry {
+/// A stored password.
+pub struct Password;
+impl Sort for Password {
+    const KIND: &'static str = "stored password";
+    const TYPES: &'static [u32] = &[PASSWORD];
+}
+
+/// A personal identity, as a vault item.
+pub struct IdentityItem;
+impl Sort for IdentityItem {
+    const KIND: &'static str = "identity";
+    const TYPES: &'static [u32] = &[IDENTITY];
+}
+
+/// A secret of sort `S` and the vault it lives in. Its name is its item id,
+/// as in the app.
+pub struct Entry<S> {
     /// The vault's id.
     pub vault_id: String,
     /// The vault's name.
     pub vault_name: String,
     /// The item, without its content.
     pub info: ItemInfo,
+    sort: PhantomData<S>,
 }
 
-impl Named for Entry {
+impl<S: Sort> Named for Entry<S> {
+    const KIND: &'static str = S::KIND;
+    const LISTED_BY: Option<&'static str> = Some("unissh secrets list");
+
     fn vault_name(&self) -> &str {
         &self.vault_name
     }
 
     fn label(&self) -> &str {
-        &self.info.item_id
-    }
-
-    fn alias(&self) -> &str {
         &self.info.item_id
     }
 
@@ -100,27 +103,25 @@ const fn kind_name(item_type: u32) -> &'static str {
     }
 }
 
-/// The items of `types` in every vault, or in the vault `scope` names.
-pub fn load(core: &Core, scope: Option<&str>, types: &[u32]) -> Res<Vec<Entry>> {
-    let mut out = Vec::new();
-    for vault in core.list_vaults()? {
-        if !edit::in_scope(scope, &vault.vault_id) {
-            continue;
-        }
-        match core.list_items(vault.vault_id.clone()) {
-            Ok(items) => out.extend(
-                items
-                    .into_iter()
-                    .filter(|i| types.contains(&i.item_type))
-                    .map(|info| Entry {
-                        vault_id: vault.vault_id.clone(),
-                        vault_name: vault.name.clone(),
-                        info,
-                    }),
-            ),
-            Err(e) => eprintln!("unissh: skipping vault \"{}\": {e}", one_line(&vault.name)),
-        }
-    }
+/// The secrets of sort `S` in every vault, or in the vault `scope` names.
+pub fn load<S: Sort>(core: &Core, scope: Option<&str>) -> Res<Vec<Entry<S>>> {
+    let mut out = hosts::per_vault(
+        core,
+        |vault_id| {
+            if edit::in_scope(scope, &vault_id) {
+                core.list_items(vault_id)
+            } else {
+                Ok(Vec::new())
+            }
+        },
+        |vault_id, vault_name, info: ItemInfo| Entry {
+            vault_id: vault_id.to_owned(),
+            vault_name: vault_name.to_owned(),
+            info,
+            sort: PhantomData,
+        },
+    )?;
+    out.retain(|e| S::TYPES.contains(&e.info.item_type));
     out.sort_by_cached_key(|e| {
         (
             e.vault_name.to_lowercase(),
@@ -131,44 +132,21 @@ pub fn load(core: &Core, scope: Option<&str>, types: &[u32]) -> Res<Vec<Entry>> 
     Ok(out)
 }
 
-/// The id of the item of `types` that `query` names in vault `vault_id` —
-/// for a host or identity field, which may only point into its own vault.
-pub fn find_in(
-    core: &Core,
-    vault_id: &str,
-    query: &str,
-    types: &[u32],
-    kind: &Kind,
-) -> Res<String> {
-    let items = load(core, Some(vault_id), types)?;
-    // An exact id first: a key called "web" beside "web-2" is not ambiguous.
-    if let Some(exact) = items.iter().find(|e| e.info.item_id == query) {
-        return Ok(exact.info.item_id.clone());
-    }
-    Ok(find_named(&items, query, kind)?.info.item_id.clone())
+/// The secret of sort `S` that `query` names in the vault `scope` names (in
+/// any vault without one): its exact name first, else the usual lookup.
+fn find<S: Sort>(core: &Core, scope: Option<&str>, query: &str) -> Res<Entry<S>> {
+    take(load::<S>(core, scope)?, query, |e| &e.info.item_id)
 }
 
-/// The one item of `types` that `query` names, in the scope `vault` sets: its
-/// exact id when only one vault has it, else the usual lookup.
-fn find_one(core: &Core, vault: &VaultArg, query: &str, types: &[u32], kind: &Kind) -> Res<Entry> {
-    let scope = vault.scope(core)?;
-    let mut items = load(core, scope.as_deref(), types)?;
-    let exact: Vec<usize> = items
-        .iter()
-        .enumerate()
-        .filter(|(_, e)| e.info.item_id == query)
-        .map(|(i, _)| i)
-        .collect();
-    let index = if let [only] = exact.as_slice() {
-        *only
-    } else {
-        let found = find_named(&items, query, kind)?;
-        items
-            .iter()
-            .position(|e| std::ptr::eq(e, found))
-            .ok_or_else(|| Failure::msg(format!("no {} matches \"{query}\"", kind.one)))?
-    };
-    Ok(items.swap_remove(index))
+/// The id of the secret of sort `S` that `query` names in vault `vault_id` —
+/// for a host or identity field, which may only point into its own vault.
+pub fn find_in<S: Sort>(core: &Core, vault_id: &str, query: &str) -> Res<String> {
+    Ok(find::<S>(core, Some(vault_id), query)?.info.item_id)
+}
+
+/// The secret of sort `S` that `query` names, in the scope `vault` sets.
+fn find_one<S: Sort>(core: &Core, vault: &VaultArg, query: &str) -> Res<Entry<S>> {
+    find::<S>(core, vault.scope(core)?.as_deref(), query)
 }
 
 /// Refuses `name` when anything already has that id in the vault: the core
@@ -242,12 +220,16 @@ pub enum SecretsAction {
         name: String,
         #[command(flatten)]
         vault: VaultArg,
-        /// Print the secret itself, and nothing else.
+        /// Print the secret itself, and nothing else. A private key is
+        /// printed only after a confirmation on the terminal.
         #[arg(long)]
         reveal: bool,
         /// An earlier version of a password or note, from its history.
         #[arg(long, value_name = "N", requires = "reveal")]
         version: Option<u64>,
+        /// Print a private key without asking (the warning is still shown).
+        #[arg(long, requires = "reveal")]
+        yes: bool,
     },
     /// Delete a key, password, note or identity.
     Rm {
@@ -272,10 +254,18 @@ pub fn secrets(device: &Device, offline: bool, action: SecretsAction) -> Res<()>
             from,
             yes,
         } => {
-            let (vault_id, name) = prepare_text(core, &vault, &name, PASSWORD, yes)?;
+            let (target, name) = prepare_text(core, &vault, &name, PASSWORD, yes)?;
             let secret = from.read("the password", "Password: ", Shape::New)?;
-            core.save_password(vault_id, name.clone(), (*secret).clone())?;
-            commit(device, offline, &format!("Stored password {name}"))
+            stored(
+                &target.name,
+                core.save_password(target.vault_id.clone(), name.clone(), (*secret).clone()),
+            )?;
+            commit(
+                device,
+                &target.vault_id,
+                offline,
+                &format!("Stored password {}", one_line(&name)),
+            )
         }
         SecretsAction::AddNote {
             name,
@@ -283,26 +273,35 @@ pub fn secrets(device: &Device, offline: bool, action: SecretsAction) -> Res<()>
             from,
             yes,
         } => {
-            let (vault_id, name) = prepare_text(core, &vault, &name, NOTE, yes)?;
+            let (target, name) = prepare_text(core, &vault, &name, NOTE, yes)?;
             let text = from.read("the note", "Note: ", Shape::Block)?;
-            core.save_note(vault_id, name.clone(), (*text).clone())?;
-            commit(device, offline, &format!("Stored note {name}"))
+            stored(
+                &target.name,
+                core.save_note(target.vault_id.clone(), name.clone(), (*text).clone()),
+            )?;
+            commit(
+                device,
+                &target.vault_id,
+                offline,
+                &format!("Stored note {}", one_line(&name)),
+            )
         }
         SecretsAction::Show {
             name,
             vault,
             reveal,
             version,
+            yes,
         } => {
-            let entry = find_one(core, &vault, &name, &SECRET_TYPES, &SECRETS)?;
+            let entry = find_one::<AnySecret>(core, &vault, &name)?;
             if reveal {
-                self::reveal(core, &entry, version)
+                self::reveal(core, &entry, version, yes)
             } else {
                 describe(core, &entry)
             }
         }
         SecretsAction::Rm { name, vault, yes } => {
-            let entry = find_one(core, &vault, &name, &SECRET_TYPES, &SECRETS)?;
+            let entry = find_one::<AnySecret>(core, &vault, &name)?;
             remove(device, offline, &entry, yes)
         }
     }
@@ -310,7 +309,7 @@ pub fn secrets(device: &Device, offline: bool, action: SecretsAction) -> Res<()>
 
 fn list(core: &Core, vault: &VaultArg, json: bool) -> Res<()> {
     let scope = vault.scope(core)?;
-    let items = load(core, scope.as_deref(), &SECRET_TYPES)?;
+    let items = load::<AnySecret>(core, scope.as_deref())?;
     if json {
         return print_json(&Value::Array(
             items
@@ -371,7 +370,7 @@ fn prepare_text(
     name: &str,
     item_type: u32,
     yes: bool,
-) -> Res<(String, String)> {
+) -> Res<(VaultInfo, String)> {
     let name = new_name(name)?;
     let target = vault.pick(core, None)?;
     let existing = core
@@ -396,11 +395,11 @@ fn prepare_text(
             ),
         )?;
     }
-    Ok((target.vault_id, name))
+    Ok((target, name))
 }
 
 /// What a secret is, without what it holds.
-fn describe(core: &Core, entry: &Entry) -> Res<()> {
+fn describe<S>(core: &Core, entry: &Entry<S>) -> Res<()> {
     let info = &entry.info;
     let mut rows = vec![
         vec!["Name:".to_owned(), info.item_id.clone()],
@@ -438,9 +437,21 @@ fn describe(core: &Core, entry: &Entry) -> Res<()> {
     Ok(())
 }
 
-/// Prints what a secret holds — the explicit reveal, on stdout only.
-fn reveal(core: &Core, entry: &Entry, version: Option<u64>) -> Res<()> {
+/// Prints what a secret holds — the explicit reveal, on stdout only. A
+/// private key is printed only after the app's export warning is confirmed
+/// on the terminal (or `yes`): unlike a password, it is not meant to leave
+/// the vault, and stdout may well be a file.
+fn reveal<S>(core: &Core, entry: &Entry<S>, version: Option<u64>, yes: bool) -> Res<()> {
     let (vault_id, item_id) = (entry.vault_id.clone(), entry.info.item_id.clone());
+    if entry.info.item_type == SSH_KEY && version.is_none() {
+        confirm(
+            yes,
+            &format!(
+                "The private key \"{}\" will be printed unencrypted. Keep it somewhere safe.\n",
+                one_line(&item_id)
+            ),
+        )?;
+    }
     let text = Zeroizing::new(match (entry.info.item_type, version) {
         (PASSWORD, None) => core.get_password(vault_id, item_id)?,
         (PASSWORD, Some(v)) => core.get_password_version(vault_id, item_id, v)?,
@@ -477,7 +488,7 @@ fn credential(identity: &Identity) -> String {
 }
 
 /// Deletes a secret after saying what still uses it.
-fn remove(device: &Device, offline: bool, entry: &Entry, yes: bool) -> Res<()> {
+fn remove<S>(device: &Device, offline: bool, entry: &Entry<S>, yes: bool) -> Res<()> {
     let core = &device.core;
     let id = &entry.info.item_id;
     let vault_id = &entry.vault_id;
@@ -506,13 +517,15 @@ fn remove(device: &Device, offline: bool, entry: &Entry, yes: bool) -> Res<()> {
         }
     }
     confirm(yes, &warning)?;
-    if entry.info.item_type == IDENTITY {
-        core.delete_identity(vault_id.clone(), id.clone())?;
+    let deleted = if entry.info.item_type == IDENTITY {
+        core.delete_identity(vault_id.clone(), id.clone())
     } else {
-        core.delete_item(vault_id.clone(), id.clone())?;
-    }
+        core.delete_item(vault_id.clone(), id.clone())
+    };
+    stored(&entry.vault_name, deleted)?;
     commit(
         device,
+        vault_id,
         offline,
         &format!(
             "Deleted {} {}",
@@ -666,25 +679,38 @@ pub fn keys(device: &Device, offline: bool, action: KeysAction) -> Res<()> {
             let name = new_name(&name)?;
             let target = vault.pick(core, None)?;
             refuse_taken(core, &target.vault_id, &target.name, &name)?;
-            let public = core.generate_ssh_key(target.vault_id, name.clone())?;
+            let public = stored(
+                &target.name,
+                core.generate_ssh_key(target.vault_id.clone(), name.clone()),
+            )?;
             println!("{}", public.trim_end());
-            commit(device, offline, &format!("Generated key {name}"))
+            commit(
+                device,
+                &target.vault_id,
+                offline,
+                &format!("Generated key {}", one_line(&name)),
+            )
         }
         KeysAction::Import { name, file, vault } => {
             let name = new_name(&name)?;
             let target = vault.pick(core, None)?;
             refuse_taken(core, &target.vault_id, &target.name, &name)?;
             let private = read_input(&file, true)?;
-            let public = import(core, &target.vault_id, &name, &private)?;
+            let public = import(core, &target, &name, &private)?;
             println!("{}", public.trim_end());
-            commit(device, offline, &format!("Imported key {name}"))
+            commit(
+                device,
+                &target.vault_id,
+                offline,
+                &format!("Imported key {}", one_line(&name)),
+            )
         }
         KeysAction::Public {
             name,
             vault,
             fingerprint,
         } => {
-            let key = find_one(core, &vault, &name, &[SSH_KEY], &KEYS)?;
+            let key = find_one::<Key>(core, &vault, &name)?;
             let public = core.get_public_key(key.vault_id, key.info.item_id)?;
             if fingerprint {
                 println!("{}", public.fingerprint);
@@ -694,21 +720,25 @@ pub fn keys(device: &Device, offline: bool, action: KeysAction) -> Res<()> {
             Ok(())
         }
         KeysAction::Certificate { name, file, vault } => {
-            let key = find_one(core, &vault, &name, &[SSH_KEY], &KEYS)?;
+            let key = find_one::<Key>(core, &vault, &name)?;
             let cert = read_input(&file, false)?;
-            core.import_ssh_certificate(
-                key.vault_id,
-                key.info.item_id.clone(),
-                cert.trim().to_owned(),
+            stored(
+                &key.vault_name,
+                core.import_ssh_certificate(
+                    key.vault_id.clone(),
+                    key.info.item_id.clone(),
+                    cert.trim().to_owned(),
+                ),
             )?;
             commit(
                 device,
+                &key.vault_id,
                 offline,
                 &format!("Attached the certificate to key {}", key.info.item_id),
             )
         }
         KeysAction::Rotate { name, vault, yes } => {
-            let key = find_one(core, &vault, &name, &[SSH_KEY], &KEYS)?;
+            let key = find_one::<Key>(core, &vault, &name)?;
             rotate(device, offline, &key, yes)
         }
         KeysAction::Rotation(RotationAction::List { vault, json }) => rotations(core, &vault, json),
@@ -716,7 +746,7 @@ pub fn keys(device: &Device, offline: bool, action: KeysAction) -> Res<()> {
             abandon(device, offline, &vault, &name, yes)
         }
         KeysAction::Rm { name, vault, yes } => {
-            let key = find_one(core, &vault, &name, &[SSH_KEY], &KEYS)?;
+            let key = find_one::<Key>(core, &vault, &name)?;
             remove(device, offline, &key, yes)
         }
     }
@@ -744,16 +774,27 @@ fn read_input(file: &Path, private: bool) -> Res<Zeroizing<String>> {
     text.ok_or_else(|| Failure::msg(format!("{} does not exist", file.display())))
 }
 
-/// Imports `private` as key `name`, asking for its passphrase when the core
-/// says it needs one — the app's flow, with the terminal as its dialog.
-fn import(core: &Core, vault_id: &str, name: &str, private: &str) -> Res<String> {
-    let first = core.import_ssh_key(
-        vault_id.to_owned(),
+/// Imports `private` as key `name` into `target`, asking for its passphrase
+/// when the core says it needs one — the app's flow, with the terminal as
+/// its dialog.
+fn import(core: &Core, target: &VaultInfo, name: &str, private: &str) -> Res<String> {
+    let attempt = |passphrase: Option<String>| {
+        stored(
+            &target.name,
+            core.import_ssh_key(
+                target.vault_id.clone(),
+                name.to_owned(),
+                private.to_owned(),
+                passphrase,
+            ),
+        )
+    };
+    match core.import_ssh_key(
+        target.vault_id.clone(),
         name.to_owned(),
         private.to_owned(),
         None,
-    );
-    match first {
+    ) {
         Ok(public) => Ok(public),
         Err(e) if needs_passphrase(&e) => {
             let passphrase = ask_secret(
@@ -761,14 +802,9 @@ fn import(core: &Core, vault_id: &str, name: &str, private: &str) -> Res<String>
                 "the key's passphrase",
                 "run interactively, or remove the passphrase from a copy of the key",
             )?;
-            Ok(core.import_ssh_key(
-                vault_id.to_owned(),
-                name.to_owned(),
-                private.to_owned(),
-                Some((*passphrase).clone()),
-            )?)
+            attempt(Some((*passphrase).clone()))
         }
-        Err(e) => Err(e.into()),
+        Err(e) => stored(&target.name, Err(e)),
     }
 }
 
@@ -780,7 +816,7 @@ fn needs_passphrase(e: &FfiError) -> bool {
 }
 
 /// `unissh keys rotate`: the app's "Replace key", not its guided rotation.
-fn rotate(device: &Device, offline: bool, key: &Entry, yes: bool) -> Res<()> {
+fn rotate(device: &Device, offline: bool, key: &Entry<Key>, yes: bool) -> Res<()> {
     let core = &device.core;
     let id = &key.info.item_id;
     let staged = core
@@ -805,9 +841,17 @@ fn rotate(device: &Device, offline: bool, key: &Entry, yes: bool) -> Res<()> {
         warning.push_str("Its certificate certifies the old key and is removed.\n");
     }
     confirm(yes, &warning)?;
-    let public = core.rotate_ssh_key(key.vault_id.clone(), id.clone())?;
+    let public = stored(
+        &key.vault_name,
+        core.rotate_ssh_key(key.vault_id.clone(), id.clone()),
+    )?;
     println!("{}", public.trim_end());
-    commit(device, offline, &format!("Replaced key {}", one_line(id)))
+    commit(
+        device,
+        &key.vault_id,
+        offline,
+        &format!("Replaced key {}", one_line(id)),
+    )
 }
 
 /// A rotation and the vault it is in.
@@ -819,20 +863,21 @@ struct Rotation {
 
 fn load_rotations(core: &Core, vault: &VaultArg) -> Res<Vec<Rotation>> {
     let scope = vault.scope(core)?;
-    let mut out = Vec::new();
-    for v in core.list_vaults()? {
-        if !edit::in_scope(scope.as_deref(), &v.vault_id) {
-            continue;
-        }
-        for link in core.list_key_rotations(v.vault_id.clone())? {
-            out.push(Rotation {
-                vault_id: v.vault_id.clone(),
-                vault_name: v.name.clone(),
-                link,
-            });
-        }
-    }
-    Ok(out)
+    hosts::per_vault(
+        core,
+        |vault_id| {
+            if edit::in_scope(scope.as_deref(), &vault_id) {
+                core.list_key_rotations(vault_id)
+            } else {
+                Ok(Vec::new())
+            }
+        },
+        |vault_id, vault_name, link| Rotation {
+            vault_id: vault_id.to_owned(),
+            vault_name: vault_name.to_owned(),
+            link,
+        },
+    )
 }
 
 const fn started(link: &KeyRotationLink) -> &'static str {
@@ -912,10 +957,18 @@ fn abandon(device: &Device, offline: bool, vault: &VaultArg, name: &str, yes: bo
         )
     };
     confirm(yes, &warning)?;
-    device
-        .core
-        .abandon_key_rotation(rotation.vault_id.clone(), link.candidate_id.clone())?;
-    commit(device, offline, &format!("Abandoned the rotation of {key}"))
+    stored(
+        &rotation.vault_name,
+        device
+            .core
+            .abandon_key_rotation(rotation.vault_id.clone(), link.candidate_id.clone()),
+    )?;
+    commit(
+        device,
+        &rotation.vault_id,
+        offline,
+        &format!("Abandoned the rotation of {key}"),
+    )
 }
 
 // ---------- unissh identities ----------
@@ -931,16 +984,15 @@ pub struct IdentityEntry {
 }
 
 impl Named for IdentityEntry {
+    const KIND: &'static str = "identity";
+    const LISTED_BY: Option<&'static str> = Some("unissh identities list");
+
     fn vault_name(&self) -> &str {
         &self.vault_name
     }
 
     fn label(&self) -> &str {
         &self.identity.label
-    }
-
-    fn alias(&self) -> &str {
-        &self.identity.identity_id
     }
 
     fn detail(&self) -> String {
@@ -950,20 +1002,21 @@ impl Named for IdentityEntry {
 
 /// Every personal identity, or those of the vault `scope` names.
 pub fn load_identities(core: &Core, scope: Option<&str>) -> Res<Vec<IdentityEntry>> {
-    let mut out = Vec::new();
-    for vault in core.list_vaults()? {
-        if !edit::in_scope(scope, &vault.vault_id) {
-            continue;
-        }
-        match core.list_identities(vault.vault_id.clone()) {
-            Ok(ids) => out.extend(ids.into_iter().map(|identity| IdentityEntry {
-                vault_id: vault.vault_id.clone(),
-                vault_name: vault.name.clone(),
-                identity,
-            })),
-            Err(e) => eprintln!("unissh: skipping vault \"{}\": {e}", one_line(&vault.name)),
-        }
-    }
+    let mut out = hosts::per_vault(
+        core,
+        |vault_id| {
+            if edit::in_scope(scope, &vault_id) {
+                core.list_identities(vault_id)
+            } else {
+                Ok(Vec::new())
+            }
+        },
+        |vault_id, vault_name, identity| IdentityEntry {
+            vault_id: vault_id.to_owned(),
+            vault_name: vault_name.to_owned(),
+            identity,
+        },
+    )?;
     out.sort_by_cached_key(|e| {
         (
             e.vault_name.to_lowercase(),
@@ -971,6 +1024,11 @@ pub fn load_identities(core: &Core, scope: Option<&str>) -> Res<Vec<IdentityEntr
         )
     });
     Ok(out)
+}
+
+/// The identity `query` names (its name or vault/name) among `all`.
+fn take_identity(all: Vec<IdentityEntry>, query: &str) -> Res<IdentityEntry> {
+    take(all, query, |e| &e.identity.identity_id)
 }
 
 /// What an identity logs in with: `--key` or `--password-item`, both in the
@@ -996,11 +1054,10 @@ impl IdentityCredential {
     /// Sets the credential on `identity`, checking the item it names.
     fn apply(&self, core: &Core, vault_id: &str, identity: &mut Identity) -> Res<()> {
         if let Some(key) = &self.key {
-            identity.key_item_id = Some(find_in(core, vault_id, key, &[SSH_KEY], &KEYS)?);
+            identity.key_item_id = Some(find_in::<Key>(core, vault_id, key)?);
             identity.password_item_id = None;
         } else if let Some(password) = &self.password_item {
-            identity.password_item_id =
-                Some(find_in(core, vault_id, password, &[PASSWORD], &PASSWORDS)?);
+            identity.password_item_id = Some(find_in::<Password>(core, vault_id, password)?);
             identity.key_item_id = None;
         } else if self.no_credential {
             identity.key_item_id = None;
@@ -1119,8 +1176,16 @@ pub fn identities(device: &Device, offline: bool, action: IdentitiesAction) -> R
                 password_item_id: None,
             };
             credential.apply(core, &target.vault_id, &mut identity)?;
-            core.save_identity(target.vault_id, identity)?;
-            commit(device, offline, &format!("Added identity {name}"))
+            stored(
+                &target.name,
+                core.save_identity(target.vault_id.clone(), identity),
+            )?;
+            commit(
+                device,
+                &target.vault_id,
+                offline,
+                &format!("Added identity {}", one_line(&name)),
+            )
         }
         IdentitiesAction::Edit {
             name,
@@ -1134,23 +1199,26 @@ pub fn identities(device: &Device, offline: bool, action: IdentitiesAction) -> R
                 ));
             }
             let scope = vault.scope(core)?;
-            let all = load_identities(core, scope.as_deref())?;
-            let found = find_named(&all, &name, &IDENTITIES)?;
+            let found = take_identity(load_identities(core, scope.as_deref())?, &name)?;
             let mut identity = found.identity.clone();
             if let Some(user) = user {
                 identity.user = required_user(&user)?;
             }
             credential.apply(core, &found.vault_id, &mut identity)?;
             let id = identity.identity_id.clone();
-            core.save_identity(found.vault_id.clone(), identity)?;
+            stored(
+                &found.vault_name,
+                core.save_identity(found.vault_id.clone(), identity),
+            )?;
             commit(
                 device,
+                &found.vault_id,
                 offline,
                 &format!("Changed identity {}", one_line(&id)),
             )
         }
         IdentitiesAction::Rm { name, vault, yes } => {
-            let entry = find_one(core, &vault, &name, &[IDENTITY], &IDENTITIES)?;
+            let entry = find_one::<IdentityItem>(core, &vault, &name)?;
             remove(device, offline, &entry, yes)
         }
     }
@@ -1166,13 +1234,7 @@ fn required_user(user: &str) -> Res<String> {
 
 /// The identity `query` names, in any vault — for linking one to a host.
 pub fn find_identity(core: &Core, query: &str) -> Res<IdentityEntry> {
-    let mut all = load_identities(core, None)?;
-    let found = find_named(&all, query, &IDENTITIES)?;
-    let index = all
-        .iter()
-        .position(|e| std::ptr::eq(e, found))
-        .ok_or_else(|| Failure::msg(format!("no identity matches \"{query}\"")))?;
-    Ok(all.swap_remove(index))
+    take_identity(load_identities(core, None)?, query)
 }
 
 #[cfg(test)]

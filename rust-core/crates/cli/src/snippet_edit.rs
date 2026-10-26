@@ -13,19 +13,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use clap::{Args, Subcommand};
 use unissh_ffi::{Core, Snippet};
 
-use crate::device::Device;
-use crate::edit::{self, commit, list, mint_id, without_line_ending, VaultArg};
+use crate::device::{without_line_ending, Device};
+use crate::edit::{self, commit, list, mint_id, stored, take, VaultArg};
 use crate::failure::{best_effort, Failure, Res};
-use crate::hosts::{find_named, Kind, Named};
-use crate::manage::confirm;
-use crate::tty::one_line;
-
-/// Snippets, for lookups.
-pub const SNIPPETS: Kind = Kind {
-    one: "snippet",
-    many: "snippets",
-    list: "unissh snippets list",
-};
+use crate::home::write_private;
+use crate::hosts::{self, Named};
+use crate::tty::{confirm, one_line};
 
 /// A snippet and the vault it lives in.
 pub struct SnippetEntry {
@@ -38,6 +31,9 @@ pub struct SnippetEntry {
 }
 
 impl Named for SnippetEntry {
+    const KIND: &'static str = "snippet";
+    const LISTED_BY: Option<&'static str> = Some("unissh snippets list");
+
     fn vault_name(&self) -> &str {
         &self.vault_name
     }
@@ -46,18 +42,14 @@ impl Named for SnippetEntry {
         &self.snippet.label
     }
 
-    fn alias(&self) -> &str {
-        &self.snippet.snippet_id
-    }
-
     fn detail(&self) -> String {
-        first_line(&self.snippet.command)
+        default_label(&self.snippet.command)
     }
 }
 
 /// The first line of `command`, at most 40 characters: the app's default
-/// label, and what tells two snippets with one label apart.
-fn first_line(command: &str) -> String {
+/// label for a snippet saved without one.
+fn default_label(command: &str) -> String {
     command
         .trim()
         .lines()
@@ -70,31 +62,34 @@ fn first_line(command: &str) -> String {
 
 /// Every snippet, or those of the vault `scope` names.
 pub fn load(core: &Core, scope: Option<&str>) -> Res<Vec<SnippetEntry>> {
-    let mut out = Vec::new();
-    for vault in core.list_vaults()? {
-        if !edit::in_scope(scope, &vault.vault_id) {
-            continue;
-        }
-        match core.list_snippets(vault.vault_id.clone()) {
-            Ok(snippets) => out.extend(snippets.into_iter().map(|snippet| SnippetEntry {
-                vault_id: vault.vault_id.clone(),
-                vault_name: vault.name.clone(),
-                snippet,
-            })),
-            Err(e) => eprintln!("unissh: skipping vault \"{}\": {e}", one_line(&vault.name)),
-        }
-    }
-    Ok(out)
+    hosts::per_vault(
+        core,
+        |vault_id| {
+            if edit::in_scope(scope, &vault_id) {
+                core.list_snippets(vault_id)
+            } else {
+                Ok(Vec::new())
+            }
+        },
+        |vault_id, vault_name, snippet| SnippetEntry {
+            vault_id: vault_id.to_owned(),
+            vault_name: vault_name.to_owned(),
+            snippet,
+        },
+    )
+}
+
+/// The snippet `query` names (label, vault/label or id) among `all`.
+fn take_snippet(all: Vec<SnippetEntry>, query: &str) -> Res<SnippetEntry> {
+    take(all, query, |s| &s.snippet.snippet_id)
 }
 
 /// The id of the snippet `query` names in vault `vault_id` — for a host's
 /// startup snippets, which run from the host's own vault.
 pub fn find_in(core: &Core, vault_id: &str, query: &str) -> Res<String> {
-    let all = load(core, Some(vault_id))?;
-    Ok(find_named(&all, query, &SNIPPETS)?
+    Ok(take_snippet(load(core, Some(vault_id))?, query)?
         .snippet
-        .snippet_id
-        .clone())
+        .snippet_id)
 }
 
 /// Where a snippet's command comes from.
@@ -197,16 +192,20 @@ pub fn run(device: &Device, offline: bool, action: SnippetWrite) -> Res<()> {
                 .as_deref()
                 .map(str::trim)
                 .filter(|l| !l.is_empty())
-                .map_or_else(|| first_line(&command), str::to_owned);
+                .map_or_else(|| default_label(&command), str::to_owned);
             let snippet = Snippet {
                 snippet_id: mint_id(&label, "snippet"),
                 label: label.clone(),
                 command,
                 tags: tags.as_deref().map(list).unwrap_or_default(),
             };
-            core.save_snippet(target.vault_id, snippet)?;
+            stored(
+                &target.name,
+                core.save_snippet(target.vault_id.clone(), snippet),
+            )?;
             commit(
                 device,
+                &target.vault_id,
                 offline,
                 &format!("Added snippet {}", one_line(&label)),
             )
@@ -219,8 +218,7 @@ pub fn run(device: &Device, offline: bool, action: SnippetWrite) -> Res<()> {
             vault,
         } => {
             let scope = vault.scope(core)?;
-            let all = load(core, scope.as_deref())?;
-            let found = find_named(&all, &name, &SNIPPETS)?;
+            let found = take_snippet(load(core, scope.as_deref())?, &name)?;
             let mut snippet = found.snippet.clone();
             let only_fields = !body.given() && (label.is_some() || tags.is_some());
             if !only_fields {
@@ -229,7 +227,7 @@ pub fn run(device: &Device, offline: bool, action: SnippetWrite) -> Res<()> {
             if let Some(label) = label {
                 let label = label.trim();
                 snippet.label = if label.is_empty() {
-                    first_line(&snippet.command)
+                    default_label(&snippet.command)
                 } else {
                     label.to_owned()
                 };
@@ -238,13 +236,20 @@ pub fn run(device: &Device, offline: bool, action: SnippetWrite) -> Res<()> {
                 snippet.tags = list(&tags);
             }
             let shown = one_line(&snippet.label);
-            core.save_snippet(found.vault_id.clone(), snippet)?;
-            commit(device, offline, &format!("Changed snippet {shown}"))
+            stored(
+                &found.vault_name,
+                core.save_snippet(found.vault_id.clone(), snippet),
+            )?;
+            commit(
+                device,
+                &found.vault_id,
+                offline,
+                &format!("Changed snippet {shown}"),
+            )
         }
         SnippetWrite::Rm { name, vault, yes } => {
             let scope = vault.scope(core)?;
-            let all = load(core, scope.as_deref())?;
-            let found = find_named(&all, &name, &SNIPPETS)?;
+            let found = take_snippet(load(core, scope.as_deref())?, &name)?;
             let id = &found.snippet.snippet_id;
             let mut warning = format!(
                 "This deletes the snippet \"{}\" from vault \"{}\".\n",
@@ -262,9 +267,13 @@ pub fn run(device: &Device, offline: bool, action: SnippetWrite) -> Res<()> {
                 ));
             }
             confirm(yes, &warning)?;
-            core.delete_snippet(found.vault_id.clone(), id.clone())?;
+            stored(
+                &found.vault_name,
+                core.delete_snippet(found.vault_id.clone(), id.clone()),
+            )?;
             commit(
                 device,
+                &found.vault_id,
                 offline,
                 &format!("Deleted snippet {}", one_line(&found.snippet.label)),
             )
@@ -285,7 +294,7 @@ fn in_editor(current: &str) -> Res<String> {
         .map_or(0, |d| d.as_millis());
     let path =
         std::env::temp_dir().join(format!("unissh-snippet-{}-{millis}.sh", std::process::id()));
-    write_private(&path, current)?;
+    write_private(&path, current.as_bytes())?;
     let edited = launch(&editor, &path).and_then(|status| {
         if status.success() {
             std::fs::read_to_string(&path).map_err(Failure::from)
@@ -297,23 +306,6 @@ fn in_editor(current: &str) -> Res<String> {
     });
     best_effort(std::fs::remove_file(&path));
     edited
-}
-
-/// Creates `path` (it must not exist) readable by its owner only.
-fn write_private(path: &Path, text: &str) -> Res<()> {
-    use std::io::Write as _;
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o600);
-    }
-    let mut file = options
-        .open(path)
-        .map_err(|e| Failure::msg(format!("cannot create {}: {e}", path.display())))?;
-    file.write_all(text.as_bytes())?;
-    Ok(())
 }
 
 /// Runs `editor` on `path` as git does: through the shell, so a value like
@@ -335,15 +327,15 @@ fn launch(editor: &str, path: &Path) -> Res<ExitStatus> {
 
 #[cfg(test)]
 mod tests {
-    use super::first_line;
+    use super::default_label;
 
     /// A snippet without a label is named after its command, as in the app.
     #[test]
     fn the_default_label_is_the_commands_first_line_cut_to_40() {
         assert_eq!(
-            first_line("  systemctl restart nginx\nsecond"),
+            default_label("  systemctl restart nginx\nsecond"),
             "systemctl restart nginx"
         );
-        assert_eq!(first_line(&"x".repeat(60)).len(), 40);
+        assert_eq!(default_label(&"x".repeat(60)).len(), 40);
     }
 }

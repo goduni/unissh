@@ -2,10 +2,12 @@
 //! found by the name people type, and resolved into a connection the way the
 //! app resolves it.
 
-use std::fmt::Write as _;
+use std::fmt::{Display, Write as _};
 
 use serde_json::{json, Value};
-use unissh_ffi::{AuthMethod, ConnectionProfile, Core, JumpHost, ProfileAuth, ProxyConfig};
+use unissh_ffi::{
+    AuthMethod, ConnectionProfile, Core, JumpHost, ProfileAuth, ProxyConfig, ServerGroup,
+};
 
 use crate::failure::{Failure, Res};
 use crate::tty::one_line;
@@ -47,22 +49,41 @@ impl Host {
     }
 }
 
-/// Every host of every vault, sorted by vault, then label.
+/// What `list` gives for every vault, each item wrapped with its vault by
+/// `wrap(vault_id, vault_name, item)`.
 ///
 /// A vault that cannot be read is reported and skipped rather than failing the
-/// whole list: the other vaults' hosts are still reachable.
-pub fn load(core: &Core) -> Res<Vec<Host>> {
-    let mut hosts = Vec::new();
+/// whole list: the other vaults' items are still reachable.
+pub fn per_vault<I, T, E: Display>(
+    core: &Core,
+    list: impl Fn(String) -> Result<Vec<I>, E>,
+    wrap: impl Fn(&str, &str, I) -> T,
+) -> Res<Vec<T>> {
+    let mut items = Vec::new();
     for vault in core.list_vaults()? {
-        match core.list_connections(vault.vault_id.clone()) {
-            Ok(profiles) => hosts.extend(profiles.into_iter().map(|profile| Host {
-                vault_id: vault.vault_id.clone(),
-                vault_name: vault.name.clone(),
-                profile,
-            })),
+        match list(vault.vault_id.clone()) {
+            Ok(found) => items.extend(
+                found
+                    .into_iter()
+                    .map(|item| wrap(&vault.vault_id, &vault.name, item)),
+            ),
             Err(e) => eprintln!("unissh: skipping vault \"{}\": {e}", one_line(&vault.name)),
         }
     }
+    Ok(items)
+}
+
+/// Every host of every vault, sorted by vault, then label.
+pub fn load(core: &Core) -> Res<Vec<Host>> {
+    let mut hosts = per_vault(
+        core,
+        |vault_id| core.list_connections(vault_id),
+        |vault_id, vault_name, profile| Host {
+            vault_id: vault_id.to_owned(),
+            vault_name: vault_name.to_owned(),
+            profile,
+        },
+    )?;
     hosts.sort_by_cached_key(|h| (h.vault_name.to_lowercase(), h.profile.label.to_lowercase()));
     Ok(hosts)
 }
@@ -79,37 +100,30 @@ pub fn filter<'h>(hosts: &'h [Host], filter: Option<&str>, tag: Option<&str>) ->
         .collect()
 }
 
-/// Something in a vault that people name on the command line: a host, a
-/// group, a secret, a snippet.
+/// A vault item people name on the command line: a host, a snippet, a group.
 pub trait Named {
-    /// The name of the vault it lives in.
+    /// What it is, for messages ("host").
+    const KIND: &'static str;
+    /// The command that lists them, for the "no match" hint.
+    const LISTED_BY: Option<&'static str>;
+    /// The name of the vault it is in.
     fn vault_name(&self) -> &str;
     /// Its label.
     fn label(&self) -> &str;
-    /// Another name it answers to: a host's address, an item's id.
-    fn alias(&self) -> &str;
-    /// What tells it apart from others with the same label, for an ambiguity.
-    fn detail(&self) -> String;
+    /// Another name it answers to after the labels (a host's address).
+    fn address(&self) -> Option<&str> {
+        None
+    }
+    /// What the list of candidates shows after `vault/label`.
+    fn detail(&self) -> String {
+        String::new()
+    }
 }
-
-/// The kind of thing a lookup is after, for what its errors say.
-pub struct Kind {
-    /// One of them: "host".
-    pub one: &'static str,
-    /// Several: "hosts".
-    pub many: &'static str,
-    /// The command that lists them.
-    pub list: &'static str,
-}
-
-/// Hosts, for [`find_named`].
-pub const HOSTS: Kind = Kind {
-    one: "host",
-    many: "hosts",
-    list: "unissh hosts",
-};
 
 impl Named for Host {
+    const KIND: &'static str = "host";
+    const LISTED_BY: Option<&'static str> = Some("unissh hosts");
+
     fn vault_name(&self) -> &str {
         &self.vault_name
     }
@@ -118,8 +132,8 @@ impl Named for Host {
         &self.profile.label
     }
 
-    fn alias(&self) -> &str {
-        &self.profile.host
+    fn address(&self) -> Option<&str> {
+        Some(&self.profile.host)
     }
 
     fn detail(&self) -> String {
@@ -127,9 +141,48 @@ impl Named for Host {
     }
 }
 
+/// A host group and the vault it lives in.
+pub struct Group {
+    /// The vault's id.
+    pub vault_id: String,
+    /// The vault's name.
+    pub vault_name: String,
+    /// The group.
+    pub group: ServerGroup,
+}
+
+impl Named for Group {
+    const KIND: &'static str = "group";
+    const LISTED_BY: Option<&'static str> = Some("unissh groups list");
+
+    fn vault_name(&self) -> &str {
+        &self.vault_name
+    }
+
+    fn label(&self) -> &str {
+        &self.group.label
+    }
+}
+
+/// Every group of every vault.
+pub fn load_groups(core: &Core) -> Res<Vec<Group>> {
+    per_vault(
+        core,
+        |vault_id| core.list_groups(vault_id),
+        |vault_id, vault_name, group| Group {
+            vault_id: vault_id.to_owned(),
+            vault_name: vault_name.to_owned(),
+            group,
+        },
+    )
+}
+
 /// A borrowed one answers to the same names, so a lookup can run over a
 /// narrowed list (`--vault`) without copying it.
 impl<T: Named> Named for &T {
+    const KIND: &'static str = T::KIND;
+    const LISTED_BY: Option<&'static str> = T::LISTED_BY;
+
     fn vault_name(&self) -> &str {
         (**self).vault_name()
     }
@@ -138,8 +191,8 @@ impl<T: Named> Named for &T {
         (**self).label()
     }
 
-    fn alias(&self) -> &str {
-        (**self).alias()
+    fn address(&self) -> Option<&str> {
+        (**self).address()
     }
 
     fn detail(&self) -> String {
@@ -147,52 +200,57 @@ impl<T: Named> Named for &T {
     }
 }
 
-/// The host `query` names (see [`find_named`]).
+/// The host `query` names: `vault/label`, else a label (any case), else the
+/// one label it begins, else a host name. Several matches are an error that
+/// lists them, never a guess.
 pub fn find<'h>(hosts: &'h [Host], query: &str) -> Res<&'h Host> {
-    find_named(hosts, query, &HOSTS)
+    find_named(hosts, query)
 }
 
-/// The one of `items` that `query` names: `vault/label`, else a label (any
-/// case), else the one label it begins, else an alias (a host name, an item
-/// id). Several matches are an error that lists them, never a guess.
-pub fn find_named<'n, T: Named>(items: &'n [T], query: &str, kind: &Kind) -> Res<&'n T> {
+/// The item `query` names, by the rules of [`find`]: `vault/label`, a label,
+/// the one label it begins, an address.
+pub fn find_named<'i, T: Named>(items: &'i [T], query: &str) -> Res<&'i T> {
     let q = query.trim().to_lowercase();
-    let by = |pred: &dyn Fn(&T) -> bool| items.iter().filter(|&n| pred(n)).collect::<Vec<_>>();
+    let by = |pred: &dyn Fn(&T) -> bool| items.iter().filter(|&i| pred(i)).collect::<Vec<_>>();
     let qualified = q.split_once('/').map_or_else(Vec::new, |(vault, label)| {
-        by(&|n| n.vault_name().to_lowercase() == vault && n.label().to_lowercase() == label)
+        by(&|i| i.vault_name().to_lowercase() == vault && i.label().to_lowercase() == label)
     });
     let rounds = [
         qualified,
-        by(&|n| n.label().to_lowercase() == q),
-        by(&|n| n.label().to_lowercase().starts_with(&q)),
-        by(&|n| n.alias().to_lowercase() == q),
+        by(&|i| i.label().to_lowercase() == q),
+        by(&|i| i.label().to_lowercase().starts_with(&q)),
+        by(&|i| i.address().is_some_and(|a| a.to_lowercase() == q)),
     ];
     for found in rounds {
         match found.as_slice() {
             [] => {}
             [one] => return Ok(*one),
-            many => return Err(Failure::msg(ambiguous(query, many, kind))),
+            many => return Err(Failure::msg(ambiguous(query, many))),
         }
     }
+    let hint = T::LISTED_BY.map_or_else(String::new, |cmd| format!(" (`{cmd}` lists them)"));
     Err(Failure::msg(format!(
-        "no {} matches \"{query}\" (`{}` lists them)",
-        kind.one, kind.list
+        "no {} matches \"{query}\"{hint}",
+        T::KIND
     )))
 }
 
-fn ambiguous<T: Named>(query: &str, many: &[&T], kind: &Kind) -> String {
+fn ambiguous<T: Named>(query: &str, many: &[&T]) -> String {
     let mut text = format!(
-        "\"{query}\" matches several {}; name one as vault/label:",
-        kind.many
+        "\"{query}\" matches several {}s; name one as vault/label:",
+        T::KIND
     );
-    for n in many {
+    for i in many {
         let _ = write!(
             text,
-            "\n  {}/{}  {}",
-            one_line(n.vault_name()),
-            one_line(n.label()),
-            one_line(&n.detail())
+            "\n  {}/{}",
+            one_line(i.vault_name()),
+            one_line(i.label())
         );
+        let detail = i.detail();
+        if !detail.is_empty() {
+            let _ = write!(text, "  {}", one_line(&detail));
+        }
     }
     text
 }
