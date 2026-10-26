@@ -103,7 +103,8 @@ const fn special(_file_type: fs::FileType) -> bool {
 #[derive(Debug, Clone, Copy)]
 struct Names {
     /// Refuse what Windows reads into a name: `\` between names, `:` for a
-    /// drive or an alternate data stream.
+    /// drive or an alternate data stream, a trailing dot or space (dropped, so
+    /// `a.` is `a`), and the device names (`CON`, `NUL`, `COM1`, …).
     windows: bool,
     /// Refuse a name that differs from another in its directory only in case,
     /// which a case-insensitive file system would merge into one file.
@@ -131,8 +132,23 @@ impl Names {
             (parts.next(), parts.next()),
             (Some(Component::Normal(part)), None) if part == name
         );
-        single && !(self.windows && name.contains(['\\', ':']))
+        single && (!self.windows || windows_holds(name))
     }
+}
+
+/// Whether Windows keeps `name` as the name it is.
+fn windows_holds(name: &str) -> bool {
+    const DEVICES: [&str; 4] = ["CON", "PRN", "AUX", "NUL"];
+    let stem = name.split('.').next().unwrap_or(name).trim_end();
+    let numbered = |prefix: &str| match stem.as_bytes() {
+        [a, b, c, b'1'..=b'9'] => [*a, *b, *c].eq_ignore_ascii_case(prefix.as_bytes()),
+        _ => false,
+    };
+    !name.contains(['\\', ':'])
+        && !name.ends_with(['.', ' '])
+        && !DEVICES.iter().any(|d| stem.eq_ignore_ascii_case(d))
+        && !numbered("COM")
+        && !numbered("LPT")
 }
 
 /// One entry of a directory listing.
@@ -653,14 +669,28 @@ mod tests {
             windows: true,
             fold_case: false,
         };
+        assert!(Names::OWN.holds("..."));
         for names in [Names::OWN, windows] {
             assert!(names.holds("a.txt"), "{names:?}");
-            assert!(names.holds("..."), "{names:?}");
+            assert!(names.holds("console.log"), "{names:?}");
             for bad in ["", ".", "..", "a/b", "/etc", "a/", "./a"] {
                 assert!(!names.holds(bad), "{bad:?} with {names:?}");
             }
         }
-        for bad in [r"..\x", r"a\b", "C:x", "C:", "f.txt:stream"] {
+        for bad in [
+            r"..\x",
+            r"a\b",
+            "C:x",
+            "C:",
+            "f.txt:stream",
+            "...",
+            "a.",
+            "a ",
+            "CON",
+            "nul.txt",
+            "com1",
+            "LPT9.log",
+        ] {
             assert!(!windows.holds(bad), "{bad:?}");
         }
         #[cfg(unix)]
