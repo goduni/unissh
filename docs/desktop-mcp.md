@@ -82,18 +82,30 @@ It speaks stdio by default, so an agent can launch it:
 
 ```sh
 unissh mcp integrations add "Claude Code"
-unissh mcp grants set "Claude Code" web db
+unissh mcp grants set "Claude Code" web --trusted --for 8h
 claude mcp add unissh -- unissh mcp
 ```
 
-`unissh mcp --http [--port N]` serves loopback HTTP with bearer tokens exactly as
-described here. What this page sets in the desktop's MCP screen is a subcommand
-there: `unissh mcp integrations`, `unissh mcp grants` (hosts, expiry, confirmation
-or trusted, command ceiling, per-grant limits) and `unissh mcp limits`. Commands of
-a confirm grant are asked about on the controlling terminal (`/dev/tty`) with the
-same exact-command review and two-minute expiry; without a terminal they are
-refused with `approval_unavailable`. The CLI keeps its own integrations and grants
-in its device directory; it does not share them with a desktop app on the same machine.
+A stdio server runs **trusted grants only**. The terminal belongs to the client
+that started it, so it asks nothing: commands of confirm grants, and hosts that ask
+for a password or a one-time code, are refused with `approval_unavailable`, and it
+needs an unlock that asks nothing (a password file or no master password). Per-command
+confirmation exists only with `unissh mcp --http [--port N]` started in a terminal
+of your own: loopback HTTP with bearer tokens exactly as described here, and the
+questions on that terminal with the same exact-command review and two-minute expiry.
+
+An agent with a shell on the same OS account and a non-interactive unlock (a
+password file) has whatever the vaults hold: it can run `unissh` itself. CLI grants
+and approvals cannot constrain it; they bound what an agent does through MCP.
+
+What this page sets in the desktop's MCP screen is a subcommand there:
+`unissh mcp integrations`, `unissh mcp grants` (hosts, expiry, confirmation or
+trusted, command ceiling, per-grant limits) and `unissh mcp limits`. Commands that
+widen access ask for the master password typed on the terminal. On Linux the CLI
+pauses on a logind session lock or sleep, as the desktop does; it has no screensaver
+fallback, and on macOS and Windows it does not observe a lock. The CLI keeps its own
+integrations and grants in its device directory; it does not share them with a
+desktop app on the same machine.
 
 ## Tools and connection lifetime
 

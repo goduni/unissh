@@ -855,15 +855,30 @@ namespaces (remote IDEs/containers/WSL) are unsupported, not exposed through LAN
 The CLI's `unissh mcp` reuses this broker. Its stdio transport authenticates
 nobody: the process owner is the caller for the integration named at start, so an
 attacker who can launch processes as that user can act as any of its integrations,
-within their native grants and approval policy. That user can already read the
-unlocked CLI device, so this adds no authority beyond the grants themselves. Manual
-approval moves from a native dialog to the controlling terminal. The terminal is
-the boundary: a process that can write to it can fake prompt text or type an
-answer, as it could for `sudo` or `ssh`. When a full-screen agent shares that
-terminal, its input and the question compete; the README steers such setups to
-trusted grants or HTTP mode in a separate terminal. Without a terminal, manual
-commands fail closed. Grant edits from another process reach a running server
-through the storage revision (SQLite `data_version`), so revocation is immediate.
+within their native grants. That user can already read the unlocked CLI device.
+**An agent with a shell on the same account and a non-interactive unlock (a password
+file, or no master password) has whatever the vaults hold**: CLI grants and
+approvals cannot constrain it, because it can unlock and act without MCP. They bound
+an agent that only speaks MCP.
+
+The stdio server is fail-closed. Its terminal, if any, belongs to the client that
+spawned it, so it prompts for nothing (no unlock, no approval, no SSH password or
+one-time code) and runs trusted grants only; everything that needs an answer fails
+with `approval_unavailable`. Manual approval exists only in `--http` mode with stdin
+as the controlling terminal, a terminal the user opened for the server. There the
+terminal is the boundary: a process that can write to it can fake prompt text or
+type an answer, as it could for `sudo` or `ssh`. Widening commands (`grants set`,
+`integrations add`, `integrations rotate`) require the master password typed on a
+terminal, not a password file or `--yes`; an agent that knows the password and can
+drive a pseudo-terminal still gets past this, which is the case above. Grant edits
+from another process reach a running server through the storage revision (SQLite
+`data_version`): revocation is immediate, and so is the cost: any commit to the
+database from another process (a grant edit for another integration, a sync or a
+vault edit by another `unissh` command) revokes every live grant, cancelling the
+commands and sessions in flight, before the unchanged saved grants are restored. A running HTTP server keeps the token list it read
+at start until restarted. On Linux the server suspends on logind's session `Lock`
+and `PrepareForSleep(true)` and resumes on `Unlock`/wake, like the desktop's native
+half; without logind, and on macOS and Windows, the CLI does not observe a lock.
 
 This feature changes neither ciphertext sync nor vault/AAD formats. Its separately
 versioned local digest configuration is not synced. Temporary SQLite revision

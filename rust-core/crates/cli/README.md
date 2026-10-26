@@ -91,47 +91,74 @@ the same nine tools, the same broker and grant policy, over this machine's vault
 An agent reaches only the hosts you grant it, and you decide how its commands are
 approved. Nothing the agent sends can grant, approve or widen anything.
 
+**What it cannot protect against.** An agent with a shell on the same OS account,
+on a device that unlocks without a typed password (`--password-file`, or a copy
+without a master password), has whatever the vaults hold: it can read that file and
+run `unissh` itself. CLI grants and approvals cannot constrain it; they bound what an
+agent does through MCP. Give such an agent a separate OS account or machine, or keep
+the master password typed.
+
 ```bash
 unissh mcp integrations add "Claude Code"            # prints a token, used only with --http
-unissh mcp grants set "Claude Code" web db           # confirm each command (the default)
 unissh mcp grants set "Claude Code" web --trusted --for 8h --command-limit 30m
+unissh mcp grants set "Claude Code" web db           # confirm each command (--http only)
 unissh mcp grants list [--json] | unissh mcp grants rm "Claude Code" (or --all)
 unissh mcp limits [--max-connections 8] [--command-history 256] [--output-total 8]
-claude mcp add unissh -- unissh mcp                  # stdio: the agent starts the server
-unissh mcp --http [--port 8765]                      # loopback HTTP with bearer tokens
+claude mcp add unissh -- unissh mcp                  # stdio: trusted grants only (below)
+unissh mcp --http [--port 8765]                      # loopback HTTP, in a terminal of its own
 ```
 
 - **Transports.** By default it speaks MCP on stdin/stdout: the agent launches it,
   and as the process owner it acts for one integration (`--integration NAME`, or the
   only one there is), with no token. `--http` serves `http://127.0.0.1:<port>/mcp`
   exactly like the desktop: every integration authenticates with its own
-  `Authorization: Bearer <token>`. The port is remembered for next time.
+  `Authorization: Bearer <token>`. The port is remembered for next time. Global
+  flags (`--offline`, `--home`, `--password-file`) go anywhere; the serving flags
+  (`--integration`, `--http`, `--port`, `--verbose`) only with `unissh mcp` itself,
+  not next to a subcommand.
+- **stdio runs trusted grants only.** A client that starts `unissh mcp` owns its
+  terminal (Claude Code draws its screen there), so a stdio server asks nothing on
+  any terminal: commands of confirm grants are refused with the
+  `approval_unavailable` tool error, and so are connections to hosts that ask for a
+  password or a one-time code (store their key or password in the vault instead).
+  It starts only if the vaults open without a question: `--password-file` (or
+  `UNISSH_PASSWORD_FILE`) or no master password, and a kept Secret Key. The same
+  holds for `--http` started without a terminal of its own (systemd, `nohup`, stdin
+  redirected).
+- **Approvals** happen only in `unissh mcp --http` started in a terminal of your own
+  (its stdin is the controlling terminal). A command under a confirm grant is then
+  asked about there, on `/dev/tty`: the exact command, working directory,
+  environment and stdin in escaped string notation, the host, and the application
+  asking. Only a typed `yes` allows it; anything else denies, and an unanswered
+  question expires after two minutes, as in the app. Sign-in prompts of the hosts
+  an agent connects to are asked on the same terminal, one question at a time.
 - **Grants** mirror the desktop's access editor: hosts (named as for `unissh ssh`,
   across vaults), an expiry (`--for 30m|8h|7d`, default none), confirmation or
   `--trusted`, the longest a command may run (`--command-limit`, 1m–24h, default
   10m) and the per-grant resource limits (`--max-connections`,
   `--max-active-commands`, `--command-history`, `--session-history`,
   `--output-per-command`). `grants set` replaces the integration's previous grant
-  and asks first (`--yes` skips the question, not the summary). A grant is saved in
-  the encrypted database and resumes after a restart while its hosts and the
-  security records are unchanged; `grants list` says when one needs granting again.
-  Granting, revoking, rotating or removing from another terminal applies to a
-  running server at once. A running `--http` server reads new tokens at its next start.
-- **Approvals.** A command under a confirm grant is asked about on the controlling
-  terminal (`/dev/tty`), never on stdout: the exact command, working directory,
-  environment and stdin in escaped string notation, the host, and the
-  application asking. Only a typed `yes` allows it; anything else denies, and an
-  unanswered question expires after two minutes, as in the app. Without a
-  controlling terminal (systemd, `nohup`, a detached agent) such commands are refused
-  with the `approval_unavailable` tool error; use `--trusted` grants for unattended
-  use. Sign-in prompts of the hosts an agent connects to (a typed password, one-time
-  codes) are asked on the same terminal, one question at a time.
-- **A full-screen agent shares the terminal.** When an agent such as Claude Code runs
-  `unissh mcp` over stdio, both read the same terminal: the master password at
-  start, approvals and sign-in prompts then compete with the agent's own screen.
-  Use `--password-file` (or a copy without a master password) for the unlock, and
-  either trusted grants or `unissh mcp --http` in a terminal of its own, where the
-  questions have the terminal to themselves.
+  and shows a summary first (`--yes` skips the question). A grant is saved in the
+  encrypted database and resumes after a restart while its hosts and the security
+  records are unchanged; `grants list` says when one needs granting again.
+- **Widening needs the master password, typed.** `grants set`, `integrations add`
+  and `integrations rotate` ask for it on the terminal, whatever `--password-file`
+  or `--yes` say, and are refused without a terminal. (A copy without a master
+  password asks for a typed confirmation instead.) Revoking (`grants rm`,
+  `integrations rm`) asks for nothing more than any command.
+- **Changes from another terminal** apply to a running server at once, through the
+  database: a revocation stops that integration's work immediately. Any write to the
+  database by another process (a grant for any integration, a sync, a vault edit by
+  another `unissh` command) also cancels every command and session in flight on the
+  server before the unchanged grants come back, so the outcome of a command that
+  was running may be unknown to the agent. A running `--http` server reads tokens
+  only at start: restart it after `integrations rotate` or `rm`, or it keeps
+  accepting the old token.
+- **Lock and sleep (Linux).** Like the desktop, a running server pauses when the
+  session locks or the machine goes to sleep (logind's `Lock` and `PrepareForSleep`):
+  access is revoked, running commands are cancelled, and the saved grants resume on
+  unlock or wake. A desktop that locks without telling logind does not pause it, and
+  on macOS and Windows nothing is observed.
 - **Lifetime.** The vaults are unlocked for the life of the process (the interactive
   list's idle lock does not apply). It stops when the agent closes stdin, or on
   Ctrl-C, SIGTERM or SIGHUP; access is revoked before the transport stops, recorded

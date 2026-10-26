@@ -69,12 +69,18 @@ starts with `0.`:
 - `unissh mcp`: the desktop's MCP server in the CLI, with the same tools and
   broker. It speaks stdio by default (`claude mcp add unissh -- unissh mcp`), or
   loopback HTTP with bearer tokens (`--http`). `unissh mcp integrations`,
-  `grants` and `limits` do what the desktop's MCP screen does. Commands of a
-  confirm grant are asked about on the controlling terminal; without one they are
-  refused with the new `approval_unavailable` tool error. In the core, the MCP
-  crate gains a stdio transport (`serve_stdio`, rmcp `transport-io`), and the
-  broker gains `pending_approvals`, `set_manual_approval_available` and the
-  limits file helpers the desktop now uses too.
+  `grants` and `limits` do what the desktop's MCP screen does. Over stdio it asks
+  nothing on any terminal and runs trusted grants only: confirm grants' commands
+  and hosts that ask for a password or code fail with the new
+  `approval_unavailable` tool error. Per-command confirmation is asked on the
+  terminal of `unissh mcp --http` started in a terminal of its own. Granting,
+  adding and rotating integrations ask for the master password typed on the
+  terminal. On Linux it pauses on a logind session lock or sleep. An agent with a
+  shell as you and a password file can do whatever the vaults allow: the CLI's
+  grants cannot constrain it. In the core, the MCP crate gains a stdio transport
+  (`serve_stdio`, rmcp `transport-io`), and the broker gains `pending_approvals`,
+  `is_pending`, `set_manual_approval_available`, `made_recordings`,
+  `PromptFactory::can_ask` and the limits file helpers the desktop now uses too.
 - Bindings: `ExecHandleFfi::close_stdin` ends a streaming command's input and
   keeps its output coming; `Core::wait_for_recordings` waits for session
   recordings still to be written (a recorded session counts from the moment it
