@@ -76,20 +76,20 @@ pub use unissh_ssh_transport::AgentCaller;
 uniffi::setup_scaffolding!();
 
 /// Item type for an SSH key (public metadata).
-const ITEM_TYPE_SSH_KEY: u32 = 1;
+pub const ITEM_TYPE_SSH_KEY: u32 = 1;
 /// Item type for an SSH user certificate.
 const ITEM_TYPE_SSH_CERT: u32 = 2;
 /// Item type for a connection profile (a saved "host").
 const ITEM_TYPE_CONNECTION: u32 = 3;
 /// Item type for a server password (content is the UTF-8 bytes of the password).
-const ITEM_TYPE_PASSWORD: u32 = 4;
+pub const ITEM_TYPE_PASSWORD: u32 = 4;
 /// Item type for a host group (content is JSON [`StoredGroup`]).
 const ITEM_TYPE_GROUP: u32 = 5;
 /// Item type for an encrypted note (content is arbitrary UTF-8).
-const ITEM_TYPE_NOTE: u32 = 6;
+pub const ITEM_TYPE_NOTE: u32 = 6;
 /// Item type for a personal identity (content is JSON [`StoredIdentity`]:
 /// username + references to a key/password item in the same vault).
-const ITEM_TYPE_IDENTITY: u32 = 7;
+pub const ITEM_TYPE_IDENTITY: u32 = 7;
 /// Item type for a binding of an identity to a shared host (content is JSON
 /// [`StoredBinding`]). Lives in the PERSONAL vault; keyed by (team_vault_id,
 /// profile_uid). Synced only between the account's devices.
