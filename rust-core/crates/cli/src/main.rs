@@ -15,14 +15,18 @@
 
 mod connect;
 mod device;
+mod edit;
 mod escape;
 mod failure;
 mod home;
+mod host_edit;
 mod hosts;
 mod login;
 mod manage;
 mod picker;
+mod secrets;
 mod server;
+mod snippet_edit;
 mod tty;
 
 use std::path::PathBuf;
@@ -34,8 +38,11 @@ use crate::connect::{exit_code, Direction, Endpoint};
 use crate::device::{Credentials, Device};
 use crate::failure::{Failure, Res};
 use crate::home::Home;
+use crate::host_edit::{GroupsAction, HostsAction};
 use crate::login::{Joining, SignIn};
 use crate::manage::KnownHostsAction;
+use crate::secrets::{IdentitiesAction, KeysAction, SecretsAction};
+use crate::snippet_edit::SnippetWrite;
 
 #[derive(Parser)]
 #[command(
@@ -81,8 +88,11 @@ enum Command {
     Status,
     /// Sync the vaults with the server now.
     Sync,
-    /// List the hosts.
+    /// List the hosts, or add, change or delete one.
+    #[command(args_conflicts_with_subcommands = true)]
     Hosts {
+        #[command(subcommand)]
+        action: Option<Box<HostsAction>>,
         /// Only hosts whose label, address, vault or tags contain this.
         filter: Option<String>,
         /// Only hosts with this tag.
@@ -116,6 +126,30 @@ enum Command {
     /// The host keys this machine has pinned.
     #[command(subcommand, name = "known-hosts")]
     KnownHosts(KnownHosts),
+    /// Host groups: list, add, change or delete them.
+    #[command(subcommand)]
+    Groups(GroupsAction),
+    /// Keys, passwords, notes and identities in the vaults; a secret is shown
+    /// only with `show --reveal`.
+    #[command(subcommand)]
+    Secrets(SecretsAction),
+    /// SSH keys: generate, import, print the public key, rotate.
+    #[command(subcommand)]
+    Keys(KeysAction),
+    /// Personal identities: a user name and the key or password it logs in
+    /// with, for hosts that log in personally.
+    #[command(subcommand)]
+    Identities(IdentitiesAction),
+    /// Saved commands.
+    #[command(subcommand)]
+    Snippets(Snippets),
+}
+
+/// `unissh snippets`.
+#[derive(Subcommand)]
+enum Snippets {
+    #[command(flatten)]
+    Write(SnippetWrite),
 }
 
 #[derive(Subcommand)]
@@ -231,7 +265,20 @@ fn run(cli: Cli) -> Res<u8> {
             server::warn_about(&report);
             Ok(0)
         }
-        Command::Hosts { filter, tag, json } => {
+        Command::Hosts {
+            action: Some(action),
+            ..
+        } => {
+            let device = ready(home, &credentials, offline)?;
+            host_edit::hosts(&device, offline, *action)?;
+            Ok(0)
+        }
+        Command::Hosts {
+            action: None,
+            filter,
+            tag,
+            json,
+        } => {
             let device = ready(home, &credentials, offline)?;
             let all = hosts::load(&device.core)?;
             let shown = hosts::filter(&all, filter.as_deref(), tag.as_deref());
@@ -269,6 +316,31 @@ fn run(cli: Cli) -> Res<u8> {
                 KnownHosts::Forget { host } => KnownHostsAction::Forget { host },
             };
             manage::known_hosts(&device.core, action)?;
+            Ok(0)
+        }
+        Command::Groups(action) => {
+            let device = ready(home, &credentials, offline)?;
+            host_edit::groups(&device, offline, action)?;
+            Ok(0)
+        }
+        Command::Secrets(action) => {
+            let device = ready(home, &credentials, offline)?;
+            secrets::secrets(&device, offline, action)?;
+            Ok(0)
+        }
+        Command::Keys(action) => {
+            let device = ready(home, &credentials, offline)?;
+            secrets::keys(&device, offline, action)?;
+            Ok(0)
+        }
+        Command::Identities(action) => {
+            let device = ready(home, &credentials, offline)?;
+            secrets::identities(&device, offline, action)?;
+            Ok(0)
+        }
+        Command::Snippets(Snippets::Write(action)) => {
+            let device = ready(home, &credentials, offline)?;
+            snippet_edit::run(&device, offline, action)?;
             Ok(0)
         }
     }
