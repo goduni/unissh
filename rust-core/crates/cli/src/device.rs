@@ -128,12 +128,15 @@ pub fn master_password(credentials: &Credentials, prompt: &str) -> Res<Zeroizing
     };
     let text = read_private(path)?
         .ok_or_else(|| Failure::msg(format!("{} does not exist", path.display())))?;
-    // One trailing line ending is the file's, not the password's.
-    let all = text.as_str();
-    let line = all.strip_suffix('\n').unwrap_or(all);
-    Ok(Zeroizing::new(
-        line.strip_suffix('\r').unwrap_or(line).to_owned(),
-    ))
+    Ok(Zeroizing::new(without_line_ending(&text).to_owned()))
+}
+
+/// `text` without one trailing `\n` or `\r\n`: the line ending a file (or
+/// the Enter that ended a line) adds is not part of a secret, anything
+/// beyond that one is.
+pub fn without_line_ending(text: &str) -> &str {
+    let line = text.strip_suffix('\n').unwrap_or(text);
+    line.strip_suffix('\r').unwrap_or(line)
 }
 
 /// Asks the terminal for a secret. Without a terminal the error names `what`

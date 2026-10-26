@@ -10,6 +10,8 @@ use std::time::Duration;
 
 use zeroize::Zeroizing;
 
+use crate::failure::{Failure, Res};
+
 pub use imp::{read_stdin, wait_for_input, window_size, RawMode, Tty, SUPPORTED};
 
 /// `text` without control characters, for one line that came from a server,
@@ -128,6 +130,24 @@ fn ended() -> io::Error {
 /// Whether a typed answer means yes.
 fn is_yes(answer: &str) -> bool {
     matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+}
+
+/// Before a destructive command: shows `warning` and asks to go on, on the
+/// terminal. With `yes` it goes on without asking, but the warning is still
+/// printed (to stderr): `--yes` skips the question, not what the user is told.
+pub fn confirm(yes: bool, warning: &str) -> Res<()> {
+    if yes {
+        eprint!("{warning}");
+        return Ok(());
+    }
+    let mut tty = Tty::open()
+        .map_err(|e| Failure::msg(format!("cannot ask for confirmation ({e}); pass --yes")))?;
+    tty.say(warning)?;
+    if tty.confirm("Continue? [y/N] ")? {
+        Ok(())
+    } else {
+        Err(Failure::msg("nothing changed"))
+    }
 }
 
 impl Tty {
