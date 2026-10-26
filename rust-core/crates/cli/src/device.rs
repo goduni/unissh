@@ -167,27 +167,30 @@ pub fn format_secret_key(hex: &str) -> String {
 /// confirmations) on the terminal.
 struct TtyPrompter;
 
+/// What a keyboard-interactive request says before its fields: who asks, then
+/// the server's title and instruction. Everything in it comes from the remote
+/// host (or the vault), so it is without control characters: it cannot rewrite
+/// the line that says who is asking.
+pub fn prompt_intro(request: &AuthPromptRequest) -> String {
+    let mut text = format!(
+        "{}@{}:{} asks:\n",
+        one_line(&request.user),
+        one_line(&request.host),
+        request.port
+    );
+    for part in [one_line(&request.name), lines(&request.instruction)] {
+        if !part.trim().is_empty() {
+            text.push_str(&part);
+            text.push('\n');
+        }
+    }
+    text
+}
+
 impl AuthPrompter for TtyPrompter {
     fn prompt(&self, request: AuthPromptRequest) -> Option<Vec<String>> {
         let mut tty = Tty::open().ok()?;
-        // Everything here comes from the remote host (or the vault): it is
-        // printed without control characters, so it cannot rewrite the line
-        // that says who is asking.
-        let header = [one_line(&request.name), lines(&request.instruction)]
-            .into_iter()
-            .filter(|s| !s.trim().is_empty())
-            .collect::<Vec<_>>()
-            .join("\n");
-        let intro = format!(
-            "{}@{}:{} asks:\n",
-            one_line(&request.user),
-            one_line(&request.host),
-            request.port
-        );
-        tty.say(&intro).ok()?;
-        if !header.is_empty() {
-            tty.say(&format!("{header}\n")).ok()?;
-        }
+        tty.say(&prompt_intro(&request)).ok()?;
         let mut answers = Vec::with_capacity(request.prompts.len());
         for field in request.prompts {
             let prompt = one_line(&field.prompt);

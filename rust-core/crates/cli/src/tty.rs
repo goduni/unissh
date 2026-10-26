@@ -6,7 +6,7 @@
 //! module changes is put back when its guard is dropped.
 
 use std::io;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use zeroize::Zeroizing;
 
@@ -109,6 +109,12 @@ impl QuietLine {
         }
     }
 
+    /// How many characters the line holds (UTF-8 continuation bytes are part
+    /// of the character before them).
+    fn chars(&self) -> usize {
+        self.text.iter().filter(|b| **b & 0xC0 != 0x80).count()
+    }
+
     /// The line so far, leaving an empty one.
     fn take(&mut self) -> Zeroizing<Vec<u8>> {
         std::mem::replace(&mut self.text, Zeroizing::new(Vec::with_capacity(256)))
@@ -167,6 +173,29 @@ impl Tty {
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
+    /// Prints `prompt` and reads a line a key at a time, echoed when `echo`,
+    /// until Enter — or `None` once `deadline` passes or `stop` says so. Works
+    /// whatever mode the terminal is in (a full-screen program may hold it
+    /// raw), and what was typed before the prompt appeared is discarded, so
+    /// keys meant for something else cannot answer it.
+    pub fn line_until(
+        &mut self,
+        prompt: &str,
+        echo: bool,
+        deadline: Instant,
+        stop: &dyn Fn() -> bool,
+    ) -> io::Result<Option<Zeroizing<String>>> {
+        self.say(prompt)?;
+        let bytes = self.read_line_until(echo, deadline, stop);
+        self.say("\r\n")?;
+        let Some(bytes) = bytes? else {
+            return Ok(None);
+        };
+        let text = std::str::from_utf8(&bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        Ok(Some(Zeroizing::new(text.to_owned())))
+    }
+
     /// Asks a yes/no question; anything but `y`/`yes` is no.
     pub fn confirm(&mut self, prompt: &str) -> io::Result<bool> {
         Ok(is_yes(&self.line(prompt)?))
@@ -198,7 +227,7 @@ mod imp {
     use rustix::io::Errno;
     use rustix::termios::{tcgetattr, tcgetwinsize, tcsetattr, OptionalActions, Termios};
 
-    use super::{cancelled, ended, Key, QuietLine};
+    use super::{cancelled, ended, Key, QuietLine, STOP_TICK};
     use crate::failure::best_effort;
     use zeroize::Zeroizing;
 
@@ -285,6 +314,48 @@ mod imp {
                 (&self.file).write_all(b".")?;
                 if complete(&text) {
                     return Ok(text);
+                }
+            }
+        }
+
+        /// One line a key at a time ([`QuietLine`]) with the terminal's own
+        /// echo, editing and signals off, echoing what the editor keeps when
+        /// `echo`; `None` at `deadline` or once `stop` turns true.
+        pub(super) fn read_line_until(
+            &self,
+            echo: bool,
+            deadline: Instant,
+            stop: &dyn Fn() -> bool,
+        ) -> io::Result<Option<Zeroizing<Vec<u8>>>> {
+            let _quiet = Quiet::on(&self.file)?;
+            let mut editor = QuietLine::new();
+            let mut byte = [0_u8; 1];
+            loop {
+                let left = deadline.saturating_duration_since(Instant::now());
+                if stop() || left.is_zero() {
+                    return Ok(None);
+                }
+                if !ready(self.file.as_fd(), left.min(STOP_TICK))? {
+                    continue;
+                }
+                if (&self.file).read(&mut byte)? == 0 {
+                    return Err(ended());
+                }
+                let [key] = byte;
+                let (bytes, chars) = (editor.text.len(), editor.chars());
+                match editor.key(key) {
+                    Key::More if echo => {
+                        if editor.text.len() > bytes {
+                            (&self.file).write_all(&byte)?;
+                        }
+                        for _ in editor.chars()..chars {
+                            (&self.file).write_all(b"\x08 \x08")?;
+                        }
+                    }
+                    Key::More => {}
+                    Key::Enter => return Ok(Some(editor.take())),
+                    Key::Cancel => return Err(cancelled()),
+                    Key::End => return Err(ended()),
                 }
             }
         }
@@ -416,7 +487,7 @@ mod imp {
 #[cfg(not(unix))]
 mod imp {
     use std::io::{self, Read};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use zeroize::Zeroizing;
 
@@ -459,6 +530,15 @@ mod imp {
         ) -> io::Result<Zeroizing<Vec<u8>>> {
             match *self {}
         }
+
+        pub(super) const fn read_line_until(
+            &self,
+            _echo: bool,
+            _deadline: Instant,
+            _stop: &dyn Fn() -> bool,
+        ) -> io::Result<Option<Zeroizing<Vec<u8>>>> {
+            match *self {}
+        }
     }
 
     /// Raw mode: none here, so no value of this type exists.
@@ -490,6 +570,10 @@ mod imp {
 /// How long the session input loop waits for a key before it looks at the
 /// window size again.
 pub const INPUT_TICK: Duration = Duration::from_millis(100);
+
+/// How often a timed prompt looks whether it is still wanted.
+#[cfg(unix)]
+const STOP_TICK: Duration = Duration::from_millis(200);
 
 #[cfg(test)]
 mod tests {

@@ -21,6 +21,8 @@ mod home;
 mod hosts;
 mod login;
 mod manage;
+mod mcp;
+mod mcp_tty;
 mod picker;
 mod server;
 mod tty;
@@ -116,6 +118,9 @@ enum Command {
     /// The host keys this machine has pinned.
     #[command(subcommand, name = "known-hosts")]
     KnownHosts(KnownHosts),
+    /// Serve the hosts you grant to a local AI agent over MCP (stdio; --http
+    /// for loopback HTTP), and manage its integrations, grants and limits.
+    Mcp(mcp::Mcp),
 }
 
 #[derive(Subcommand)]
@@ -271,6 +276,7 @@ fn run(cli: Cli) -> Res<u8> {
             manage::known_hosts(&device.core, action)?;
             Ok(0)
         }
+        Command::Mcp(args) => mcp::run(home, &credentials, offline, args),
     }
 }
 

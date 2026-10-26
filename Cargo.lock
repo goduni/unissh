@@ -5255,12 +5255,16 @@ name = "unissh-cli"
 version = "0.6.1"
 dependencies = [
  "clap",
+ "log",
  "rustix",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
+ "unissh-automation",
  "unissh-cloud",
  "unissh-ffi",
+ "unissh-mcp",
  "zeroize",
 ]
 

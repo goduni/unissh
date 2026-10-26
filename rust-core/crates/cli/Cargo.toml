@@ -23,10 +23,16 @@ path = "src/bin/unissh-harness.rs"
 [dependencies]
 unissh-ffi = { path = "../ffi" }
 unissh-cloud = { path = "../cloud" }
+# `unissh mcp`: the desktop's MCP transport and broker, over this device's core.
+unissh-mcp = { path = "../mcp" }
+unissh-automation = { path = "../automation", features = ["core"] }
 clap = { version = "4", features = ["derive", "env"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 zeroize = "1"
+# All already in the tree: the MCP server's runtime and its stderr log.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }
+log = "0.4"
 
 # Raw terminal mode, window size, polling the terminal and the user id — through
 # safe wrappers, since the workspace denies `unsafe`. Already in the tree (tempfile).
