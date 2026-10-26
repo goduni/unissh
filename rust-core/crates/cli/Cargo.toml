@@ -27,6 +27,8 @@ clap = { version = "4", features = ["derive", "env"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 zeroize = "1"
+# `export --force`: an owner-only file beside the target, renamed over it.
+tempfile = "3"
 
 # Raw terminal mode, window size, polling the terminal and the user id — through
 # safe wrappers, since the workspace denies `unsafe`. Already in the tree (tempfile).
@@ -35,9 +37,6 @@ rustix = { version = "1", features = ["termios", "event", "process"] }
 # SIGTERM and SIGHUP during a replay, so that it can put the terminal back.
 # Already in the tree (the core, and the server's signal handling).
 tokio = { version = "1", features = ["rt", "signal"] }
-
-[dev-dependencies]
-tempfile = "3"
 
 [lints]
 workspace = true

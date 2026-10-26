@@ -6,11 +6,18 @@
 //! `--speed` and with long pauses cut to `--idle-limit`, the way
 //! `asciinema play` does.
 //!
+//! What a recording holds is not trusted: anyone who can write to a shared
+//! vault, or a compromised host that was recorded, decides it. So it goes
+//! through a [`Filter`] that keeps what draws on the screen and drops what
+//! would reach past it — the clipboard (OSC 52), the title and every other OSC
+//! string, DCS and the other control strings, and the queries a terminal
+//! answers by typing the answer in as input.
+//!
 //! The recording drives this terminal as the session drove the app's: it may
 //! switch to the alternate screen, hide the cursor or turn on mouse reporting.
 //! However playback ends — finished, Ctrl-C, SIGTERM or SIGHUP, an error, a
 //! panic — the terminal is put back: those modes off, and the keyboard as it
-//! was.
+//! was, with nothing the replay provoked left in its input.
 
 use std::io::{self, IsTerminal as _, Write as _};
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -18,10 +25,11 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use serde_json::Value;
+use serde::Deserialize;
+use zeroize::Zeroizing;
 
 use crate::failure::{best_effort, Failure, Res};
-use crate::tty::{self, RawMode};
+use crate::tty::{self, ReplayTerminal};
 
 /// How fast to replay.
 #[derive(Debug, Clone, Copy)]
@@ -35,7 +43,7 @@ pub struct Timing {
 /// One piece of output and when to write it, from the start of playback.
 struct Frame {
     at: Duration,
-    text: String,
+    text: Zeroizing<String>,
 }
 
 /// A recording ready to play.
@@ -43,6 +51,15 @@ struct Cast {
     width: u32,
     height: u32,
     frames: Vec<Frame>,
+}
+
+/// What replay reads of the header. The rest of it (an MCP recording's
+/// command and output) is skipped over, not copied.
+#[derive(Deserialize)]
+struct Header {
+    version: u64,
+    width: Option<u32>,
+    height: Option<u32>,
 }
 
 /// For `--speed` and `--idle-limit`: a positive, finite number.
@@ -64,27 +81,17 @@ impl Cast {
         let mut lines = text.lines().filter(|l| !l.trim().is_empty());
         let header = lines
             .next()
-            .and_then(|line| serde_json::from_str::<Value>(line).ok())
-            .filter(|h| h.get("version").and_then(Value::as_u64) == Some(2))
+            .and_then(|line| serde_json::from_str::<Header>(line).ok())
+            .filter(|h| h.version == 2)
             .ok_or_else(|| Failure::msg("this is not an asciicast v2 recording"))?;
-        let size = |key: &str, default: u32| {
-            header
-                .get(key)
-                .and_then(Value::as_u64)
-                .and_then(|n| u32::try_from(n).ok())
-                .unwrap_or(default)
-        };
         let events = lines.filter_map(|line| {
-            let event = serde_json::from_str::<Value>(line).ok()?;
-            let time = event.get(0)?.as_f64()?;
-            if event.get(1)?.as_str()? != "o" {
-                return None;
-            }
-            Some((time, event.get(2)?.as_str()?.to_owned()))
+            let (time, kind, text) = serde_json::from_str::<(f64, String, String)>(line).ok()?;
+            let text = Zeroizing::new(text);
+            (kind == "o").then_some((time, text))
         });
         Ok(Self {
-            width: size("width", 80),
-            height: size("height", 24),
+            width: header.width.unwrap_or(80),
+            height: header.height.unwrap_or(24),
             frames: schedule(events, timing),
         })
     }
@@ -93,7 +100,7 @@ impl Cast {
 /// When each event is written: the recorded gaps, each cut to the idle limit,
 /// divided by the speed. A timestamp that goes backwards (a damaged recording)
 /// is a gap of nothing.
-fn schedule(events: impl Iterator<Item = (f64, String)>, timing: Timing) -> Vec<Frame> {
+fn schedule(events: impl Iterator<Item = (f64, Zeroizing<String>)>, timing: Timing) -> Vec<Frame> {
     let mut previous = 0.0_f64;
     let mut at = 0.0_f64;
     events
@@ -111,34 +118,256 @@ fn schedule(events: impl Iterator<Item = (f64, String)>, timing: Timing) -> Vec<
         .collect()
 }
 
-/// The sequences that switch to the alternate screen, and back.
-const ALT_SCREEN_ON: [&str; 3] = ["\x1b[?1049h", "\x1b[?1047h", "\x1b[?47h"];
-const ALT_SCREEN_OFF: [&str; 3] = ["\x1b[?1049l", "\x1b[?1047l", "\x1b[?47l"];
+const ESC: char = '\x1b';
+const BEL: char = '\x07';
+/// CAN and SUB: cancel a sequence in progress.
+const CAN: char = '\x18';
+const SUB: char = '\x1a';
+/// The 8-bit forms of CSI, ST, DECID and the string introducers (DCS, SOS,
+/// OSC, PM, APC): a terminal may act on them as on their `ESC` forms.
+const CSI_8BIT: char = '\u{9b}';
+const ST_8BIT: char = '\u{9c}';
+const DECID_8BIT: char = '\u{9a}';
+const STRING_8BIT: [char; 5] = ['\u{90}', '\u{98}', '\u{9d}', '\u{9e}', '\u{9f}'];
 
-/// Whether the terminal is on the alternate screen after `text`, given whether
-/// it was before.
-fn alt_screen_after(was: bool, text: &str) -> bool {
-    let last = |seqs: &[&str]| seqs.iter().filter_map(|s| text.rfind(s)).max();
-    match (last(&ALT_SCREEN_ON), last(&ALT_SCREEN_OFF)) {
-        (None, None) => was,
-        (Some(_), None) => true,
-        (None, Some(_)) => false,
-        (Some(on), Some(off)) => on > off,
+/// The longest control sequence kept, in bytes; a longer one is dropped.
+const SEQUENCE_MAX: usize = 256;
+
+/// Where the [`Filter`] is in the output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum State {
+    /// Text.
+    Ground,
+    /// After `ESC`, which is held until what follows says what it starts.
+    Escape,
+    /// In a CSI sequence, held whole until its final byte decides it.
+    Csi,
+    /// In a CSI sequence too long to keep, dropped up to its final byte.
+    CsiDropped,
+    /// In an OSC, DCS, SOS, PM or APC string, dropped up to its end.
+    String,
+    /// After `ESC` in such a string: `\` ends it (ST); anything else ends it
+    /// too and starts a new sequence, as a terminal reads it.
+    StringEscape,
+}
+
+/// What of a recording reaches the terminal: text, and the control sequences
+/// that draw — colours, cursor movement, erasing, scrolling, modes. Dropped:
+///
+/// - every OSC string: the clipboard (52), the title, colours, hyperlinks;
+/// - DCS, SOS, PM and APC strings: terminal capability and setting queries
+///   (XTGETTCAP, DECRQSS), sixel, and whatever an application puts there;
+/// - the CSI queries a terminal answers as if typed: device attributes,
+///   status and cursor reports, mode reports, window reports and moves,
+///   its version, keyboard flags, and the rest in [`answers`];
+/// - DECID (`ESC Z`), which is device attributes again.
+///
+/// Sequences are read across frames: one split over two events is held until
+/// it is whole. The filter also keeps track of the alternate screen, so the
+/// reset at the end knows whether to leave it.
+struct Filter {
+    state: State,
+    /// The CSI sequence being read, introducer included. Never grows past its
+    /// first allocation (see [`SEQUENCE_MAX`]), so no copy is left behind.
+    sequence: Zeroizing<String>,
+    /// Whether the replay has the terminal on the alternate screen.
+    alt_screen: bool,
+}
+
+impl Filter {
+    fn new() -> Self {
+        Self {
+            state: State::Ground,
+            sequence: Zeroizing::new(String::with_capacity(SEQUENCE_MAX + 8)),
+            alt_screen: false,
+        }
+    }
+
+    /// Room in `out` for one frame's worth of `text`: what is kept of it, and
+    /// a sequence held over from the frame before.
+    const fn room(text: &str) -> usize {
+        text.len() + SEQUENCE_MAX + 8
+    }
+
+    /// Appends to `out` what of `text` may reach the terminal.
+    fn feed(&mut self, text: &str, out: &mut String) {
+        for c in text.chars() {
+            self.step(c, out);
+        }
+    }
+
+    fn step(&mut self, c: char, out: &mut String) {
+        match self.state {
+            State::Ground => self.ground(c, out),
+            State::Escape => self.escape(c, out),
+            State::Csi => self.csi(c, out),
+            State::CsiDropped => match c {
+                ESC => self.state = State::Escape,
+                CAN | SUB | '\x40'..='\x7e' => self.state = State::Ground,
+                c if c.is_ascii_control() => out.push(c),
+                _ => {}
+            },
+            State::String => match c {
+                ESC => self.state = State::StringEscape,
+                BEL | ST_8BIT | CAN | SUB => self.state = State::Ground,
+                _ => {}
+            },
+            State::StringEscape => {
+                if c == '\\' {
+                    self.state = State::Ground;
+                } else {
+                    self.state = State::Escape;
+                    self.escape(c, out);
+                }
+            }
+        }
+    }
+
+    fn ground(&mut self, c: char, out: &mut String) {
+        match c {
+            ESC => self.state = State::Escape,
+            CSI_8BIT => self.start_csi(c),
+            c if STRING_8BIT.contains(&c) => self.state = State::String,
+            DECID_8BIT | ST_8BIT => {}
+            c => out.push(c),
+        }
+    }
+
+    fn escape(&mut self, c: char, out: &mut String) {
+        match c {
+            '[' => self.start_csi(c),
+            ']' | 'P' | 'X' | '^' | '_' => self.state = State::String,
+            // DECID: a request for the device attributes.
+            'Z' => self.state = State::Ground,
+            // `ESC ESC`: the second one starts the sequence.
+            ESC => {}
+            CAN | SUB => self.state = State::Ground,
+            // A control in the middle is carried out there, as a terminal does.
+            c if c.is_ascii_control() => out.push(c),
+            c => {
+                // RIS, a full reset, also leaves the alternate screen.
+                if c == 'c' {
+                    self.alt_screen = false;
+                }
+                out.push(ESC);
+                out.push(c);
+                self.state = State::Ground;
+            }
+        }
+    }
+
+    fn start_csi(&mut self, c: char) {
+        self.sequence.clear();
+        if c == '[' {
+            self.sequence.push(ESC);
+        }
+        self.sequence.push(c);
+        self.state = State::Csi;
+    }
+
+    fn csi(&mut self, c: char, out: &mut String) {
+        match c {
+            ESC => self.state = State::Escape,
+            CAN | SUB => self.state = State::Ground,
+            // Parameters and intermediates.
+            '\x20'..='\x3f' if self.sequence.len() < SEQUENCE_MAX => self.sequence.push(c),
+            '\x20'..='\x3f' => self.state = State::CsiDropped,
+            '\x40'..='\x7e' => {
+                self.sequence.push(c);
+                let body = self
+                    .sequence
+                    .strip_prefix("\x1b[")
+                    .or_else(|| self.sequence.strip_prefix(CSI_8BIT))
+                    .unwrap_or_default();
+                if !answers(body) {
+                    if let Some(on) = alt_screen_switch(body) {
+                        self.alt_screen = on;
+                    }
+                    out.push_str(&self.sequence);
+                }
+                self.state = State::Ground;
+            }
+            // DEL is ignored inside a sequence.
+            '\x7f' => {}
+            c if c.is_ascii_control() => out.push(c),
+            // Not part of a sequence: the sequence is broken, and dropped.
+            c => {
+                self.state = State::Ground;
+                self.ground(c, out);
+            }
+        }
     }
 }
 
-/// What puts the terminal back after a replay: the main screen (only when the
-/// replay left it — leaving it otherwise restores a stale cursor), plain text,
-/// a visible cursor, no mouse reporting, no bracketed paste, normal cursor and
-/// keypad keys. The shell that gets the terminal next sets what it wants.
+/// Whether the CSI sequence `body` (after `CSI`, final byte included) makes
+/// the terminal answer as if the user typed it.
+fn answers(body: &str) -> bool {
+    let Some(last) = body.chars().last() else {
+        return false;
+    };
+    let private = body.chars().next().filter(|c| ('<'..='?').contains(c));
+    let between: String = body.chars().filter(|c| (' '..='/').contains(c)).collect();
+    match (last, private, between.as_str()) {
+        // Device attributes (DA1, DA2, DA3); device status, cursor position
+        // and every other `n` report; window reports (XTWINOPS — dropped
+        // whole: the rest of it moves and resizes the window).
+        ('c' | 'n' | 't', _, _)
+        // Mode (DECRQM), presentation state (DECRQPSR) and tab stop
+        // (DECRQTSR) reports.
+        | ('p' | 'w' | 'u', _, "$")
+        // User-preferred supplemental set (DECRQUPSS), checksum (DECRQCRA),
+        // locator position (DECRQLP), SGR report (XTREPORTSGR).
+        | ('u', _, "&")
+        | ('y', _, "*")
+        | ('|', _, "'" | "#")
+        // Version (XTVERSION), keyboard flags (kitty), key modifiers
+        // (XTQMODKEYS), graphics attributes (XTSMGRAPHICS).
+        | ('q', Some('>'), _)
+        | ('u' | 'm' | 'S', Some('?'), _)
+        // Terminal parameters (DECREQTPARM).
+        | ('x', None, "") => true,
+        _ => false,
+    }
+}
+
+/// `Some(true)` when the CSI sequence `body` switches to the alternate
+/// screen, `Some(false)` when it switches back, `None` otherwise.
+fn alt_screen_switch(body: &str) -> Option<bool> {
+    let modes = body.strip_prefix('?')?;
+    let (modes, on) = if let Some(modes) = modes.strip_suffix('h') {
+        (modes, true)
+    } else {
+        (modes.strip_suffix('l')?, false)
+    };
+    modes
+        .split(';')
+        .any(|mode| matches!(mode, "1049" | "1047" | "47"))
+        .then_some(on)
+}
+
+/// What puts the terminal back after a replay. The main screen, only when
+/// the replay left it: leaving it otherwise restores a stale cursor. Then
+/// plain text in the ASCII set; a visible cursor; no mouse or focus
+/// reporting, no bracketed paste, no kitty or modifyOtherKeys keyboard
+/// modes; normal cursor and keypad keys; line wrap on, insert mode off. Last
+/// the scroll region and origin mode, between a cursor save and restore,
+/// since both move the cursor home. The shell that gets the terminal next
+/// sets what it wants.
 fn reset_sequence(alt_screen: bool) -> String {
     let mut reset = String::new();
     if alt_screen {
         reset.push_str("\x1b[?1049l");
     }
-    reset.push_str(
-        "\x1b[0m\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?1l\x1b>",
-    );
+    reset.push_str(concat!(
+        "\x1b[0m\x0f\x1b(B",
+        "\x1b[?25h",
+        "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l",
+        "\x1b[?1004l\x1b[?2004l",
+        "\x1b[<99u\x1b[>4m",
+        "\x1b[?1l\x1b>",
+        "\x1b[?7h\x1b[4l",
+        "\x1b7\x1b[?6l\x1b[r\x1b8",
+    ));
     reset
 }
 
@@ -148,27 +377,49 @@ const CTRL_C: u8 = 0x03;
 /// Exit status of a replay stopped with Ctrl-C (128 + SIGINT, as a shell says).
 const STOPPED: u8 = 130;
 
+/// How long a failed write waits to see whether a signal explains it: the
+/// hang-up that makes the terminal fail and its SIGHUP arrive apart.
+const SIGNAL_GRACE: Duration = Duration::from_millis(100);
+
 /// The terminal during a replay, put back when dropped — which also happens
 /// when a write fails or the replay panics.
 struct Screen {
-    /// The keyboard, raw so that keys stop the replay instead of echoing into
-    /// it; `None` when stdin is not a terminal.
-    keys: Option<RawMode>,
-    alt_screen: bool,
+    term: ReplayTerminal,
+    filter: Filter,
+    /// The terminal stopped giving keys (it hung up): play on without them.
+    hung_up: bool,
 }
 
 impl Drop for Screen {
     fn drop(&mut self) {
-        let mut out = io::stdout().lock();
         best_effort(
-            out.write_all(reset_sequence(self.alt_screen).as_bytes())
-                .and_then(|()| out.flush()),
+            self.term
+                .write_all(reset_sequence(self.filter.alt_screen).as_bytes())
+                .and_then(|()| self.term.flush()),
         );
-        // `keys` drops after this, so the keyboard comes back last.
+        // `term` drops after this: it drains what the terminal still says,
+        // then gives the keyboard back.
     }
 }
 
 impl Screen {
+    /// Plays `frames`; the exit status as [`play`] gives it.
+    fn run(&mut self, frames: &[Frame], signal: &AtomicU8) -> io::Result<u8> {
+        let start = Instant::now();
+        for frame in frames {
+            if let Some(status) = self.wait_until(start, frame.at, signal)? {
+                return Ok(status);
+            }
+            // A frame already due does not wait, so a replay that fell behind
+            // catches up instead of crawling.
+            let mut out = Zeroizing::new(String::with_capacity(Filter::room(&frame.text)));
+            self.filter.feed(&frame.text, &mut out);
+            self.term.write_all(out.as_bytes())?;
+            self.term.flush()?;
+        }
+        Ok(0)
+    }
+
     /// Waits until `at` after `start`. `Some(status)` when the replay is to
     /// stop: Ctrl-C on the keyboard, or a signal noted in `signal`.
     fn wait_until(
@@ -178,26 +429,24 @@ impl Screen {
         signal: &AtomicU8,
     ) -> io::Result<Option<u8>> {
         loop {
-            match signal.load(Ordering::SeqCst) {
-                0 => {}
-                signo => return Ok(Some(128_u8.saturating_add(signo))),
+            if let Some(status) = signalled(signal) {
+                return Ok(Some(status));
             }
             let left = at.saturating_sub(start.elapsed());
             if left.is_zero() {
                 return Ok(None);
             }
             let tick = left.min(tty::INPUT_TICK);
-            if self.keys.is_none() {
+            if self.hung_up {
                 thread::sleep(tick);
-            } else if tty::wait_for_input(tick)? {
-                let mut buf = [0_u8; 64];
-                match tty::read_stdin(&mut buf)? {
-                    // The keyboard went away: play on without it.
-                    0 => self.keys = None,
-                    n => {
-                        if buf.get(..n).is_some_and(|keys| keys.contains(&CTRL_C)) {
-                            return Ok(Some(STOPPED));
-                        }
+                continue;
+            }
+            let mut keys = [0_u8; 64];
+            match self.term.keys(tick, &mut keys)? {
+                None => self.hung_up = true,
+                Some(n) => {
+                    if keys.get(..n).is_some_and(|keys| keys.contains(&CTRL_C)) {
+                        return Ok(Some(STOPPED));
                     }
                 }
             }
@@ -205,8 +454,31 @@ impl Screen {
     }
 }
 
-/// Replays `cast` on stdout. Returns the exit status: 0 when it played to the
-/// end, 130 after Ctrl-C, 128 + the signal after SIGTERM or SIGHUP.
+/// The exit status for a signal noted in `signal` (128 + its number).
+fn signalled(signal: &AtomicU8) -> Option<u8> {
+    match signal.load(Ordering::SeqCst) {
+        0 => None,
+        signo => Some(128_u8.saturating_add(signo)),
+    }
+}
+
+/// [`signalled`], waiting up to [`SIGNAL_GRACE`] for one: after a failure,
+/// so that a hang-up exits 129 even when the failed write came first.
+fn signalled_soon(signal: &AtomicU8) -> Option<u8> {
+    let start = Instant::now();
+    loop {
+        if let Some(status) = signalled(signal) {
+            return Some(status);
+        }
+        if start.elapsed() >= SIGNAL_GRACE {
+            return None;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Replays `cast` on the terminal. Returns the exit status: 0 when it played
+/// to the end, 130 after Ctrl-C, 128 + the signal after SIGTERM or SIGHUP.
 pub fn play(cast: &str, timing: Timing) -> Res<u8> {
     if !io::stdout().is_terminal() {
         return Err(Failure::msg(
@@ -224,32 +496,17 @@ pub fn play(cast: &str, timing: Timing) -> Res<u8> {
     }
     let signal = Arc::new(AtomicU8::new(0));
     signals::watch(&signal)?;
-    let keys = if io::stdin().is_terminal() {
-        RawMode::for_replay().ok()
-    } else {
-        None
-    };
+    let term = ReplayTerminal::open()
+        .map_err(|e| Failure::msg(format!("a replay needs the controlling terminal: {e}")))?;
     let mut screen = Screen {
-        keys,
-        alt_screen: false,
+        term,
+        filter: Filter::new(),
+        hung_up: false,
     };
-    let start = Instant::now();
-    let mut out = io::stdout().lock();
-    let mut frames = cast.frames.iter().peekable();
-    while let Some(frame) = frames.next() {
-        if let Some(status) = screen.wait_until(start, frame.at, &signal)? {
-            return Ok(status);
-        }
-        out.write_all(frame.text.as_bytes())?;
-        screen.alt_screen = alt_screen_after(screen.alt_screen, &frame.text);
-        // Everything already due goes out in one write, so a replay that fell
-        // behind catches up instead of crawling.
-        if frames.peek().is_none_or(|next| next.at > start.elapsed()) {
-            out.flush()?;
-        }
+    match screen.run(&cast.frames, &signal) {
+        Ok(status) => Ok(status),
+        Err(e) => signalled_soon(&signal).ok_or_else(|| e.into()),
     }
-    out.flush()?;
-    Ok(0)
 }
 
 /// SIGINT, SIGTERM and SIGHUP during a replay: noted, so that the replay stops
@@ -321,6 +578,17 @@ mod tests {
         idle_limit: None,
     };
 
+    /// What reaches the terminal of `frames`, played in order through one
+    /// filter.
+    fn filtered(frames: &[&str]) -> String {
+        let mut filter = Filter::new();
+        let mut out = String::new();
+        for frame in frames {
+            filter.feed(frame, &mut out);
+        }
+        out
+    }
+
     /// The document the core writes: its size from the header, its output
     /// events in order; input and resize events, and a broken last line, are
     /// passed over.
@@ -351,7 +619,7 @@ mod tests {
         let events = || {
             [(1.0, "a"), (31.0, "b"), (32.0, "c"), (20.0, "d")]
                 .into_iter()
-                .map(|(t, s)| (t, s.to_owned()))
+                .map(|(t, s)| (t, Zeroizing::new(s.to_owned())))
         };
         let at = |timing| {
             schedule(events(), timing)
@@ -375,17 +643,134 @@ mod tests {
         }
     }
 
+    /// A recording cannot set the clipboard, the title or anything else
+    /// through OSC, however the string ends (BEL, ST, 8-bit ST) or is cut
+    /// short by the next sequence; the 8-bit OSC introducer counts too.
+    #[test]
+    fn osc_strings_are_dropped() {
+        assert_eq!(
+            filtered(&[
+                "a\x1b]52;c;cm0gLXJmIH4=\x07b",
+                "\x1b]0;title\x1b\\c",
+                "\u{9d}8;;https://x\u{9c}d",
+                "\x1b]52;c;eA==\x1b[1me",
+            ]),
+            "abcd\x1b[1me"
+        );
+    }
+
+    /// DCS (capability and setting queries, XTGETTCAP and DECRQSS among
+    /// them), SOS, PM and APC strings never reach the terminal.
+    #[test]
+    fn dcs_sos_pm_and_apc_strings_are_dropped() {
+        assert_eq!(
+            filtered(&[
+                "a\x1bP+q544e\x1b\\",
+                "\x1bP$qm\x1b\\b",
+                "\x1bXsos\x1b\\\x1b^pm\x1b\\\x1b_Gapc\x1b\\c",
+                "\u{90}+q6b\u{9c}d",
+            ]),
+            "abcd"
+        );
+    }
+
+    /// Nothing that makes the terminal type an answer gets through: device
+    /// attributes, status and cursor reports, mode and window reports, the
+    /// version, keyboard flags, DECID.
+    #[test]
+    fn queries_the_terminal_would_answer_are_dropped() {
+        let queries = [
+            "\x1b[c",
+            "\x1b[0c",
+            "\x1b[>c",
+            "\x1b[=c",
+            "\x1b[5n",
+            "\x1b[6n",
+            "\x1b[?6n",
+            "\x1b[?2026$p",
+            "\x1b[4$p",
+            "\x1b[14t",
+            "\x1b[21t",
+            "\x1b[>q",
+            "\x1b[?u",
+            "\x1b[?4m",
+            "\x1b[x",
+            "\x1bZ",
+            "\u{9b}6n",
+            "\u{9a}",
+        ];
+        for query in queries {
+            assert_eq!(filtered(&["a", query, "b"]), "ab", "{query:?} is dropped");
+        }
+    }
+
+    /// What draws passes as it came: text, line ends, colours, cursor moves
+    /// and saves, erasing, scroll regions, charsets, screen and mouse modes.
+    #[test]
+    fn ordinary_output_passes_unchanged() {
+        let output = "$ ls\r\n\x1b[1;31mred\x1b[0m \u{e9}\u{1f600}\x1b[2J\x1b[H\x1b[10;5H\
+                      \x1b[K\x1b7\x1b8\x1b[2;20r\x1b(0q\x1b(B\x1b[?25l\x1b[?1049h\
+                      \x1b[?1000h\x1b[38;2;1;2;3m\x1b[3 q\x1bM\x07\x08\t";
+        assert_eq!(filtered(&[output]), output);
+    }
+
+    /// A sequence split between two events is judged as one: a query is
+    /// still dropped, a colour still kept, a string still dropped to its end.
+    #[test]
+    fn a_sequence_split_across_frames_is_filtered_as_one() {
+        assert_eq!(
+            filtered(&[
+                "a\x1b",
+                "[6nb\x1b[3",
+                "1mc\x1b]52;c;",
+                "eA==",
+                "\x1b",
+                "\\d"
+            ]),
+            "ab\x1b[31mcd"
+        );
+    }
+
     /// The alternate screen is left at the end only if the replay is still on
-    /// it: the last switch in a chunk wins, and a chunk without one keeps the
-    /// state.
+    /// it, by the last switch, even one split across events; the reset puts
+    /// back charset, keyboard, mouse, wrap and scroll-region modes.
     #[test]
     fn the_reset_leaves_the_alternate_screen_only_when_the_replay_is_on_it() {
-        let on = alt_screen_after(false, "\x1b[?1049h\x1b[H");
-        assert!(on);
-        assert!(alt_screen_after(on, "plain text"));
-        assert!(!alt_screen_after(on, "\x1b[?1049h…\x1b[?1049l"));
-        assert!(alt_screen_after(false, "\x1b[?47l…\x1b[?47h"));
+        let mut filter = Filter::new();
+        let mut out = String::new();
+        filter.feed("\x1b[?10", &mut out);
+        assert!(!filter.alt_screen);
+        filter.feed("49h\x1b[H", &mut out);
+        assert!(filter.alt_screen, "a switch split across events counts");
+        filter.feed("plain text", &mut out);
+        assert!(filter.alt_screen);
+        filter.feed("\x1b[?1049h…\x1b[?1049l", &mut out);
+        assert!(!filter.alt_screen);
+        filter.feed("\x1b[?47l…\x1b[?1;47h", &mut out);
+        assert!(filter.alt_screen);
+        filter.feed("\x1bc", &mut out);
+        assert!(!filter.alt_screen, "a full reset leaves it");
+
         assert!(reset_sequence(true).starts_with("\x1b[?1049l"));
-        assert!(!reset_sequence(false).contains("\x1b[?1049l"));
+        let reset = reset_sequence(false);
+        assert!(!reset.contains("\x1b[?1049l"));
+        for part in [
+            "\x0f\x1b(B",
+            "\x1b[?25h",
+            "\x1b[?1000l",
+            "\x1b[?1003l",
+            "\x1b[?1004l",
+            "\x1b[?1005l",
+            "\x1b[?1006l",
+            "\x1b[?1015l",
+            "\x1b[?2004l",
+            "\x1b[<99u",
+            "\x1b[>4m",
+            "\x1b[?7h",
+            "\x1b[4l",
+            "\x1b7\x1b[?6l\x1b[r\x1b8",
+        ] {
+            assert!(reset.contains(part), "the reset has {part:?}");
+        }
     }
 }

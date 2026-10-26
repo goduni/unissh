@@ -106,10 +106,26 @@ was. A replay stopped by Ctrl-C exits with 130, by a signal with 128 plus its
 number. It needs stdout to be a terminal; it warns when this one is smaller than
 the recording's.
 
+A recording is not trusted: whoever can write to a shared vault, or a recorded
+host that was compromised, decides what is in it. So `play` passes on what draws
+on the screen and drops what reaches past it: every OSC string (the clipboard,
+the title), DCS, SOS, PM and APC strings, and the queries a terminal answers by
+typing the answer in (device attributes, cursor and status reports, mode and
+window reports, its version). Keys are read from the controlling terminal
+itself, and when the replay ends what is still coming in is read and discarded
+before the keyboard is given back, so nothing reaches the shell as typed input.
+
 `export` writes the recording exactly as the core keeps it: an
 [asciicast v2](https://docs.asciinema.org/manual/asciicast/v2/) document that
-`asciinema play` plays and anyone can read without UniSSH. The file is created
-owner-only (0600). `--json` lists only metadata, never what was recorded.
+`asciinema play` plays and anyone can read without UniSSH. The file is
+owner-only (0600): `--force` writes a new file beside it and renames it over the
+old one, so the old file's mode does not carry over; it refuses a symbolic link.
+`--json` lists only metadata, never what was recorded.
+
+`rm` on a cloud vault sends the deletion to the server; with `--offline`, or when
+the server cannot be reached, it goes with the next sync. When the server refuses
+it (the account may not change that vault), the command fails and says the
+recording is deleted on this machine only.
 
 **An export holds what the session showed**, in plain text: everything the
 remote printed, including what it echoed of what was typed. Keystrokes are not

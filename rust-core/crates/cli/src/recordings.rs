@@ -6,7 +6,7 @@
 //! someone who does not run UniSSH.
 
 use std::fmt::Write as _;
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
 use std::io::{self, Write as _};
 use std::path::Path;
 use std::time::Duration;
@@ -17,10 +17,9 @@ use zeroize::Zeroizing;
 
 use crate::device::Device;
 use crate::failure::{best_effort, Failure, Res};
-use crate::manage::confirm;
 use crate::replay::{self, Timing};
 use crate::server;
-use crate::tty::one_line;
+use crate::tty::{confirm, one_line};
 
 /// A recording and the vault it lives in.
 pub struct Recording {
@@ -270,7 +269,7 @@ pub fn play(device: &Device, query: &str, timing: Timing) -> Res<u8> {
 }
 
 /// `unissh recordings export`: the asciicast as stored, to `path` (`-` is
-/// stdout). The file is created owner-only: it holds what the session showed.
+/// stdout). The file is owner-only: it holds what the session showed.
 pub fn export(device: &Device, query: &str, path: &Path, force: bool) -> Res<()> {
     let (meta, cast) = document(device, query)?;
     if path.as_os_str() == "-" {
@@ -279,15 +278,7 @@ pub fn export(device: &Device, query: &str, path: &Path, force: bool) -> Res<()>
         out.flush()?;
         return Ok(());
     }
-    let mut file = create(path, force)?;
-    if let Err(e) = file
-        .write_all(cast.as_bytes())
-        .and_then(|()| file.sync_all())
-    {
-        drop(file);
-        best_effort(std::fs::remove_file(path));
-        return Err(Failure::msg(format!("{}: {e}", path.display())));
-    }
+    save(path, cast.as_bytes(), force)?;
     println!(
         "Exported {} to {} (asciicast v2: `asciinema play` plays it).",
         one_line(&meta.label),
@@ -296,32 +287,61 @@ pub fn export(device: &Device, query: &str, path: &Path, force: bool) -> Res<()>
     Ok(())
 }
 
-/// Opens `path` for the export: a new file, or with `force` an existing one
-/// emptied. Owner-only when it is created.
-fn create(path: &Path, force: bool) -> Res<File> {
-    let mut options = OpenOptions::new();
-    options.write(true);
-    if force {
-        options.create(true).truncate(true);
-    } else {
-        options.create_new(true);
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    options.open(path).map_err(|e| {
-        if e.kind() == io::ErrorKind::AlreadyExists {
-            Failure::msg(format!("{} exists; --force replaces it", path.display()))
-        } else {
-            Failure::msg(format!("{}: {e}", path.display()))
+/// Writes `bytes` to `path`, owner-only (0600) however it got there.
+///
+/// Without `force` the file must not exist (`create_new`, which does not
+/// follow a symbolic link either). With `force` an existing file is replaced,
+/// not rewritten: the bytes go to a new owner-only file beside it that is then
+/// renamed over it, so the old file's mode and owner do not carry over and a
+/// failed write leaves the old file as it was. A symbolic link is refused
+/// rather than replaced or followed: the user named a link, and either would
+/// be a surprise.
+fn save(path: &Path, bytes: &[u8], force: bool) -> Res<()> {
+    let failed = |e: &dyn std::fmt::Display| Failure::msg(format!("{}: {e}", path.display()));
+    if !force {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
         }
-    })
+        let mut file = options.open(path).map_err(|e| {
+            if e.kind() == io::ErrorKind::AlreadyExists {
+                Failure::msg(format!("{} exists; --force replaces it", path.display()))
+            } else {
+                failed(&e)
+            }
+        })?;
+        if let Err(e) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+            drop(file);
+            best_effort(std::fs::remove_file(path));
+            return Err(failed(&e));
+        }
+        return Ok(());
+    }
+    if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(Failure::msg(format!(
+            "{} is a symbolic link; name the file itself",
+            path.display()
+        )));
+    }
+    let dir = path
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    // `tempfile` creates it 0600 on unix, and removes it if anything fails.
+    let mut file = tempfile::NamedTempFile::new_in(dir).map_err(|e| failed(&e))?;
+    file.write_all(bytes)
+        .and_then(|()| file.as_file().sync_all())
+        .map_err(|e| failed(&e))?;
+    file.persist(path).map_err(|e| failed(&e.error))?;
+    Ok(())
 }
 
 /// `unissh recordings rm`: deletes the recording, then sends the deletion to
-/// the server unless `offline` (or the vault is local).
+/// the server unless `offline` (or the vault is local). A deletion the server
+/// refuses fails the command ([`server::push_after_write`]).
 pub fn remove(device: &Device, query: &str, yes: bool, offline: bool) -> Res<()> {
     let all = load(&device.core)?;
     let found = find(&all, query)?;
@@ -341,23 +361,7 @@ pub fn remove(device: &Device, query: &str, yes: bool, offline: bool) -> Res<()>
     device
         .core
         .delete_recording(found.vault_id.clone(), found.meta.recording_id.clone())?;
-    if !found.cloud {
-        println!("Deleted.");
-    } else if offline {
-        println!("Deleted here; the deletion is sent with the next sync.");
-    } else {
-        match server::sync(device) {
-            Ok(report) => {
-                println!("Deleted.");
-                server::warn_about(&report);
-            }
-            Err(e) => {
-                println!("Deleted here.");
-                eprintln!("unissh: the deletion is sent with the next sync: {e}");
-            }
-        }
-    }
-    Ok(())
+    server::push_after_write(device, found.cloud, offline, "Deleted")
 }
 
 #[cfg(test)]
@@ -458,5 +462,32 @@ mod tests {
         assert_eq!(value[0]["mcp"]["application"], "Agent");
         assert_eq!(value[0]["id"], "mcp-1");
         assert!(!value.to_string().contains("s3cret"));
+    }
+
+    /// Without `--force` an existing file is left alone; with it the file is
+    /// replaced by an owner-only one — never written through a symbolic link,
+    /// never keeping the old file's wider mode.
+    #[cfg(unix)]
+    #[test]
+    fn an_export_refuses_an_existing_file_and_force_replaces_it_owner_only() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.cast");
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let refused = save(&path, b"new", false).unwrap_err();
+        assert!(refused.message.contains("--force"), "{refused}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "old");
+
+        save(&path, b"new", true).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "replaced owner-only, not with the old mode");
+
+        let link = dir.path().join("link.cast");
+        std::os::unix::fs::symlink(&path, &link).unwrap();
+        assert!(save(&link, b"via link", true).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
     }
 }
