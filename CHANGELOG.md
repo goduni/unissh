@@ -66,6 +66,14 @@ starts with `0.`:
   ever asked on the terminal or read from an owner-only file; no session token
   is stored. `unissh logout` revokes the device and deletes its data. The old
   core harness is now the `unissh-harness` binary.
+- `unissh` edits the vaults as the app does: `hosts add|edit|rm` (every field of
+  the host editor: login, jump hosts, proxy, group, colour, icon, tags, startup
+  snippets, recording, agent forwarding, personal identity), `groups`,
+  `secrets` (passwords and notes, `show --reveal` as the gated reveal), `keys`
+  (generate, import, public key, certificate, rotate in place; abandon a staged
+  rotation), `identities` and `snippets add|edit|rm`. Secrets are asked on the
+  terminal or read from stdin or an owner-only file, never taken as arguments;
+  every change syncs at once unless `--offline`.
 - Bindings: `ExecHandleFfi::close_stdin` ends a streaming command's input and
   keeps its output coming; `Core::wait_for_recordings` waits for session
   recordings still to be written (a recorded session counts from the moment it
