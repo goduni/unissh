@@ -95,6 +95,14 @@ starts with `0.`:
     instead of a red button on every row. The audit log is grouped by day.
   - **Removed:** the five accent colours. The fonts are now served from the
     panel itself.
+  - **Words:** screens say what they are for in plain language, with the
+    server's own name (`readyz`, a config key, an event type) in small type
+    underneath. The menu follows tasks — Server, People, Vaults — and folds
+    metrics, maintenance, device pairing and the sync log into a Technical
+    group. Directory is gone; an account's key is in its card.
+  - **Spaces:** a member is added by typing a name or login and picking the
+    account; the account ID field is left only for when the accounts list
+    cannot be read.
 - One resolver for saved hosts, in the core (`Core::resolve_connection`): the
   app, the CLI and local automation now work out a host's user and credential
   the same way. For the app this means a host that names no user logs in as the
