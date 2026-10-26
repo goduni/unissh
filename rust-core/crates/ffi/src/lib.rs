@@ -62,6 +62,7 @@ pub mod automation;
 pub mod automation_recording;
 mod key_rotation;
 mod password_fill;
+pub mod snippet_params;
 mod ssh_include;
 mod system_agent;
 mod terminal_workspace;
