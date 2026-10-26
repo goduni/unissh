@@ -147,11 +147,16 @@ starts with `0.`:
     could sign in as it again. Both are best effort: a server the app cannot
     reach keeps the device until it is revoked by hand.
 - In a shared vault you can only view, editing or deleting an item (a host,
-  key, password, note, snippet, group, identity or recording), in the app or
-  the `unissh` CLI, is now refused with "you can only view this vault" and
-  changes nothing. It used to change this device's copy, which the server then
-  refused: the copy no longer matched the other devices, and every later sync
-  from this device failed. Bindings: new `FfiError::ReadOnlyVault`.
+  key, password, note, snippet, group or identity), in the app or the `unissh`
+  CLI, is now refused with "you can only view this vault" and changes nothing.
+  It used to change this device's copy, which the server then refused: the
+  copy no longer matched the other devices, and every later sync from this
+  device failed. Bindings: new `FfiError::ReadOnlyVault`.
+  - Session and MCP command recordings of hosts in a vault you can only view
+    are no longer saved, for the same reason. MCP recording retention leaves
+    such a vault alone: its expired recordings stay listed.
+  - Moving a local vault to a server leaves references to it in a vault you
+    can only view as they were.
 
 ### Security
 

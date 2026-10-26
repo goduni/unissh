@@ -96,6 +96,10 @@ pub(super) struct RetentionSweep {
     reason = "the sweep cursor borrowed from the guard is advanced while the page is processed"
 )]
 fn prune(state: &CoreState, vault: &Vault<'_>, vault_key: &[u8]) -> Result<(), FfiError> {
+    // A view-only member cannot delete; nothing to prune.
+    if !vault.can_write() {
+        return Ok(());
+    }
     let Some(cutoff) = retention_cutoff(state)? else {
         return Ok(());
     };
@@ -581,6 +585,65 @@ mod tests {
             Ok(())
         }).unwrap();
         assert!(core.list_recordings("v".into()).unwrap().is_empty());
+    }
+
+    /// Retention deletes, so it runs only where the account may write: a Viewer
+    /// with retention set still lists an expired MCP recording, and nothing is
+    /// written (the listing used to fail with `ReadOnlyVault`).
+    #[test]
+    fn a_viewer_lists_an_expired_mcp_recording_without_deleting_it() {
+        use unissh_keychain::{create_account, KdfParams};
+        let dir = tempfile::tempdir().unwrap();
+        let core = Core::new(
+            dir.path().join("db").to_str().unwrap().into(),
+            dir.path().join("keyset").to_str().unwrap().into(),
+        );
+        core.create_account(None).unwrap();
+        core.set_mcp_recording_preferences(RecordingPreferences {
+            max_bytes: MAX_BYTES,
+            retention_days: Some(30),
+        })
+        .unwrap();
+        let (_sk, _rec, owner) = create_account(None, KdfParams::recommended()).unwrap();
+        // The owner shares `sv` with this account as a Viewer and stores an
+        // expired MCP recording in it; this device pins the owner (as sync does).
+        let before = core
+            .with_state(|state| {
+                let ed = |k: &unissh_keychain::UnlockedKeyset| k.signing.verifying.to_bytes().to_vec();
+                let x = |k: &unissh_keychain::UnlockedKeyset| k.encryption.public.to_bytes().to_vec();
+                let st = &state.storage;
+                let v = Vault::create(st, &owner, b"sv".to_vec(), b"shared").map_err(FfiError::other)?;
+                let members = vec![
+                    Member { ed25519_pub: ed(&owner), role: MemberRole::Admin },
+                    Member { ed25519_pub: ed(&state.keyset), role: MemberRole::Viewer },
+                ];
+                let xkeys = vec![(ed(&owner), x(&owner)), (ed(&state.keyset), x(&state.keyset))];
+                v.establish_or_extend_membership(&owner, &members, &xkeys).map_err(FfiError::other)?;
+                let body = serde_json::json!({"label":"old","host":"example","user":"u","started_unix":1,"duration_secs":1.0,"truncated":false,"asciicast":"", "mcp":{"application":"Agent","outcome":"completed","exitCode":0}});
+                Vault::open(st, &owner, b"sv")
+                    .map_err(FfiError::other)?
+                    .put_item(b"old-mcp", ITEM_TYPE_RECORDING, &serde_json::to_vec(&body).unwrap())
+                    .map_err(FfiError::other)?;
+                st.set_vault_trust_anchor(b"sv", &ed(&owner)).map_err(FfiError::other)?;
+                Ok(st.get_item(b"sv", b"old-mcp").map_err(FfiError::other)?.unwrap())
+            })
+            .unwrap();
+
+        let records = core.list_recordings("sv".into()).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].recording_id, "old-mcp");
+        let after = core
+            .with_state(|state| {
+                Ok(state
+                    .storage
+                    .get_item(b"sv", b"old-mcp")
+                    .map_err(FfiError::other)?
+                    .unwrap())
+            })
+            .unwrap();
+        assert_eq!(after.version, before.version);
+        assert_eq!(after.author_pubkey, before.author_pubkey);
+        assert!(!after.tombstone);
     }
 
     #[test]

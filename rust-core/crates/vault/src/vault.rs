@@ -208,10 +208,12 @@ impl<'a> Vault<'a> {
         };
         let own_ed = keyset.signing.verifying.to_bytes();
 
-        // `can_write`: the owner may always write (always Admin of its own vault); a
-        // member's role is read off the verified set in the member branch.
+        // `can_write`: read off the verified member set of the latest epoch, which
+        // new records are stamped with and which every reader checks the author
+        // against. A personal or local vault (no membership yet) is the owner's alone,
+        // so the owner writes.
         let (vk, can_write) = if genesis_owner == own_ed {
-            // Owner path (UNCHANGED): the owner wrapping is bound to (vault_id,
+            // Owner path (VK unwrap unchanged): the owner wrapping is bound to (vault_id,
             // owner_ed, the record's key_epoch); the same info as at seal time.
             // read-fallback: current info binding, on failure — pre-round-2 (raw vault_id).
             let vk = open_owner_vk(
@@ -221,7 +223,18 @@ impl<'a> Vault<'a> {
                 &own_ed,
                 record.key_epoch,
             )?;
-            (vk, true)
+            // In a membership vault the owner's role comes from the verified set
+            // too: `add_member`/`verify_manifest` do not themselves enforce that the
+            // owner stays Admin. A set that does not verify fails closed for
+            // writes only, so the owner still reads.
+            let can_write = match storage.latest_membership_epoch(&record.vault_id)? {
+                None => true,
+                Some(latest) => {
+                    verify_chain_to_epoch(storage, &record.vault_id, latest, &genesis_owner)
+                        .is_ok_and(|members| members.can_write(&own_ed))
+                }
+            };
+            (vk, can_write)
         } else {
             // Member path: this account is not the genesis owner. Acquire the VK from
             // this member's own grant at the latest membership epoch, anchoring
@@ -397,8 +410,9 @@ impl<'a> Vault<'a> {
         &self.vault_id
     }
 
-    /// Whether this account may write items in this vault: `false` for a member
-    /// whose role is Viewer, whose item writes fail with [`VaultError::ReadOnly`].
+    /// Whether this account may write items in this vault: `false` when its role
+    /// in the verified latest member set is Viewer (owner included), and its item
+    /// writes then fail with [`VaultError::ReadOnly`].
     pub const fn can_write(&self) -> bool {
         self.can_write
     }

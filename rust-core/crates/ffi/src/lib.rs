@@ -4633,7 +4633,13 @@ impl Core {
                 let Ok(mut r) = serde_json::from_slice::<StoredRecordingMeta>(&item.content) else {
                     continue;
                 };
-                if r.mcp.is_some() && cutoff.is_some_and(|cutoff| r.started_unix < cutoff) {
+                // Retention is applied only where this account may write: a
+                // view-only member cannot delete, so the expired recording is
+                // listed as it is rather than failing the whole listing.
+                if r.mcp.is_some()
+                    && vault.can_write()
+                    && cutoff.is_some_and(|cutoff| r.started_unix < cutoff)
+                {
                     vault.delete_item(&m.item_id).map_err(map_vault_err)?;
                     continue;
                 }
@@ -6668,8 +6674,10 @@ fn rehome_reference(
 /// storage failure) — holds nothing this device can resolve and is skipped. A
 /// storage failure, and any failure inside a vault that did open, aborts (and so
 /// rolls back) the move. A shared vault this account can only view is not
-/// rewritten either (the core refuses a Viewer's item writes) and is counted as
-/// skipped. The rewrites are ordinary local edits: in a cloud vault they push on
+/// rewritten either and is counted as skipped: its references to the moved vault
+/// stay dangling. Rewriting them as a Viewer would author records the server and
+/// every other member refuse, wedging that vault's sync on this device (the core
+/// refuses a Viewer's item writes for that reason). The rewrites are ordinary local edits: in a cloud vault they push on
 /// its next sync.
 fn rehome_references(
     storage: &Storage,
