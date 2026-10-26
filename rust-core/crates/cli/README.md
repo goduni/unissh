@@ -91,9 +91,8 @@ unless an address is given; every interface has to be spelled out as `0.0.0.0`,
 never an empty address or `*`, and a SOCKS proxy (`-D`) listens only on loopback.
 Port 0 asks for any free port. The forwards open in groups, whatever order they
 were typed in: every `-L`, then every `-R`, then every `-D`. Each one prints a
-line once it listens, with the real port, so `| head -n1` reads the first port
-(when nobody reads the lines any more, the forwards close and the exit status
-is 141). Each forward is its own connection, so a host with two-factor sign-in
+line once it listens, with the real port. If stdout's reader is gone when a
+line is written, the forwards close and the exit status is 141. Each forward is its own connection, so a host with two-factor sign-in
 asks once per forward. A forward that cannot open fails the command and closes
 the ones already open. The tunnels stay up until Ctrl-C or SIGTERM, then close
 cleanly; a second Ctrl-C while they close quits at once (status 130). A hang-up
