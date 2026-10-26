@@ -95,7 +95,7 @@ pub fn exit_code(status: i32) -> u8 {
 }
 
 /// Asks for the password a host wants typed at every connection.
-fn fill_password(target: &mut Target) -> Res<()> {
+pub fn fill_password(target: &mut Target) -> Res<()> {
     if target.ask_password {
         let prompt = format!(
             "Password for {}@{}: ",
@@ -115,7 +115,7 @@ fn fill_password(target: &mut Target) -> Res<()> {
 }
 
 /// Forgets a typed password once the connection no longer needs it.
-fn forget_password(target: &mut Target) {
+pub fn forget_password(target: &mut Target) {
     if let AuthMethod::Password { password } = &mut target.auth {
         password.zeroize();
     }
@@ -151,7 +151,7 @@ fn announce_pinned(core: &Core, host: &str, port: u16) {
 }
 
 /// Connects to `target` and runs `connect`, announcing a newly pinned key.
-fn connecting<T>(core: &Core, target: &Target, connect: impl FnOnce() -> Res<T>) -> Res<T> {
+pub fn connecting<T>(core: &Core, target: &Target, connect: impl FnOnce() -> Res<T>) -> Res<T> {
     let new_host = !is_known(core, &target.host, target.port);
     let connected = connect().map_err(Failure::connecting)?;
     if new_host {

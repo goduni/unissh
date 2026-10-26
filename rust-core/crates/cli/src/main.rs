@@ -24,11 +24,12 @@ mod manage;
 mod picker;
 mod server;
 mod tty;
+mod tunnel;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{ArgGroup, Args, Parser, Subcommand};
 
 use crate::connect::{exit_code, Direction, Endpoint};
 use crate::device::{Credentials, Device};
@@ -36,6 +37,7 @@ use crate::failure::{Failure, Res};
 use crate::home::Home;
 use crate::login::{Joining, SignIn};
 use crate::manage::KnownHostsAction;
+use crate::tunnel::Forward;
 
 #[derive(Parser)]
 #[command(
@@ -112,6 +114,29 @@ enum Command {
         source: String,
         /// Destination: a local path or host:path.
         destination: String,
+    },
+    /// Forward ports through a host until Ctrl-C, as `ssh -N` does.
+    #[command(group(
+        ArgGroup::new("forwards")
+            .args(["local", "remote", "dynamic"])
+            .required(true)
+            .multiple(true)
+    ))]
+    Tunnel {
+        /// Host label (or vault/label, or address); `user@host` picks the user.
+        host: String,
+        /// Listen on PORT here and connect to HOST:HOSTPORT from the host
+        /// (BIND defaults to 127.0.0.1).
+        #[arg(short = 'L', value_name = "[BIND:]PORT:HOST:HOSTPORT", value_parser = tunnel::local)]
+        local: Vec<Forward>,
+        /// The host listens on PORT and sends connections to HOST:HOSTPORT
+        /// from here (BIND, on the host, defaults to 127.0.0.1).
+        #[arg(short = 'R', value_name = "[BIND:]PORT:HOST:HOSTPORT", value_parser = tunnel::remote)]
+        remote: Vec<Forward>,
+        /// A SOCKS5 proxy on PORT here, connecting from the host (BIND must be
+        /// loopback; defaults to 127.0.0.1).
+        #[arg(short = 'D', value_name = "[BIND:]PORT", value_parser = tunnel::dynamic)]
+        dynamic: Vec<Forward>,
     },
     /// The host keys this machine has pinned.
     #[command(subcommand, name = "known-hosts")]
@@ -257,6 +282,16 @@ fn run(cli: Cli) -> Res<u8> {
             destination,
         } => {
             copy(home, &credentials, offline, &source, &destination, force)?;
+            Ok(0)
+        }
+        Command::Tunnel {
+            host,
+            local,
+            remote,
+            dynamic,
+        } => {
+            let forwards: Vec<Forward> = local.into_iter().chain(remote).chain(dynamic).collect();
+            forward_ports(home, &credentials, offline, &host, &forwards)?;
             Ok(0)
         }
         Command::KnownHosts(action) => {
@@ -405,14 +440,37 @@ fn copy(
     connect::copy(&device.core, target, direction, force)
 }
 
+fn forward_ports(
+    home: Home,
+    credentials: &Credentials,
+    offline: bool,
+    spec: &str,
+    forwards: &[Forward],
+) -> Res<()> {
+    let device = ready(home, credentials, offline)?;
+    let all = hosts::load(&device.core)?;
+    let (user, name) = split_user(spec);
+    let host = hosts::find(&all, name)?;
+    let target = hosts::resolve(&device.core, host, user)?;
+    tunnel::run(&device.core, target, &host.profile.label, forwards)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{split_user, Cli};
-    use clap::CommandFactory;
+    use clap::{CommandFactory, Parser};
 
     #[test]
     fn the_command_line_is_well_formed() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn a_tunnel_needs_at_least_one_forward() {
+        let Err(err) = Cli::try_parse_from(["unissh", "tunnel", "web"]) else {
+            panic!("a tunnel without -L, -R or -D must be refused");
+        };
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
     }
 
     #[test]

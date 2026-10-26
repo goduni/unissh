@@ -59,6 +59,7 @@ unissh ssh web                 # interactive terminal (~. ends it, ~? lists esca
 unissh ssh root@web            # another user (not for Personal hosts)
 unissh ssh web -- uptime       # one-off command; stdin is piped, the exit code comes back
 unissh cp web:/var/log/app.log .        # one file, either direction; --force replaces
+unissh tunnel web -L 5432:db:5432 -D 1080   # forward ports until Ctrl-C (-L, -R, -D as with ssh)
 unissh known-hosts list|trust|forget
 unissh sync | status | logout
 ```
@@ -82,6 +83,17 @@ the reader does, with status 141 as `ssh` would. `unissh cp` downloads into a
 temporary file beside the destination and renames it into place when the copy is
 complete, so a failed copy leaves an existing file as it was. An upload, as with
 `scp`, writes the remote file in place.
+
+`unissh tunnel` takes `-L [bind:]port:host:hostport`, `-R [bind:]port:host:hostport`
+and `-D [bind:]port`, each as often as needed (IPv6 addresses in brackets), and
+needs at least one. A forward that names no address listens on `127.0.0.1` (for
+`-R`, on the host), as in the app; every interface has to be spelled out as
+`0.0.0.0`, never an empty address or `*`, and a SOCKS proxy (`-D`) listens only on
+loopback. Port 0 asks for any free port. Each forward is its own connection,
+and prints one line once it listens, with the real port; a forward that cannot
+open fails the command and closes the ones already open. The tunnels stay up
+until Ctrl-C, SIGTERM or a hang-up, then close cleanly. A connection that drops
+is not reopened.
 
 ## Data
 
@@ -110,7 +122,7 @@ machine that can no longer reach it; revoke the device from another one afterwar
 
 Agent forwarding (each signature needs an approval prompt, which a raw terminal
 cannot show), the saved-password offer at `sudo` prompts, startup snippets,
-auto-reconnect, port forwarding, editing hosts or vaults, claiming an instance,
+auto-reconnect, editing hosts or vaults, claiming an instance,
 SSO sign-in, and more than one server per machine. Interactive use needs a Unix
 terminal.
 
