@@ -79,42 +79,119 @@ pub fn filter<'h>(hosts: &'h [Host], filter: Option<&str>, tag: Option<&str>) ->
         .collect()
 }
 
-/// The host `query` names: `vault/label`, else a label (any case), else the
-/// one label it begins, else a host name. Several matches are an error that
-/// lists them, never a guess.
+/// Something in a vault that people name on the command line: a host, a
+/// group, a secret, a snippet.
+pub trait Named {
+    /// The name of the vault it lives in.
+    fn vault_name(&self) -> &str;
+    /// Its label.
+    fn label(&self) -> &str;
+    /// Another name it answers to: a host's address, an item's id.
+    fn alias(&self) -> &str;
+    /// What tells it apart from others with the same label, for an ambiguity.
+    fn detail(&self) -> String;
+}
+
+/// The kind of thing a lookup is after, for what its errors say.
+pub struct Kind {
+    /// One of them: "host".
+    pub one: &'static str,
+    /// Several: "hosts".
+    pub many: &'static str,
+    /// The command that lists them.
+    pub list: &'static str,
+}
+
+/// Hosts, for [`find_named`].
+pub const HOSTS: Kind = Kind {
+    one: "host",
+    many: "hosts",
+    list: "unissh hosts",
+};
+
+impl Named for Host {
+    fn vault_name(&self) -> &str {
+        &self.vault_name
+    }
+
+    fn label(&self) -> &str {
+        &self.profile.label
+    }
+
+    fn alias(&self) -> &str {
+        &self.profile.host
+    }
+
+    fn detail(&self) -> String {
+        self.target_text()
+    }
+}
+
+/// A borrowed one answers to the same names, so a lookup can run over a
+/// narrowed list (`--vault`) without copying it.
+impl<T: Named> Named for &T {
+    fn vault_name(&self) -> &str {
+        (**self).vault_name()
+    }
+
+    fn label(&self) -> &str {
+        (**self).label()
+    }
+
+    fn alias(&self) -> &str {
+        (**self).alias()
+    }
+
+    fn detail(&self) -> String {
+        (**self).detail()
+    }
+}
+
+/// The host `query` names (see [`find_named`]).
 pub fn find<'h>(hosts: &'h [Host], query: &str) -> Res<&'h Host> {
+    find_named(hosts, query, &HOSTS)
+}
+
+/// The one of `items` that `query` names: `vault/label`, else a label (any
+/// case), else the one label it begins, else an alias (a host name, an item
+/// id). Several matches are an error that lists them, never a guess.
+pub fn find_named<'n, T: Named>(items: &'n [T], query: &str, kind: &Kind) -> Res<&'n T> {
     let q = query.trim().to_lowercase();
-    let by = |pred: &dyn Fn(&Host) -> bool| hosts.iter().filter(|&h| pred(h)).collect::<Vec<_>>();
+    let by = |pred: &dyn Fn(&T) -> bool| items.iter().filter(|&n| pred(n)).collect::<Vec<_>>();
     let qualified = q.split_once('/').map_or_else(Vec::new, |(vault, label)| {
-        by(&|h| h.vault_name.to_lowercase() == vault && h.profile.label.to_lowercase() == label)
+        by(&|n| n.vault_name().to_lowercase() == vault && n.label().to_lowercase() == label)
     });
     let rounds = [
         qualified,
-        by(&|h| h.profile.label.to_lowercase() == q),
-        by(&|h| h.profile.label.to_lowercase().starts_with(&q)),
-        by(&|h| h.profile.host.to_lowercase() == q),
+        by(&|n| n.label().to_lowercase() == q),
+        by(&|n| n.label().to_lowercase().starts_with(&q)),
+        by(&|n| n.alias().to_lowercase() == q),
     ];
     for found in rounds {
         match found.as_slice() {
             [] => {}
             [one] => return Ok(*one),
-            many => return Err(Failure::msg(ambiguous(query, many))),
+            many => return Err(Failure::msg(ambiguous(query, many, kind))),
         }
     }
     Err(Failure::msg(format!(
-        "no host matches \"{query}\" (`unissh hosts` lists them)"
+        "no {} matches \"{query}\" (`{}` lists them)",
+        kind.one, kind.list
     )))
 }
 
-fn ambiguous(query: &str, many: &[&Host]) -> String {
-    let mut text = format!("\"{query}\" matches several hosts; name one as vault/label:");
-    for h in many {
+fn ambiguous<T: Named>(query: &str, many: &[&T], kind: &Kind) -> String {
+    let mut text = format!(
+        "\"{query}\" matches several {}; name one as vault/label:",
+        kind.many
+    );
+    for n in many {
         let _ = write!(
             text,
             "\n  {}/{}  {}",
-            one_line(&h.vault_name),
-            one_line(&h.profile.label),
-            one_line(&h.target_text())
+            one_line(n.vault_name()),
+            one_line(n.label()),
+            one_line(&n.detail())
         );
     }
     text
@@ -212,7 +289,9 @@ pub fn resolve(core: &Core, host: &Host, user: Option<&str>) -> Res<Target> {
         .map_err(|e| {
             if personal {
                 Failure::msg(format!(
-                    "{} needs your personal identity: {e}. Link one to this host in the UniSSH app",
+                    "{} needs your personal identity: {e}. Link one with \
+                     `unissh hosts edit \"{}\" --identity <name>`",
+                    one_line(&p.label),
                     one_line(&p.label)
                 ))
             } else {

@@ -55,7 +55,7 @@ pub fn status(home: &Home) -> Res<()> {
 }
 
 /// "3 minutes ago", for a time in the past.
-fn ago(at: SystemTime) -> String {
+pub fn ago(at: SystemTime) -> String {
     let Ok(age) = SystemTime::now().duration_since(at) else {
         return "just now".to_owned();
     };
@@ -247,7 +247,7 @@ fn is_only_device(link: &Link, access: &str) -> Res<bool> {
 /// Shows `warning` and asks to go on. With `yes` it goes on without asking,
 /// but the warning is still printed (to stderr): `--yes` skips the question,
 /// not what the user is told.
-fn confirm(yes: bool, warning: &str) -> Res<()> {
+pub fn confirm(yes: bool, warning: &str) -> Res<()> {
     if yes {
         eprint!("{warning}");
         return Ok(());
