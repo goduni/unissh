@@ -42,7 +42,7 @@ function SessionsBody() {
   const summary = (
     <>
       <SummaryCount n={rows.length} />
-      {acc ? <SummaryPart label="account_id" value={truncId(acc)} active /> : null}
+      {acc ? <SummaryPart label={t("screen.devices.accountFilterLabel")} value={truncId(acc)} active /> : null}
     </>
   );
 
@@ -70,13 +70,13 @@ function SessionsBody() {
     },
     {
       key: "access",
-      label: "access",
+      label: t("screen.sessions.colAccess"),
       width: "104px",
       render: (row) => when(row.access_expires),
     },
     {
       key: "refresh",
-      label: "refresh",
+      label: t("screen.sessions.colRefresh"),
       width: "104px",
       render: (row) => when(row.refresh_expires),
     },
@@ -107,7 +107,7 @@ function SessionsBody() {
                   confirmLabel: t("common.revoke"),
                   onConfirm: async () => {
                     await api.admin.sessionRevoke(row.session_id);
-                    toast("success", t("common.revoke"));
+                    toast("success", t("common.revoked"));
                     x.reload();
                   },
                 }),

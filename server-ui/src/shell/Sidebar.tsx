@@ -46,43 +46,93 @@ function NavLinks({
   const go = useUi((s) => s.go);
   const counts = useMeta((s) => s.counts);
 
+  // The technical group stays shut until asked for, or while one of its sections is the current one.
+  const [techOpen, setTechOpen] = useState(readTechOpen);
+  const toggleTech = () => {
+    setTechOpen((open) => {
+      writeTechOpen(!open);
+      return !open;
+    });
+  };
   return (
     <nav aria-label={t("nav.sections")} className="sh-nav">
-      {NAV.map((group, index) => (
-        <div key={group.key} className="sh-nav-group">
-          {folded && index > 0 ? <div aria-hidden="true" className="sh-nav-rule" /> : null}
-          <p id={`${id}-${group.key}`} className={folded ? "sh-sr-only" : "sh-nav-label"}>
-            {t(`nav.${group.key}`)}
-          </p>
-          <ul aria-labelledby={`${id}-${group.key}`} className="sh-nav-list">
-            {group.items.map((item) => {
-              const name = t(`nav.${item.key}`);
-              const count = item.count ? counts[item.count] : undefined;
-              return (
-                <li key={item.route}>
-                  <button
-                    type="button"
-                    className="sh-nav-item sh-focus"
-                    data-folded={folded ? "true" : undefined}
-                    aria-current={route === item.route ? "page" : undefined}
-                    onClick={() => {
-                      go(item.route);
-                      onNavigate?.();
-                    }}
-                    {...tipFor?.(count != null ? `${name} · ${count}` : name)}
-                  >
-                    <Icon name={item.icon} size={16} />
-                    <span className={folded ? "sh-sr-only" : "sh-nav-name"}>{name}</span>
-                    {count != null ? <span className={folded ? "sh-sr-only" : "sh-nav-count"}>{count}</span> : null}
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      ))}
+      {NAV.map((group, index) => {
+        const holdsRoute = group.items.some((item) => item.route === route);
+        const shut = Boolean(group.collapsible) && !folded && !techOpen && !holdsRoute;
+        const listId = `${id}-${group.key}-list`;
+        return (
+          <div key={group.key} className="sh-nav-group">
+            {folded && index > 0 ? <div aria-hidden="true" className="sh-nav-rule" /> : null}
+            {group.collapsible && !folded ? (
+              <button
+                type="button"
+                id={`${id}-${group.key}`}
+                className="sh-nav-label sh-nav-disclosure sh-focus"
+                aria-expanded={!shut}
+                aria-controls={listId}
+                disabled={holdsRoute}
+                title={shut ? t("nav.techShow") : holdsRoute ? undefined : t("nav.techHide")}
+                onClick={toggleTech}
+              >
+                <span>{t(`nav.${group.key}`)}</span>
+                <Icon name={shut ? "chevronRight" : "chevronDown"} size={12} />
+              </button>
+            ) : (
+              <p id={`${id}-${group.key}`} className={folded ? "sh-sr-only" : "sh-nav-label"}>
+                {t(`nav.${group.key}`)}
+              </p>
+            )}
+            {shut ? null : (
+              <ul id={listId} aria-labelledby={`${id}-${group.key}`} className="sh-nav-list">
+                {group.items.map((item) => {
+                  const name = t(`nav.${item.key}`);
+                  const count = item.count ? counts[item.count] : undefined;
+                  return (
+                    <li key={item.route}>
+                      <button
+                        type="button"
+                        className="sh-nav-item sh-focus"
+                        data-folded={folded ? "true" : undefined}
+                        aria-current={route === item.route ? "page" : undefined}
+                        onClick={() => {
+                          go(item.route);
+                          onNavigate?.();
+                        }}
+                        {...tipFor?.(count != null ? `${name} · ${count}` : name)}
+                      >
+                        <Icon name={item.icon} size={16} />
+                        <span className={folded ? "sh-sr-only" : "sh-nav-name"}>{name}</span>
+                        {count != null ? <span className={folded ? "sh-sr-only" : "sh-nav-count"}>{count}</span> : null}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        );
+      })}
     </nav>
   );
+}
+
+const TECH_OPEN_KEY = "unissh.nav.techOpen";
+
+/** Whether the reader left the technical group open; a convenience, so an unreadable store just means shut. */
+function readTechOpen(): boolean {
+  try {
+    return localStorage.getItem(TECH_OPEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeTechOpen(open: boolean) {
+  try {
+    localStorage.setItem(TECH_OPEN_KEY, open ? "1" : "0");
+  } catch {
+    // The fold is a nicety; a browser that refuses storage just forgets it.
+  }
 }
 
 /** The instance under the wordmark: its name at 13 / 600 and a muted mono line with its id. */

@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
-import { SYNC_TARGET_LABEL, CACHE_POLICY_LABEL, type VaultRow } from "../api/types";
+import type { VaultRow } from "../api/types";
 import { useAsync } from "../util/useAsync";
 import { truncId } from "../util/bytes";
 import { DataTable, type Column } from "../ui/DataTable";
@@ -20,6 +20,11 @@ export function Vaults() {
 function VaultsBody() {
   const { t } = useTranslation();
   const vaults = useAsync(() => api.admin.vaults(), []);
+  // The two open policies, in words; a code the panel has not met is shown as it came.
+  const syncLabel = (v: number) =>
+    v === 0 ? t("screen.vaults.sync.local") : v === 1 ? t("screen.vaults.sync.cloud") : String(v);
+  const cacheLabel = (v: number) =>
+    v === 0 ? t("screen.vaults.cache.offline") : v === 1 ? t("screen.vaults.cache.online") : String(v);
 
   const columns: Column<VaultRow>[] = [
     {
@@ -56,7 +61,7 @@ function VaultsBody() {
     {
       key: "latest_epoch",
       label: t("screen.vaults.colEpoch"),
-      width: "72px",
+      width: "112px",
       numeric: true,
       render: (r) => r.latest_epoch,
     },
@@ -72,16 +77,14 @@ function VaultsBody() {
       label: t("screen.vaults.colSync"),
       // Wide enough for «Синхронизация» in the head.
       width: "120px",
-      render: (r) => <Tag mono>{SYNC_TARGET_LABEL[r.sync_target]}</Tag>,
+      render: (r) => <Tag>{syncLabel(r.sync_target)}</Tag>,
     },
     {
       key: "cache_policy",
       label: t("screen.vaults.colCache"),
       width: "132px",
       render: (r) => (
-        <span style={{ fontFamily: MONO, fontSize: 12, color: "var(--muted-foreground)" }}>
-          {CACHE_POLICY_LABEL[r.cache_policy]}
-        </span>
+        <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>{cacheLabel(r.cache_policy)}</span>
       ),
     },
   ];
