@@ -196,7 +196,9 @@ mod imp {
 
     use rustix::event::{poll, PollFd, PollFlags, Timespec};
     use rustix::io::Errno;
-    use rustix::termios::{tcgetattr, tcgetwinsize, tcsetattr, OptionalActions, Termios};
+    use rustix::termios::{
+        tcgetattr, tcgetwinsize, tcsetattr, OptionalActions, OutputModes, Termios,
+    };
 
     use super::{cancelled, ended, Key, QuietLine};
     use crate::failure::best_effort;
@@ -355,6 +357,20 @@ mod imp {
             tcsetattr(stdin.as_fd(), OptionalActions::Now, &raw)?;
             Ok(Self { saved })
         }
+
+        /// Raw keys, but output still processed, for replaying a recording:
+        /// a key typed meanwhile neither echoes into the replay nor raises a
+        /// signal, and output that is not from a terminal (a recorded command's
+        /// bare `\n`) still starts its lines at the left edge.
+        pub fn for_replay() -> io::Result<Self> {
+            let stdin = io::stdin();
+            let saved = tcgetattr(stdin.as_fd())?;
+            let mut raw = saved.clone();
+            raw.make_raw();
+            raw.output_modes.insert(OutputModes::OPOST);
+            tcsetattr(stdin.as_fd(), OptionalActions::Now, &raw)?;
+            Ok(Self { saved })
+        }
     }
 
     impl Drop for RawMode {
@@ -467,6 +483,11 @@ mod imp {
     impl RawMode {
         /// Always fails here.
         pub fn enter() -> io::Result<Self> {
+            Err(unsupported())
+        }
+
+        /// Always fails here.
+        pub fn for_replay() -> io::Result<Self> {
             Err(unsupported())
         }
     }

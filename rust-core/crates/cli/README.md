@@ -60,6 +60,7 @@ unissh ssh root@web            # another user (not for Personal hosts)
 unissh ssh web -- uptime       # one-off command; stdin is piped, the exit code comes back
 unissh cp web:/var/log/app.log .        # one file, either direction; --force replaces
 unissh known-hosts list|trust|forget
+unissh recordings list|play|export|rm   # see Recordings below
 unissh sync | status | logout
 ```
 
@@ -82,6 +83,46 @@ the reader does, with status 141 as `ssh` would. `unissh cp` downloads into a
 temporary file beside the destination and renames it into place when the copy is
 complete, so a failed copy leaves an existing file as it was. An upload, as with
 `scp`, writes the remote file in place.
+
+### Recordings
+
+```bash
+unissh recordings list [filter] [--json]       # every vault's, newest first; times in UTC
+unissh recordings play <id> [--speed 2] [--idle-limit 3]
+unissh recordings export <id> session.cast     # --force replaces; `-` writes to stdout
+unissh recordings rm <id> [--yes]
+```
+
+A recording is named by its id, or by any part of it that only one id contains
+(the distinctive end is usually enough); an ambiguous part is refused, with the
+candidates listed. The filter matches the label, host or vault.
+
+`play` replays the output with its timing, `--speed` times as fast, with every
+pause longer than `--idle-limit` seconds cut to that. Ctrl-C stops it. Keys
+typed meanwhile go nowhere. However it ends (Ctrl-C, SIGTERM, SIGHUP, an error),
+the terminal is put back: the main screen if the recording left it, a visible
+cursor, plain text, no mouse reporting or bracketed paste, and the keyboard as it
+was. A replay stopped by Ctrl-C exits with 130, by a signal with 128 plus its
+number. It needs stdout to be a terminal; it warns when this one is smaller than
+the recording's.
+
+`export` writes the recording exactly as the core keeps it: an
+[asciicast v2](https://docs.asciinema.org/manual/asciicast/v2/) document that
+`asciinema play` plays and anyone can read without UniSSH. The file is created
+owner-only (0600). `--json` lists only metadata, never what was recorded.
+
+**An export holds what the session showed**, in plain text: everything the
+remote printed, including what it echoed of what was typed. Keystrokes are not
+recorded. A password typed at a prompt that does not echo is not in it; in the
+app, a saved password it fills at a prompt is masked out of the output should
+that prompt echo it, but anything else the session printed is there. A recording
+of an MCP command also carries, in its header, the exact command, its standard
+input and environment, and its raw output. Treat an export like the vault item
+it came from.
+
+`rm` asks first (`--yes` skips the question) and sends the deletion to the
+server, so the recording goes from every device of the vault; with `--offline`
+it is sent with the next sync.
 
 ## Data
 

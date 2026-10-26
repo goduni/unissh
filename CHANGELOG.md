@@ -66,6 +66,11 @@ starts with `0.`:
   ever asked on the terminal or read from an owner-only file; no session token
   is stored. `unissh logout` revokes the device and deletes its data. The old
   core harness is now the `unissh-harness` binary.
+- `unissh recordings` lists the session recordings of every vault
+  (`--json` for scripts), replays one in the terminal (`play`, with `--speed`
+  and `--idle-limit`; Ctrl-C stops it and the terminal is put back), exports
+  it as the asciicast v2 file `asciinema` plays (`export`), and deletes it
+  (`rm`, sent to the server like any vault change).
 - Bindings: `ExecHandleFfi::close_stdin` ends a streaming command's input and
   keeps its output coming; `Core::wait_for_recordings` waits for session
   recordings still to be written (a recorded session counts from the moment it

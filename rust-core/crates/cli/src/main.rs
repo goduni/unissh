@@ -22,6 +22,8 @@ mod hosts;
 mod login;
 mod manage;
 mod picker;
+mod recordings;
+mod replay;
 mod server;
 mod tty;
 
@@ -36,6 +38,7 @@ use crate::failure::{Failure, Res};
 use crate::home::Home;
 use crate::login::{Joining, SignIn};
 use crate::manage::KnownHostsAction;
+use crate::replay::Timing;
 
 #[derive(Parser)]
 #[command(
@@ -116,6 +119,9 @@ enum Command {
     /// The host keys this machine has pinned.
     #[command(subcommand, name = "known-hosts")]
     KnownHosts(KnownHosts),
+    /// Recorded sessions: list, replay, export, delete.
+    #[command(subcommand)]
+    Recordings(Recordings),
 }
 
 #[derive(Subcommand)]
@@ -186,6 +192,47 @@ enum KnownHosts {
     Forget {
         /// host or host:port.
         host: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum Recordings {
+    /// List the recordings, newest first.
+    List {
+        /// Only recordings whose label, host or vault contain this.
+        filter: Option<String>,
+        /// Print JSON (what was recorded is not in it).
+        #[arg(long)]
+        json: bool,
+    },
+    /// Replay a recording in this terminal; Ctrl-C stops it.
+    Play {
+        /// The recording's id, or a part of it only that id contains.
+        id: String,
+        /// Play this many times as fast.
+        #[arg(long, default_value_t = 1.0, value_parser = replay::positive)]
+        speed: f64,
+        /// Cut every pause longer than this many seconds to that.
+        #[arg(long, value_name = "SECONDS", value_parser = replay::positive)]
+        idle_limit: Option<f64>,
+    },
+    /// Save a recording as an asciicast v2 file, as `asciinema` plays it.
+    Export {
+        /// The recording's id, or a part of it only that id contains.
+        id: String,
+        /// Where to write it; `-` is stdout.
+        file: PathBuf,
+        /// Replace the file if it exists.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Delete a recording, here and, once synced, everywhere.
+    Rm {
+        /// The recording's id, or a part of it only that id contains.
+        id: String,
+        /// Do not ask for confirmation.
+        #[arg(long)]
+        yes: bool,
     },
 }
 
@@ -269,6 +316,24 @@ fn run(cli: Cli) -> Res<u8> {
                 KnownHosts::Forget { host } => KnownHostsAction::Forget { host },
             };
             manage::known_hosts(&device.core, action)?;
+            Ok(0)
+        }
+        Command::Recordings(what) => {
+            let device = ready(home, &credentials, offline)?;
+            match what {
+                Recordings::List { filter, json } => {
+                    recordings::list(&device, filter.as_deref(), json)?;
+                }
+                Recordings::Play {
+                    id,
+                    speed,
+                    idle_limit,
+                } => return recordings::play(&device, &id, Timing { speed, idle_limit }),
+                Recordings::Export { id, file, force } => {
+                    recordings::export(&device, &id, &file, force)?;
+                }
+                Recordings::Rm { id, yes } => recordings::remove(&device, &id, yes, offline)?,
+            }
             Ok(0)
         }
     }

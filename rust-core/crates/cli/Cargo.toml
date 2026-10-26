@@ -32,6 +32,9 @@ zeroize = "1"
 # safe wrappers, since the workspace denies `unsafe`. Already in the tree (tempfile).
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["termios", "event", "process"] }
+# SIGTERM and SIGHUP during a replay, so that it can put the terminal back.
+# Already in the tree (the core, and the server's signal handling).
+tokio = { version = "1", features = ["rt", "signal"] }
 
 [dev-dependencies]
 tempfile = "3"

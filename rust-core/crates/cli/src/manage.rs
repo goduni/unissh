@@ -247,7 +247,7 @@ fn is_only_device(link: &Link, access: &str) -> Res<bool> {
 /// Shows `warning` and asks to go on. With `yes` it goes on without asking,
 /// but the warning is still printed (to stderr): `--yes` skips the question,
 /// not what the user is told.
-fn confirm(yes: bool, warning: &str) -> Res<()> {
+pub fn confirm(yes: bool, warning: &str) -> Res<()> {
     if yes {
         eprint!("{warning}");
         return Ok(());
