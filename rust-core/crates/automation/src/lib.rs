@@ -288,6 +288,8 @@ pub struct Broker {
     suspended: AtomicBool,
     /// Whether a native approver can answer manual grants' commands.
     manual_approval: AtomicBool,
+    /// Whether any run since start was recorded (there may be something to sync).
+    recorded: AtomicBool,
     access_revision: Mutex<Option<[u64; 2]>>,
 }
 
@@ -304,6 +306,7 @@ impl Broker {
             revocation_epoch: AtomicU64::new(0),
             suspended: AtomicBool::new(false),
             manual_approval: AtomicBool::new(true),
+            recorded: AtomicBool::new(false),
             access_revision: Mutex::new(None),
         });
         let weak = Arc::downgrade(&broker);
@@ -1392,6 +1395,9 @@ impl Broker {
                     return;
                 }
             };
+            if recording.is_some() {
+                broker.recorded.store(true, Ordering::SeqCst);
+            }
             if let Some(run) = lock(&broker.state).runs.get_mut(&rid) {
                 run.recording = recording.clone();
             }

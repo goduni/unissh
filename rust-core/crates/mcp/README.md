@@ -54,8 +54,10 @@ fixed text. stdout belongs to the protocol: the embedder must write nothing else
 it and keep prompts on the controlling terminal and logs on stderr, still behind
 `diagnostics_allowed`.
 
-`approval_unavailable` is returned when a grant requires confirmation but the
-embedder has no one to ask (the CLI without a controlling terminal).
+`approval_unavailable` is returned when the user's answer is needed (a manual
+grant's confirmation, or a host's sign-in prompt) but the embedder has no one to ask
+(the CLI over stdio, or without a terminal of its own). A stdio session gets the
+HTTP guard's limits: 16 requests in flight, 35 seconds each.
 
 Manual bearer headers are the supported authentication mechanism; this is not
 MCP OAuth discovery. Loopback HTTP assumes a trusted local environment: it does

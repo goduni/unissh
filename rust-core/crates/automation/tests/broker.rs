@@ -1167,6 +1167,8 @@ async fn recordings_capture_before_output_limits_and_finalize_without_polling() 
     assert_eq!(*captures[0].outcome.lock().unwrap(), "completed");
     assert_eq!(b.review()["runs"][0]["recording"]["status"], "saved");
 }
+/// Revocation drops the run but seals its recording, and the broker still knows
+/// a recording was made: what a shutting-down server decides its last sync on.
 #[tokio::test]
 async fn revocation_removes_output_but_finalizes_the_recording() {
     let executor = Arc::new(RecordingExecutor::default());
@@ -1180,6 +1182,7 @@ async fn revocation_removes_output_but_finalizes_the_recording() {
     )
     .await
     .unwrap();
+    assert!(!b.made_recordings());
     b.approve(run["run_id"].as_str().unwrap(), true).unwrap();
     tokio::time::timeout(Duration::from_secs(3), async {
         while executor.fake.execs.load(Ordering::SeqCst) == 0 {
@@ -1208,6 +1211,8 @@ async fn revocation_removes_output_but_finalizes_the_recording() {
         "cancelled"
     );
     assert!(b.review()["runs"].as_array().unwrap().is_empty());
+    // The run is gone from the review, but the recording still has to sync.
+    assert!(b.made_recordings());
 }
 
 #[tokio::test]
@@ -1942,7 +1947,8 @@ async fn manual_commands_are_refused_when_nobody_can_approve() {
 }
 
 /// A native approver outside the desktop sees the exact command, inputs,
-/// destination and application, and a request the agent cancels drops out.
+/// destination and application, and a request the agent cancels drops out
+/// (of the list, and of the cheap check a question polls).
 #[tokio::test]
 async fn pending_approvals_show_the_exact_request_until_it_is_withdrawn() {
     let b = Broker::new(Arc::new(Fake::default()));
@@ -1972,8 +1978,10 @@ async fn pending_approvals_show_the_exact_request_until_it_is_withdrawn() {
     assert_eq!(p.env.len(), 1);
     assert_eq!(p.timeout_ms, 5000);
     assert!(p.expires_in > Duration::from_secs(100));
+    assert!(b.is_pending(&p.run_id));
     call(&b, "a", "cancel_command", json!({"run_id":p.run_id}))
         .await
         .unwrap();
     assert!(b.pending_approvals().is_empty());
+    assert!(!b.is_pending(&p.run_id));
 }

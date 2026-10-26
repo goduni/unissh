@@ -39,9 +39,7 @@ impl Broker {
         let mut pending: Vec<_> = state
             .runs
             .iter()
-            .filter(|(_, r)| {
-                r.state == "awaiting_approval" && !cancelled(&r.cancel) && now < r.approval_until
-            })
+            .filter(|(_, r)| awaiting(r, now))
             .filter_map(|(id, r)| {
                 let grant = state.grants.get(&r.owner).filter(|g| g.epoch == r.epoch)?;
                 let target = grant.targets.get(&r.target)?;
@@ -71,6 +69,20 @@ impl Broker {
         pending.into_iter().map(|(_, p)| p).collect()
     }
 
+    /// Trusted native API: whether `run_id` still waits for a decision — what an
+    /// approver showing its question polls, without copying every pending request.
+    pub fn is_pending(&self, run_id: &str) -> bool {
+        let now = Instant::now();
+        let state = lock(&self.state);
+        state.runs.get(run_id).is_some_and(|r| {
+            awaiting(r, now)
+                && state
+                    .grants
+                    .get(&r.owner)
+                    .is_some_and(|g| g.epoch == r.epoch && g.targets.contains_key(&r.target))
+        })
+    }
+
     /// Native lifecycle only: whether someone can confirm commands of manual
     /// grants. While false (a CLI server with no terminal), such a command is
     /// refused at submission with `approval_unavailable` instead of waiting for a
@@ -78,6 +90,11 @@ impl Broker {
     pub fn set_manual_approval_available(&self, available: bool) {
         self.manual_approval.store(available, Ordering::SeqCst);
     }
+}
+
+/// A run waiting for a decision that can still be made.
+fn awaiting(run: &Run, now: Instant) -> bool {
+    run.state == "awaiting_approval" && !cancelled(&run.cancel) && now < run.approval_until
 }
 
 /// `text` in JSON string notation with every control visible, as the desktop's

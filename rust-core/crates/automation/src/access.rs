@@ -110,6 +110,13 @@ impl Broker {
         *lock(&self.access_revision) = None;
     }
 
+    /// Native lifecycle only: whether a run of this broker was recorded, even one
+    /// revoked since (revocation drops runs from [`Self::review`], not their
+    /// recordings). A server that is shutting down syncs when this is true.
+    pub fn made_recordings(&self) -> bool {
+        self.recorded.load(Ordering::SeqCst)
+    }
+
     pub(super) fn restore_access(&self) {
         if self.suspended.load(Ordering::SeqCst) {
             return;

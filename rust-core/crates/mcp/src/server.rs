@@ -42,6 +42,14 @@ use crate::{contract, Authenticator, Backend, IntegrationId};
 /// (the HTTP body, or one line of the stdio stream).
 pub const MAX_REQUEST_BYTES: usize = 128 * 1024;
 
+/// Requests served at once, per HTTP listener or per stdio session; more are
+/// refused rather than queued.
+const REQUESTS_IN_FLIGHT: usize = 16;
+
+/// How long one request may take before the transport gives up waiting. A
+/// broker-owned command keeps running; the agent reads its outcome later.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(35);
+
 pub struct LocalServer {
     listener: TcpListener,
     authenticator: Arc<dyn Authenticator>,
@@ -96,7 +104,7 @@ impl LocalServer {
         let guard = Guard {
             authority,
             authenticator: self.authenticator,
-            requests: Arc::new(tokio::sync::Semaphore::new(16)),
+            requests: Arc::new(tokio::sync::Semaphore::new(REQUESTS_IN_FLIGHT)),
         };
         let router = Router::new()
             .route_service("/mcp", service)
@@ -180,8 +188,7 @@ async fn authorize(State(guard): State<Guard>, mut request: Request, next: Next)
     let Ok(_slot) = guard.requests.try_acquire() else {
         return StatusCode::TOO_MANY_REQUESTS.into_response();
     };
-    let mut response = match tokio::time::timeout(Duration::from_secs(35), next.run(request)).await
-    {
+    let mut response = match tokio::time::timeout(REQUEST_TIMEOUT, next.run(request)).await {
         Ok(response) => response,
         Err(_) => StatusCode::REQUEST_TIMEOUT.into_response(),
     };
@@ -229,7 +236,10 @@ where
 {
     let handler = Handler {
         backend,
-        caller: Caller::Fixed(identity),
+        caller: Caller::Fixed(
+            identity,
+            Arc::new(tokio::sync::Semaphore::new(REQUESTS_IN_FLIGHT)),
+        ),
     };
     // The SDK's error text can quote the client's first message; keep it out.
     let running = handler
@@ -285,8 +295,10 @@ impl<R: AsyncRead + Unpin> AsyncRead for LineLimit<R> {
 enum Caller {
     /// The bearer credential the HTTP guard authenticated for this request.
     Http,
-    /// The one integration a stdio process serves, chosen natively at start.
-    Fixed(IntegrationId),
+    /// The one integration a stdio process serves, chosen natively at start,
+    /// with the session's requests in flight: the HTTP guard's limits, applied
+    /// here because no HTTP layer sits in front.
+    Fixed(IntegrationId, Arc<tokio::sync::Semaphore>),
 }
 
 #[derive(Clone)]
@@ -321,16 +333,29 @@ impl ServerHandler for Handler {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        let identity = match &self.caller {
-            Caller::Fixed(identity) => Some(identity.clone()),
-            // Only the guard's authenticated identity; there is no fallback.
-            Caller::Http => context
-                .extensions
-                .get::<Parts>()
-                .and_then(|parts| parts.extensions.get::<IntegrationId>())
-                .cloned(),
-        }
-        .ok_or_else(|| ErrorData::internal_error("Missing authenticated identity", None))?;
+        let (identity, slot) = match &self.caller {
+            Caller::Fixed(identity, requests) => {
+                let Ok(slot) = requests.clone().try_acquire_owned() else {
+                    return Err(ErrorData::internal_error(
+                        "Too many UniSSH requests at once",
+                        None,
+                    ));
+                };
+                (Some(identity.clone()), Some(slot))
+            }
+            // Only the guard's authenticated identity; there is no fallback. The
+            // guard also holds this request's slot and deadline.
+            Caller::Http => (
+                context
+                    .extensions
+                    .get::<Parts>()
+                    .and_then(|parts| parts.extensions.get::<IntegrationId>())
+                    .cloned(),
+                None,
+            ),
+        };
+        let identity = identity
+            .ok_or_else(|| ErrorData::internal_error("Missing authenticated identity", None))?;
         let parsed = contract::parse(&request.name, request.arguments.unwrap_or_default())
             .map_err(|error| {
                 ErrorData::invalid_params(
@@ -352,29 +377,43 @@ impl ServerHandler for Handler {
         ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         // Notifications belong only to this outstanding request. Dropping HTTP
         // waiting does not cancel a broker-owned command or extend its grant.
-        let outcome = loop {
-            tokio::select! {
-                biased;
-                result = &mut operation => break result,
-                _ = ticks.tick(), if token.is_some() => {
-                    let Some(progress_token) = token.clone() else {
-                        continue;
-                    };
-                    let notification = rmcp::model::ProgressNotificationParam::new(
-                        progress_token, started.elapsed().as_secs_f64(),
-                    ).with_message("Waiting for SSH operation; progress counts elapsed seconds.");
-                    // A slow/disconnected consumer must not delay the operation.
-                    let send = context.peer.notify_progress(notification);
-                    tokio::pin!(send);
-                    tokio::select! {
-                        biased;
-                        result = &mut operation => break result,
-                        _ = &mut send => {},
-                        _ = tokio::time::sleep(Duration::from_millis(100)) => {},
+        let waiting = async {
+            loop {
+                tokio::select! {
+                    biased;
+                    result = &mut operation => break result,
+                    _ = ticks.tick(), if token.is_some() => {
+                        let Some(progress_token) = token.clone() else {
+                            continue;
+                        };
+                        let notification = rmcp::model::ProgressNotificationParam::new(
+                            progress_token, started.elapsed().as_secs_f64(),
+                        ).with_message("Waiting for SSH operation; progress counts elapsed seconds.");
+                        // A slow/disconnected consumer must not delay the operation.
+                        let send = context.peer.notify_progress(notification);
+                        tokio::pin!(send);
+                        tokio::select! {
+                            biased;
+                            result = &mut operation => break result,
+                            _ = &mut send => {},
+                            _ = tokio::time::sleep(Duration::from_millis(100)) => {},
+                        }
                     }
                 }
             }
         };
+        let outcome = if slot.is_some() {
+            let Ok(outcome) = tokio::time::timeout(REQUEST_TIMEOUT, waiting).await else {
+                return Err(ErrorData::internal_error(
+                    "The UniSSH request timed out",
+                    None,
+                ));
+            };
+            outcome
+        } else {
+            waiting.await
+        };
+        drop(slot);
         let result = match outcome {
             Ok(value) => CallToolResult::structured(value),
             Err(error) => CallToolResult::structured_error(serde_json::json!({
