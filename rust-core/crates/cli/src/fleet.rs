@@ -3,12 +3,19 @@
 //! Each host resolves on its own with the core's resolver (personal identities,
 //! jump hosts and proxies included) and runs through `Core::ssh_exec_multi`
 //! with a per-host deadline, a bounded number at a time. That is how Fleet
-//! does it rather than through the core's group or tag fan-out, which leaves
-//! personal hosts out and files results by address: here each result belongs
-//! to its host, and each host can run its own command (a snippet's `{{host}}`).
+//! does it rather than through the core's group or tag fan-out: the group
+//! fan-out leaves personal hosts out, the tag fan-out drops unbound personal
+//! hosts and password-prompt ones without a word and covers one vault, and
+//! both file results by address and run one command everywhere. Here each
+//! result belongs to its host, and each host can run its own command (its
+//! `{{host}}`).
 //!
 //! Hosts that want a password typed at every connection are skipped, as in
 //! Fleet: a run on many hosts cannot stop to ask for one.
+//!
+//! A run goes in two steps, as Fleet's does: [`plan`] resolves every host,
+//! then the caller fills the command's parameters for the hosts that will run
+//! ([`Plan::params`]) and [`run`] runs it.
 
 use std::collections::VecDeque;
 use std::fmt::Write as _;
@@ -17,11 +24,12 @@ use std::sync::{mpsc, Mutex, PoisonError};
 use std::thread;
 
 use serde_json::{json, Value};
-use unissh_ffi::{Core, MultiExecTarget, ResolveStatus, ServerGroup};
+use unissh_ffi::snippet_params::{builtins_from_profile, split_fleet_params, FleetParams};
+use unissh_ffi::{Core, MultiExecTarget, ResolveStatus};
 
 use crate::connect;
 use crate::failure::{best_effort, Failure, Res, EXIT_FAILURE};
-use crate::hosts::{self, Host, Named};
+use crate::hosts::{self, Host};
 use crate::tty::one_line;
 
 /// How many hosts run at once by default — the app's Fleet limit.
@@ -49,42 +57,6 @@ pub struct Options {
     pub dry_run: bool,
     /// Print JSON instead of prefixed output.
     pub json: bool,
-}
-
-/// A host group and the vault it lives in.
-struct Group {
-    vault_id: String,
-    vault_name: String,
-    group: ServerGroup,
-}
-
-impl Named for Group {
-    const KIND: &'static str = "group";
-    const LISTED_BY: Option<&'static str> = None;
-
-    fn vault_name(&self) -> &str {
-        &self.vault_name
-    }
-
-    fn label(&self) -> &str {
-        &self.group.label
-    }
-}
-
-/// Every group of every vault; a vault that cannot be read is reported and skipped.
-fn load_groups(core: &Core) -> Res<Vec<Group>> {
-    let mut groups = Vec::new();
-    for vault in core.list_vaults()? {
-        match core.list_groups(vault.vault_id.clone()) {
-            Ok(list) => groups.extend(list.into_iter().map(|group| Group {
-                vault_id: vault.vault_id.clone(),
-                vault_name: vault.name.clone(),
-                group,
-            })),
-            Err(e) => eprintln!("unissh: skipping vault \"{}\": {e}", one_line(&vault.name)),
-        }
-    }
-    Ok(groups)
 }
 
 /// The hosts carrying every tag in `tags`, compared in any case.
@@ -135,7 +107,7 @@ fn same_host(a: &Host, b: &Host) -> bool {
 /// The hosts of the group `name`, expanded by the core (nested groups, with
 /// cycles broken) without connecting anywhere.
 fn group_hosts<'h>(core: &Core, all: &'h [Host], name: &str) -> Res<Vec<&'h Host>> {
-    let groups = load_groups(core)?;
+    let groups = hosts::load_groups(core)?;
     let group = hosts::find_named(&groups, name)?;
     let plans = core.dry_run_group(group.vault_id.clone(), group.group.group_id.clone())?;
     let mut found = Vec::new();
@@ -222,6 +194,7 @@ struct Row<'h> {
     user: String,
     address: String,
     port: u16,
+    /// What it runs (set by [`run`]).
     command: String,
     outcome: Outcome,
 }
@@ -248,13 +221,45 @@ fn display_names(picked: &[&Host]) -> Vec<String> {
         .collect()
 }
 
-/// Resolves every picked host. Returns the rows and the work: the targets
-/// to run, by row index.
-fn plan<'h>(
-    core: &Core,
-    picked: &[&'h Host],
-    command_for: &dyn Fn(&Host) -> String,
-) -> (Vec<Row<'h>>, VecDeque<(usize, MultiExecTarget, String)>) {
+/// A run's hosts, resolved: where each connects, or why it will not run.
+pub struct Plan<'h> {
+    rows: Vec<Row<'h>>,
+    /// The targets to run, by row index.
+    work: VecDeque<(usize, MultiExecTarget)>,
+}
+
+impl Plan<'_> {
+    /// The command's parameters for this run: split over the hosts that will
+    /// run, as Fleet splits over its runnable hosts. A skipped or unresolved
+    /// host neither answers a built-in nor makes one be asked.
+    pub fn params(&self, command: &str) -> FleetParams {
+        let targets: Vec<_> = self
+            .rows
+            .iter()
+            .filter(|r| matches!(r.outcome, Outcome::Planned))
+            .map(|r| builtins_from_profile(&r.host.profile))
+            .collect();
+        split_fleet_params(command, &targets)
+    }
+
+    /// Whether no host will run.
+    pub fn nothing_runs(&self) -> bool {
+        self.work.is_empty()
+    }
+}
+
+/// What a host with no user is told to do in a run.
+fn no_user_hint(label: &str) -> String {
+    format!(
+        "give it a user in the UniSSH app, or run on it with `unissh ssh user@{label} -- COMMAND`"
+    )
+}
+
+/// Resolves every picked host, without connecting.
+pub fn plan<'h>(core: &Core, picked: &[&'h Host]) -> Res<Plan<'h>> {
+    if picked.is_empty() {
+        return Err(Failure::msg("no hosts to run on"));
+    }
     let mut rows = Vec::with_capacity(picked.len());
     let mut work = VecDeque::new();
     for (index, (host, name)) in picked
@@ -263,7 +268,6 @@ fn plan<'h>(
         .zip(display_names(picked))
         .enumerate()
     {
-        let command = command_for(host);
         let p = &host.profile;
         let mut row = Row {
             host,
@@ -271,10 +275,10 @@ fn plan<'h>(
             user: p.user.clone(),
             address: p.host.clone(),
             port: p.port,
-            command: command.clone(),
+            command: String::new(),
             outcome: Outcome::Planned,
         };
-        match hosts::resolve(core, host, None) {
+        match hosts::resolve_with_hint(core, host, None, &no_user_hint) {
             Ok(target) if target.ask_password => {
                 row.outcome = Outcome::Skipped(
                     "asks for a password at every connection; run it with `unissh ssh`".to_owned(),
@@ -295,29 +299,28 @@ fn plan<'h>(
                         proxy: target.proxy,
                         publickey_only: false,
                     },
-                    command,
                 ));
             }
             Err(failure) => row.outcome = Outcome::Unresolved(failure.message),
         }
         rows.push(row);
     }
-    (rows, work)
+    Ok(Plan { rows, work })
 }
 
-/// Runs `command_for(host)` on each of `picked` (or shows the plan, for a dry
-/// run). The exit code is 0 when every host ran it with status 0 (or, for a
-/// dry run, would run it), else 1.
+/// Runs `command_for(host)` on each host of `plan` that resolved (or shows
+/// the plan, for a dry run). The exit code is 0 when every host ran it with
+/// status 0 (or, for a dry run, would run it), else 1.
 pub fn run(
     core: &Core,
-    picked: &[&Host],
+    plan: Plan<'_>,
     command_for: &dyn Fn(&Host) -> String,
     options: &Options,
 ) -> Res<u8> {
-    if picked.is_empty() {
-        return Err(Failure::msg("no hosts to run on"));
+    let Plan { mut rows, work } = plan;
+    for row in &mut rows {
+        row.command = command_for(row.host);
     }
-    let (mut rows, work) = plan(core, picked, command_for);
     if options.dry_run {
         if options.json {
             print_json(&rows)?;
@@ -334,6 +337,13 @@ pub fn run(
             }
         }
     }
+    let work = work
+        .into_iter()
+        .filter_map(|(index, target)| {
+            let command = rows.get(index)?.command.clone();
+            Some((index, target, command))
+        })
+        .collect();
     execute(core, &mut rows, work, options);
     if options.json {
         print_json(&rows)?;
@@ -530,12 +540,29 @@ fn summary(rows: &[Row<'_>], dry_run: bool) -> String {
 }
 
 /// The rows as JSON, in the order the hosts were picked: names, addresses,
-/// the command and what it printed; never a credential.
+/// the command and what it printed; never a credential. Every entry has every
+/// key: `exit` and `duration_ms` are null for a command that did not run (and
+/// `exit` for one that did not run to the end), `error` is null when nothing
+/// went wrong.
 fn json_rows(rows: &[Row<'_>]) -> Value {
     Value::Array(
         rows.iter()
             .map(|row| {
-                let mut entry = json!({
+                let (exit, stdout, stderr, error, timed_out, duration_ms) = match &row.outcome {
+                    Outcome::Planned => (None, "", "", None, false, None),
+                    Outcome::Skipped(why) | Outcome::Unresolved(why) => {
+                        (None, "", "", Some(why.as_str()), false, None)
+                    }
+                    Outcome::Ran(r) => (
+                        (r.error.is_none() && !r.timed_out).then_some(r.exit),
+                        r.stdout.as_str(),
+                        r.stderr.as_str(),
+                        r.error.as_deref(),
+                        r.timed_out,
+                        Some(r.duration_ms),
+                    ),
+                };
+                json!({
                     "vault": row.host.vault_name,
                     "label": row.host.profile.label,
                     "host": row.address,
@@ -543,23 +570,13 @@ fn json_rows(rows: &[Row<'_>]) -> Value {
                     "user": row.user,
                     "command": row.command,
                     "status": row.outcome.status(),
-                });
-                let extra = match &row.outcome {
-                    Outcome::Planned => json!({}),
-                    Outcome::Skipped(why) | Outcome::Unresolved(why) => json!({ "error": why }),
-                    Outcome::Ran(r) => json!({
-                        "exit": (r.error.is_none() && !r.timed_out).then_some(r.exit),
-                        "stdout": r.stdout,
-                        "stderr": r.stderr,
-                        "error": r.error,
-                        "timed_out": r.timed_out,
-                        "duration_ms": r.duration_ms,
-                    }),
-                };
-                if let (Some(entry), Value::Object(extra)) = (entry.as_object_mut(), extra) {
-                    entry.extend(extra);
-                }
-                entry
+                    "exit": exit,
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "error": error,
+                    "timed_out": timed_out,
+                    "duration_ms": duration_ms,
+                })
             })
             .collect(),
     )
@@ -711,5 +728,44 @@ mod tests {
         assert_eq!(value[1]["exit"], Value::Null);
         assert_eq!(value[1]["error"], "refused");
         assert_eq!(value[0]["command"], "uptime");
+    }
+
+    #[test]
+    fn every_json_entry_has_every_key_whatever_became_of_the_host() {
+        let h = host("team", "web", &[]);
+        let rows = [
+            row(&h, ran(0, None)),
+            row(&h, Outcome::Planned),
+            row(&h, Outcome::Skipped("asks".to_owned())),
+            row(&h, Outcome::Unresolved("no identity".to_owned())),
+        ];
+        let value = json_rows(&rows);
+        let keys = |i: usize| {
+            value[i]
+                .as_object()
+                .map(|o| o.keys().cloned().collect::<Vec<_>>())
+                .unwrap_or_default()
+        };
+        assert_eq!(keys(0).len(), 13, "{:?}", keys(0));
+        for i in 1..rows.len() {
+            assert_eq!(keys(i), keys(0), "entry {i}");
+        }
+    }
+
+    #[test]
+    fn a_skipped_host_does_not_add_a_parameter_to_ask() {
+        let web = host("team", "web", &[]);
+        let mut no_user = host("team", "lab", &[]);
+        no_user.profile.user = String::new();
+        let plan = Plan {
+            rows: vec![
+                row(&web, Outcome::Planned),
+                row(&no_user, Outcome::Skipped("asks".to_owned())),
+            ],
+            work: VecDeque::new(),
+        };
+        let params = plan.params("id {{user}}");
+        assert!(params.ask.is_empty(), "{:?}", params.ask);
+        assert_eq!(params.from_host, ["user"]);
     }
 }

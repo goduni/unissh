@@ -2,10 +2,12 @@
 //! found by the name people type, and resolved into a connection the way the
 //! app resolves it.
 
-use std::fmt::Write as _;
+use std::fmt::{Display, Write as _};
 
 use serde_json::{json, Value};
-use unissh_ffi::{AuthMethod, ConnectionProfile, Core, JumpHost, ProfileAuth, ProxyConfig};
+use unissh_ffi::{
+    AuthMethod, ConnectionProfile, Core, JumpHost, ProfileAuth, ProxyConfig, ServerGroup,
+};
 
 use crate::failure::{Failure, Res};
 use crate::tty::one_line;
@@ -47,22 +49,41 @@ impl Host {
     }
 }
 
-/// Every host of every vault, sorted by vault, then label.
+/// What `list` gives for every vault, each item wrapped with its vault by
+/// `wrap(vault_id, vault_name, item)`.
 ///
 /// A vault that cannot be read is reported and skipped rather than failing the
-/// whole list: the other vaults' hosts are still reachable.
-pub fn load(core: &Core) -> Res<Vec<Host>> {
-    let mut hosts = Vec::new();
+/// whole list: the other vaults' items are still reachable.
+pub fn per_vault<I, T, E: Display>(
+    core: &Core,
+    list: impl Fn(String) -> Result<Vec<I>, E>,
+    wrap: impl Fn(&str, &str, I) -> T,
+) -> Res<Vec<T>> {
+    let mut items = Vec::new();
     for vault in core.list_vaults()? {
-        match core.list_connections(vault.vault_id.clone()) {
-            Ok(profiles) => hosts.extend(profiles.into_iter().map(|profile| Host {
-                vault_id: vault.vault_id.clone(),
-                vault_name: vault.name.clone(),
-                profile,
-            })),
+        match list(vault.vault_id.clone()) {
+            Ok(found) => items.extend(
+                found
+                    .into_iter()
+                    .map(|item| wrap(&vault.vault_id, &vault.name, item)),
+            ),
             Err(e) => eprintln!("unissh: skipping vault \"{}\": {e}", one_line(&vault.name)),
         }
     }
+    Ok(items)
+}
+
+/// Every host of every vault, sorted by vault, then label.
+pub fn load(core: &Core) -> Res<Vec<Host>> {
+    let mut hosts = per_vault(
+        core,
+        |vault_id| core.list_connections(vault_id),
+        |vault_id, vault_name, profile| Host {
+            vault_id: vault_id.to_owned(),
+            vault_name: vault_name.to_owned(),
+            profile,
+        },
+    )?;
     hosts.sort_by_cached_key(|h| (h.vault_name.to_lowercase(), h.profile.label.to_lowercase()));
     Ok(hosts)
 }
@@ -118,6 +139,42 @@ impl Named for Host {
     fn detail(&self) -> String {
         self.target_text()
     }
+}
+
+/// A host group and the vault it lives in.
+pub struct Group {
+    /// The vault's id.
+    pub vault_id: String,
+    /// The vault's name.
+    pub vault_name: String,
+    /// The group.
+    pub group: ServerGroup,
+}
+
+impl Named for Group {
+    const KIND: &'static str = "group";
+    const LISTED_BY: Option<&'static str> = None;
+
+    fn vault_name(&self) -> &str {
+        &self.vault_name
+    }
+
+    fn label(&self) -> &str {
+        &self.group.label
+    }
+}
+
+/// Every group of every vault.
+pub fn load_groups(core: &Core) -> Res<Vec<Group>> {
+    per_vault(
+        core,
+        |vault_id| core.list_groups(vault_id),
+        |vault_id, vault_name, group| Group {
+            vault_id: vault_id.to_owned(),
+            vault_name: vault_name.to_owned(),
+            group,
+        },
+    )
 }
 
 /// The host `query` names: `vault/label`, else a label (any case), else the
@@ -254,6 +311,19 @@ pub struct Target {
 /// replaces the user name; a Personal host refuses that, because its identity
 /// decides who logs in.
 pub fn resolve(core: &Core, host: &Host, user: Option<&str>) -> Res<Target> {
+    resolve_with_hint(core, host, user, &|label| {
+        format!("connect as user@{label}")
+    })
+}
+
+/// [`resolve`], with `no_user(label)` saying what to do about a host that
+/// names no user (the hint differs between connecting and running).
+pub fn resolve_with_hint(
+    core: &Core,
+    host: &Host,
+    user: Option<&str>,
+    no_user: &dyn Fn(&str) -> String,
+) -> Res<Target> {
     let p = &host.profile;
     let personal = matches!(p.auth, ProfileAuth::Personal);
     if personal && user.is_some() {
@@ -276,10 +346,10 @@ pub fn resolve(core: &Core, host: &Host, user: Option<&str>) -> Res<Target> {
         })?;
     let user = user.map_or(resolved.user, str::to_owned);
     if user.trim().is_empty() {
+        let label = one_line(&p.label);
         return Err(Failure::msg(format!(
-            "{} names no user: connect as user@{}",
-            one_line(&p.label),
-            one_line(&p.label)
+            "{label} names no user: {}",
+            no_user(&label)
         )));
     }
     Ok(Target {

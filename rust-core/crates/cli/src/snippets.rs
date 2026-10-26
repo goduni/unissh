@@ -13,11 +13,14 @@ use unissh_ffi::snippet_params::{parse_params, SnippetParam};
 use unissh_ffi::{Core, Snippet};
 
 use crate::failure::{Failure, Res};
-use crate::hosts::Named;
+use crate::hosts::{self, Named};
 use crate::tty::{one_line, Tty};
 
 /// A snippet and the vault it lives in.
 pub struct Saved {
+    /// The vault's id.
+    #[expect(dead_code, reason = "read once snippets are edited in their vault")]
+    pub vault_id: String,
     /// The vault's name.
     pub vault_name: String,
     /// The snippet.
@@ -41,19 +44,17 @@ impl Named for Saved {
     }
 }
 
-/// Every snippet of every vault, sorted by vault, then label. A vault that
-/// cannot be read is reported and skipped.
+/// Every snippet of every vault, sorted by vault, then label.
 pub fn load(core: &Core) -> Res<Vec<Saved>> {
-    let mut snippets = Vec::new();
-    for vault in core.list_vaults()? {
-        match core.list_snippets(vault.vault_id.clone()) {
-            Ok(list) => snippets.extend(list.into_iter().map(|snippet| Saved {
-                vault_name: vault.name.clone(),
-                snippet,
-            })),
-            Err(e) => eprintln!("unissh: skipping vault \"{}\": {e}", one_line(&vault.name)),
-        }
-    }
+    let mut snippets = hosts::per_vault(
+        core,
+        |vault_id| core.list_snippets(vault_id),
+        |vault_id, vault_name, snippet| Saved {
+            vault_id: vault_id.to_owned(),
+            vault_name: vault_name.to_owned(),
+            snippet,
+        },
+    )?;
     snippets.sort_by_cached_key(|s| (s.vault_name.to_lowercase(), s.snippet.label.to_lowercase()));
     Ok(snippets)
 }
@@ -266,6 +267,7 @@ mod tests {
     #[test]
     fn the_table_lists_the_parameters_and_the_first_line_of_the_command() {
         let saved = Saved {
+            vault_id: "v".to_owned(),
             vault_name: "team".to_owned(),
             snippet: Snippet {
                 snippet_id: "s".to_owned(),

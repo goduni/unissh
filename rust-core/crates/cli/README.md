@@ -82,24 +82,25 @@ A copy without a master password unlocks again with its kept Secret Key alone.
 `unissh run` runs one command on many hosts, as the app's Fleet does: the hosts
 with a tag (`--tag`, repeated for hosts with every one), the hosts of a group
 (`--group`, nested groups included), or hosts by name. Each host connects as
-`unissh ssh` would connect to it, up to `--parallel` (8) at a time, and has
-`--timeout` (30) seconds to finish; 0 means no limit. Each line of output is
-led by the host's label (`web | ...`), stdout to stdout and stderr to stderr,
-as each host finishes, and a summary line ends the run. `--json` prints, per
-host, the command, its output, exit status and error instead. `--dry-run`
-shows which host would run what, as which user, without connecting. Hosts that
-want a password typed at every connection are skipped, as in Fleet: use
-`unissh ssh` for those. The exit code is 0 when every host ran the command with
-status 0, and 1 otherwise (a host failed, timed out, or did not run). The
-command is sent as written; `{{...}}` is filled in only for snippets.
+`unissh ssh` would connect to it, up to `--parallel` (8) at a time, and the
+command then has `--timeout` (30) seconds to finish; 0 means no limit. Each
+line of output is led by the host's label (`web | ...`), stdout to stdout and
+stderr to stderr, as each host finishes, and a summary line ends the run.
+`--json` prints, per host, the command, its output, exit status and error
+instead. `--dry-run` shows which host would run what, as which user, without
+connecting. Hosts that want a password typed at every connection are skipped,
+as in Fleet: use `unissh ssh` for those. The exit code is 0 when every host ran
+the command with status 0, and 1 otherwise (a host failed, timed out, or did
+not run).
 
-`unissh snippets run` runs a saved snippet the same way. Its parameters
-(`{{name}}`, `{{name:default}}`) are filled as in the app: `{{host}}`,
-`{{user}}` and `{{port}}` come from each host, and the rest are asked once on
-the terminal (Enter takes the default) unless given with `--set name=value`.
-Without a terminal a parameter takes its default, and one without a default
-needs a `--set`. A `--set` for a parameter the snippet does not have is
-refused.
+Parameters in the command (`{{name}}`, `{{name:default}}`) are filled as in the
+app, for `unissh run` as for a snippet: `{{host}}`, `{{user}}` and `{{port}}`
+come from each host, and the rest are asked once on the terminal (Enter takes
+the default) unless given with `--set name=value`; `--set name=` gives an
+empty value. Without a terminal a parameter takes its default, and one without
+a default needs a `--set`. A `--set` for a parameter the command does not have
+is refused. `\{{` is a literal `{{`; `{{ spaced }}` and other braces are left
+as written. `unissh snippets run` runs a saved snippet the same way.
 
 A password prompt reads a key at a time with the terminal's signals off: Ctrl-C
 cancels it and puts the terminal back. `unissh ssh host -- cmd | head` ends when
