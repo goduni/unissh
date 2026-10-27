@@ -36,7 +36,7 @@ use crate::failure::{best_effort, Failure, Res};
 use crate::home::Home;
 use crate::mcp_tty::{self, Prompts, Terminal};
 use crate::tty::{confirm, one_line, stdin_is_foreground, Tty};
-use crate::{hosts, server, system_lock};
+use crate::{hosts, server, signals, system_lock};
 
 // `unissh mcp`: serve, or manage what it serves. (Plain comments on clap
 // structs here: a doc comment would replace the subcommand's own help.) The
@@ -349,7 +349,14 @@ async fn transport(
     // anything) once the select ends, before the caller's final suspend.
     let ended = tokio::select! {
         result = &mut served => Some(result),
-        () = shutdown_signal() => None,
+        // Ctrl-C, SIGTERM or SIGHUP (Ctrl-C alone off Unix). Handlers that
+        // cannot be installed end the server: it would not stop cleanly.
+        caught = signals::first(signals::STOP_OR_HANG_UP) => match caught {
+            Ok(_) => None,
+            Err(e) => Some(Err(Failure::msg(format!(
+                "cannot catch Ctrl-C, SIGTERM or SIGHUP: {e}"
+            )))),
+        },
         () = system_lock::pause_on_lock(broker) => None,
     };
     if let Some(result) = ended {
@@ -359,26 +366,6 @@ async fn transport(
     cancel.cancel();
     best_effort(tokio::time::timeout(Duration::from_secs(2), served).await);
     Ok(())
-}
-
-/// Ctrl-C, or (on Unix) SIGTERM or SIGHUP.
-async fn shutdown_signal() {
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{signal, SignalKind};
-        if let (Ok(mut term), Ok(mut hup)) = (
-            signal(SignalKind::terminate()),
-            signal(SignalKind::hangup()),
-        ) {
-            tokio::select! {
-                result = tokio::signal::ctrl_c() => best_effort(result),
-                _ = term.recv() => {}
-                _ = hup.recv() => {}
-            }
-            return;
-        }
-    }
-    best_effort(tokio::signal::ctrl_c().await);
 }
 
 /// The vaults, unlocked for a server nobody attends: with a password file or no
