@@ -95,8 +95,11 @@ approved. Nothing the agent sends can grant, approve or widen anything.
 on a device that unlocks without a typed password (`--password-file`, or a copy
 without a master password), has whatever the vaults hold: it can read that file and
 run `unissh` itself. CLI grants and approvals cannot constrain it; they bound what an
-agent does through MCP. Give such an agent a separate OS account or machine, or keep
-the master password typed.
+agent does through MCP. A typed master password only raises the bar: such an agent
+can catch it the next time you type it (its own `unissh` first on `PATH`, a line in
+your shell's rc file), and it can replace the token digests in `mcp.json` to use an
+existing grant from a client of its own. Give such an agent a separate OS account or
+machine.
 
 ```bash
 unissh mcp integrations add "Claude Code"            # prints a token, used only with --http
@@ -126,7 +129,9 @@ unissh mcp --http [--port 8765]                      # loopback HTTP, in a termi
   holds for `--http` started without a terminal of its own (systemd, `nohup`, stdin
   redirected).
 - **Approvals** happen only in `unissh mcp --http` started in a terminal of your own
-  (its stdin is the controlling terminal). A command under a confirm grant is then
+  and kept in its foreground (its stdin is the controlling terminal; sent to the
+  background with Ctrl-Z/`bg` or started with `&`, it answers each question with
+  `approval_unavailable` and logs a warning). A command under a confirm grant is then
   asked about there, on `/dev/tty`: the exact command, working directory,
   environment and stdin in escaped string notation, the host, and the application
   asking. Only a typed `yes` allows it; anything else denies, and an unanswered
@@ -137,15 +142,18 @@ unissh mcp --http [--port 8765]                      # loopback HTTP, in a termi
   `--trusted`, the longest a command may run (`--command-limit`, 1m–24h, default
   10m) and the per-grant resource limits (`--max-connections`,
   `--max-active-commands`, `--command-history`, `--session-history`,
-  `--output-per-command`). `grants set` replaces the integration's previous grant
-  and shows a summary first (`--yes` skips the question). A grant is saved in the
+  `--output-per-command`). `grants set` replaces the integration's previous grant.
+  A grant is saved in the
   encrypted database and resumes after a restart while its hosts and the security
   records are unchanged; `grants list` says when one needs granting again.
 - **Widening needs the master password, typed.** `grants set`, `integrations add`
-  and `integrations rotate` ask for it on the terminal, whatever `--password-file`
-  or `--yes` say, and are refused without a terminal. (A copy without a master
-  password asks for a typed confirmation instead.) Revoking (`grants rm`,
-  `integrations rm`) asks for nothing more than any command.
+  and `integrations rotate` first print what they will do (for a grant: the hosts as
+  named, the expiry, whether commands are confirmed, the ceilings), then ask for the
+  master password on the terminal: typing it is the confirmation, whatever
+  `--password-file` says. They run only in the foreground of a terminal of their own,
+  so a process that runs them with its input piped is refused. (A copy without a
+  master password asks for a typed confirmation of the resolved hosts instead.)
+  Revoking (`grants rm`, `integrations rm`) asks for nothing more than any command.
 - **Changes from another terminal** apply to a running server at once, through the
   database: a revocation stops that integration's work immediately. Any write to the
   database by another process (a grant for any integration, a sync, a vault edit by
@@ -155,10 +163,12 @@ unissh mcp --http [--port 8765]                      # loopback HTTP, in a termi
   only at start: restart it after `integrations rotate` or `rm`, or it keeps
   accepting the old token.
 - **Lock and sleep (Linux).** Like the desktop, a running server pauses when the
-  session locks or the machine goes to sleep (logind's `Lock` and `PrepareForSleep`):
-  access is revoked, running commands are cancelled, and the saved grants resume on
-  unlock or wake. A desktop that locks without telling logind does not pause it, and
-  on macOS and Windows nothing is observed.
+  session locks or the machine goes to sleep (logind's `Lock`, the session's
+  `LockedHint`, and `PrepareForSleep`): access is revoked, running commands are
+  cancelled, and the saved grants resume on unlock, or on a wake while the session is
+  not locked. Only logind is heard: a signal from any other process is ignored. A
+  desktop that locks without telling logind does not pause it, and on macOS and
+  Windows nothing is observed. Without logind it logs a warning at start.
 - **Lifetime.** The vaults are unlocked for the life of the process (the interactive
   list's idle lock does not apply). It stops when the agent closes stdin, or on
   Ctrl-C, SIGTERM or SIGHUP; access is revoked before the transport stops, recorded

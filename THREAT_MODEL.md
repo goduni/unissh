@@ -856,29 +856,41 @@ The CLI's `unissh mcp` reuses this broker. Its stdio transport authenticates
 nobody: the process owner is the caller for the integration named at start, so an
 attacker who can launch processes as that user can act as any of its integrations,
 within their native grants. That user can already read the unlocked CLI device.
-**An agent with a shell on the same account and a non-interactive unlock (a password
-file, or no master password) has whatever the vaults hold**: CLI grants and
-approvals cannot constrain it, because it can unlock and act without MCP. They bound
-an agent that only speaks MCP.
+**An agent with a shell on the same account is outside the boundary in either unlock
+mode.** With a non-interactive unlock (a password file, or no master password) it
+has whatever the vaults hold: CLI grants and approvals cannot constrain it, because
+it can unlock and act without MCP. A typed master password only raises the bar: the
+agent can capture it at the next prompt by shadowing `unissh` on `PATH` or editing
+shell rc files. `mcp.json` holds the integrations' token digests, which a
+same-account process can replace to use an existing grant laterally from a client
+of its own. Grants and approvals bound an agent that only speaks MCP.
 
 The stdio server is fail-closed. Its terminal, if any, belongs to the client that
 spawned it, so it prompts for nothing (no unlock, no approval, no SSH password or
 one-time code) and runs trusted grants only; everything that needs an answer fails
 with `approval_unavailable`. Manual approval exists only in `--http` mode with stdin
-as the controlling terminal, a terminal the user opened for the server. There the
+as the controlling terminal and the server in its foreground process group, a
+terminal the user opened for the server (checked again before each question; in
+the background a question is answered `approval_unavailable`). There the
 terminal is the boundary: a process that can write to it can fake prompt text or
 type an answer, as it could for `sudo` or `ssh`. Widening commands (`grants set`,
-`integrations add`, `integrations rotate`) require the master password typed on a
-terminal, not a password file or `--yes`; an agent that knows the password and can
-drive a pseudo-terminal still gets past this, which is the case above. Grant edits
+`integrations add`, `integrations rotate`) show their full effect and then require
+the master password typed in the foreground of the controlling terminal as the
+confirmation, not a password file; an agent that knows the password and can drive a
+pseudo-terminal still gets past this, which is the case above. Grant edits
 from another process reach a running server through the storage revision (SQLite
 `data_version`): revocation is immediate, and so is the cost: any commit to the
 database from another process (a grant edit for another integration, a sync or a
 vault edit by another `unissh` command) revokes every live grant, cancelling the
-commands and sessions in flight, before the unchanged saved grants are restored. A running HTTP server keeps the token list it read
-at start until restarted. On Linux the server suspends on logind's session `Lock`
-and `PrepareForSleep(true)` and resumes on `Unlock`/wake, like the desktop's native
-half; without logind, and on macOS and Windows, the CLI does not observe a lock.
+commands and sessions in flight, before the unchanged saved grants are restored.
+A running HTTP server keeps the token list it read at start until restarted. On
+Linux the server suspends on logind's session `Lock`, a raised `LockedHint` and
+`PrepareForSleep(true)`, and resumes on `Unlock`, a lowered hint, or a wake while
+the session is not locked, like the desktop's native half. Both watchers accept
+these signals only from the current owner of `org.freedesktop.login1` on logind's
+own objects: a match rule does not stop another local user from unicasting a
+forged `Unlock` to the watcher. Without logind, and on macOS and Windows, the CLI
+does not observe a lock.
 
 This feature changes neither ciphertext sync nor vault/AAD formats. Its separately
 versioned local digest configuration is not synced. Temporary SQLite revision

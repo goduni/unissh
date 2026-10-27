@@ -73,14 +73,18 @@ starts with `0.`:
   nothing on any terminal and runs trusted grants only: confirm grants' commands
   and hosts that ask for a password or code fail with the new
   `approval_unavailable` tool error. Per-command confirmation is asked on the
-  terminal of `unissh mcp --http` started in a terminal of its own. Granting,
-  adding and rotating integrations ask for the master password typed on the
-  terminal. On Linux it pauses on a logind session lock or sleep. An agent with a
-  shell as you and a password file can do whatever the vaults allow: the CLI's
-  grants cannot constrain it. In the core, the MCP crate gains a stdio transport
-  (`serve_stdio`, rmcp `transport-io`), and the broker gains `pending_approvals`,
-  `is_pending`, `set_manual_approval_available`, `made_recordings`,
-  `PromptFactory::can_ask` and the limits file helpers the desktop now uses too.
+  terminal of `unissh mcp --http` started in a terminal of its own and kept in
+  its foreground. Granting, adding and rotating integrations print what they
+  will do, then take the master password typed on the terminal as the
+  confirmation, and run only in a terminal's foreground. On Linux it pauses on
+  a logind session lock, `LockedHint` or sleep. An agent with a shell as you can
+  do whatever the vaults allow with a password file, and can catch a typed
+  password: the CLI's grants cannot constrain it. In the core, the MCP crate
+  gains a stdio transport (`serve_stdio`, rmcp `transport-io`), and the broker
+  gains `pending_approvals`, `is_pending`, `approval_unavailable`,
+  `set_manual_approval_available`, `made_recordings`, `PromptFactory::can_ask`,
+  the `logind` signal filter and the limits file helpers the desktop now uses
+  too.
 - Bindings: `ExecHandleFfi::close_stdin` ends a streaming command's input and
   keeps its output coming; `Core::wait_for_recordings` waits for session
   recordings still to be written (a recorded session counts from the moment it
@@ -194,6 +198,15 @@ hosts already did.
 **Mixed-version caveat.** An older client keeps a host's colour and icon when it
 edits the host, but editing a *group* in an older client clears that group's
 colour and icon: older builds rewrote every group field they did not know.
+
+### Security
+
+- The desktop's Linux lock watcher accepted lock, unlock and sleep signals from
+  any local process: another user on the machine could resume agent access
+  paused by a screen lock. It now accepts them only from logind. The approval
+  dialog also spells out invisible format characters (zero-width and word
+  joiners, invisible operators, soft hyphen, the Arabic letter mark) in a
+  command.
 
 ## [0.6.1] — 2026-10-16
 

@@ -468,11 +468,15 @@ integration chosen natively on the command line. Its `--http` mode is the deskto
 loopback transport and token scheme. Grants, revocation and limits are CLI
 subcommands writing the same versioned local formats in the CLI's device directory.
 
-**An agent with a shell on the same OS account, on a device that unlocks without a
-typed password (a password file, or a copy without a master password), has whatever
-the vaults hold.** It can read the password file and run `unissh` itself, or read the
-device files; no grant, approval or confirmation of the CLI constrains it. Grants and
-approvals limit what an agent does through MCP, not what it can do as you.
+**An agent with a shell on the same OS account is outside this boundary.** On a
+device that unlocks without a typed password (a password file, or a copy without a
+master password) it has whatever the vaults hold: it can read the password file and
+run `unissh` itself, or read the device files; no grant, approval or confirmation of
+the CLI constrains it. A typed master password only raises the bar: the same agent
+can capture it the next time you type it, by putting its own `unissh` first on
+`PATH` or editing your shell's rc files. It can also replace the token digests in
+`mcp.json` to use an existing grant from a client of its own. Grants and approvals
+limit what an agent does through MCP, not what it can do as you.
 
 Within that limit the CLI fails closed. A stdio server asks nothing on any terminal:
 the terminal belongs to the client that started it (a full-screen agent, say), where
@@ -480,14 +484,18 @@ whatever types into it could answer. It therefore runs trusted grants only: manu
 grants' commands, and hosts that ask for a password or a one-time code, are refused
 with `approval_unavailable`, and it starts only with an unlock that asks nothing
 (`--password-file` or no master password, and a kept Secret Key). Manual approvals
-exist only in `--http` mode when the server's stdin is its controlling terminal (the
-user started it in a terminal of their own); they are asked on `/dev/tty`, with the
+exist only in `--http` mode when the server's stdin is its controlling terminal and
+it runs in that terminal's foreground (the user started it in a terminal of their
+own; sent to the background, it answers each question with `approval_unavailable`
+instead of asking); they are asked on `/dev/tty`, with the
 exact command and inputs in escaped notation, type-ahead discarded, and only a typed
 `yes` allows. Commands that widen access (`grants set`, `integrations add`,
-`integrations rotate`) ask for the master password typed on a terminal, ignoring
-`--password-file` and `--yes`, and are refused without a terminal; revoking needs no
-password. On Linux a running server pauses on a logind session lock or sleep, as the
-desktop does. Its stderr log applies the same `rmcp` suppression.
+`integrations rotate`) print what they will do and then ask for the master password
+typed on a terminal, as the confirmation, ignoring `--password-file`; they run only
+in the foreground of a terminal of their own (not with stdin piped, as from a child
+process), and revoking needs no password. On Linux a running server pauses on a
+logind session lock (or `LockedHint`) or sleep, as the desktop does, and hears
+those signals only from logind itself. Its stderr log applies the same `rmcp` suppression.
 
 When a host enables session recording, authorized MCP commands are also persisted
 as encrypted recording items in that host's vault. Command text, cwd, application
