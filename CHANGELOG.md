@@ -66,6 +66,10 @@ starts with `0.`:
   ever asked on the terminal or read from an owner-only file; no session token
   is stored. `unissh logout` revokes the device and deletes its data. The old
   core harness is now the `unissh-harness` binary.
+- `unissh cp -r` copies a directory tree to or from a host, several files at
+  once over one SFTP connection (`--parallel`, 4 by default). Symbolic links
+  inside the tree are skipped and named, not followed; a file that fails is
+  reported, the rest still copy, and the command exits non-zero.
 - Bindings: `ExecHandleFfi::close_stdin` ends a streaming command's input and
   keeps its output coming; `Core::wait_for_recordings` waits for session
   recordings still to be written (a recorded session counts from the moment it
