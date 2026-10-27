@@ -29,6 +29,7 @@ pub struct Saved {
 
 impl Named for Saved {
     const KIND: &'static str = "snippet";
+    const KINDS: &'static str = "snippets";
     const LISTED_BY: Option<&'static str> = Some("unissh snippets list");
 
     fn vault_name(&self) -> &str {
