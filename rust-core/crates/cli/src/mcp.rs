@@ -418,7 +418,8 @@ fn widening(home: Home) -> Res<Device> {
 fn unlock_confirmed(device: &Device, summary: &str) -> Res<bool> {
     let typed = device.core.instance_requires_password() == Some(true);
     if typed {
-        let mut tty = Tty::open().map_err(|_| Failure::msg(WIDENING_NEEDS_A_TERMINAL))?;
+        let mut tty =
+            Tty::open().map_err(|_no_terminal| Failure::msg(WIDENING_NEEDS_A_TERMINAL))?;
         tty.say(summary)?;
         tty.say(
             "This widens what an agent may do. Type the master password to confirm it \
@@ -949,14 +950,14 @@ fn duration_seconds(text: &str) -> Result<u64, String> {
 
 /// A grant's lifetime, in seconds as the broker takes it.
 fn grant_seconds(text: &str) -> Result<u32, String> {
-    u32::try_from(duration_seconds(text)?).map_err(|_| "too long".to_owned())
+    u32::try_from(duration_seconds(text)?).map_err(|_out_of_range| "too long".to_owned())
 }
 
 /// A command's longest runtime, 1 minute to 24 hours, in milliseconds.
 fn command_ceiling_ms(text: &str) -> Result<u32, String> {
     let seconds = duration_seconds(text)?;
     if (60..=86_400).contains(&seconds) && seconds % 60 == 0 {
-        u32::try_from(seconds * 1000).map_err(|_| "too long".to_owned())
+        u32::try_from(seconds * 1000).map_err(|_out_of_range| "too long".to_owned())
     } else {
         Err("from 1m to 24h".to_owned())
     }
