@@ -28,13 +28,21 @@ pub fn lines(text: &str) -> String {
 }
 
 /// Whether a character of untrusted text may reach the terminal: not a C0, DEL
-/// or C1 control, not a bidi embedding, override, isolate or mark, and not a
-/// zero-width character (U+200B–U+200F, U+FEFF).
+/// or C1 control, not a bidi embedding, override, isolate or mark (U+061C,
+/// U+200E/F, U+202A–U+202E, U+2066–U+2069), and not an invisible format
+/// character (U+00AD, U+200B–U+200D, U+2060–U+2064, U+FEFF). The same set as
+/// the approval notation, `unissh_automation::visible`, escapes.
 fn shown(c: char) -> bool {
     !c.is_control()
         && !matches!(
             c,
-            '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}'
+            '\u{ad}'
+                | '\u{61c}'
+                | '\u{200b}'..='\u{200f}'
+                | '\u{202a}'..='\u{202e}'
+                | '\u{2060}'..='\u{2064}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{feff}'
         )
 }
 
@@ -651,6 +659,9 @@ mod tests {
         let hostile = "\u{202e}txt.exe\u{202c} pro\u{200b}d\u{2066}\u{200f}\u{feff}";
         assert_eq!(one_line(hostile), "txt.exe prod");
         assert_eq!(lines(hostile), "txt.exe prod");
+        let invisible = "a\u{ad}b\u{61c}c\u{2060}d\u{2064}e";
+        assert_eq!(one_line(invisible), "abcde");
+        assert_eq!(lines(invisible), "abcde");
     }
 
     #[test]

@@ -98,9 +98,11 @@ fn awaiting(run: &Run, now: Instant) -> bool {
 }
 
 /// `text` in JSON string notation with every control visible, as the desktop's
-/// approval dialog shows a command: C0 controls, DEL, C1 controls and the bidi
-/// overrides and isolates are escaped, so a newline, a terminal escape or a
-/// right-to-left trick cannot hide part of what would run.
+/// approval dialog shows a command: C0 controls, DEL, C1 controls, the bidi
+/// marks, overrides and isolates, and the invisible format characters (zero
+/// width space/joiners, word joiner, invisible operators, BOM, soft hyphen)
+/// are escaped, so a newline, a terminal escape, a right-to-left trick or an
+/// invisible character cannot hide part of what would run.
 pub fn visible(text: &str) -> String {
     let mut out = String::with_capacity(text.len().saturating_add(2));
     out.push('"');
@@ -113,9 +115,20 @@ pub fn visible(text: &str) -> String {
             '\t' => out.push_str("\\t"),
             '\u{8}' => out.push_str("\\b"),
             '\u{c}' => out.push_str("\\f"),
-            // C0, DEL and C1 (`is_control`), then the bidi overrides and isolates.
+            // C0, DEL and C1 (`is_control`), then the bidi controls and the
+            // invisible format characters. Keep in step with `visibleCommand`
+            // (client/src/bridge/mcp.ts).
             c if c.is_control()
-                || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}') =>
+                || matches!(
+                    c,
+                    '\u{ad}'
+                        | '\u{61c}'
+                        | '\u{200b}'..='\u{200f}'
+                        | '\u{202a}'..='\u{202e}'
+                        | '\u{2060}'..='\u{2064}'
+                        | '\u{2066}'..='\u{2069}'
+                        | '\u{feff}'
+                ) =>
             {
                 out.push_str(&format!("\\u{:04x}", u32::from(c)));
             }
@@ -137,6 +150,10 @@ mod tests {
         assert_eq!(
             visible("rm -rf /tmp/x\n\u{1b}[2K\"ok\"\\\u{9b}\u{202e}fdp\u{2066}"),
             r#""rm -rf /tmp/x\n\u001b[2K\"ok\"\\\u009b\u202efdp\u2066""#
+        );
+        assert_eq!(
+            visible("a\u{ad}b\u{61c}c\u{200b}d\u{200f}e\u{2060}f\u{2064}g\u{feff}h"),
+            r#""a\u00adb\u061cc\u200bd\u200fe\u2060f\u2064g\ufeffh""#
         );
         assert_eq!(visible("ls -la ü"), "\"ls -la ü\"");
     }

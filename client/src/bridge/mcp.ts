@@ -31,9 +31,13 @@ export const mcpApprove = (runId: string, allowed: boolean) => invoke<void>("mcp
 export const mcpCloseSession = (sessionId: string) => invoke<void>("mcp_close_session", { sessionId });
 export const mcpCancelCommand = (runId: string) => invoke<void>("mcp_cancel_command", { runId });
 
-/** JSON notation makes control characters and literal backslashes unambiguous. */
+/**
+ * JSON notation makes control characters and literal backslashes unambiguous;
+ * DEL, C1, the bidi controls and the invisible format characters are escaped
+ * too. Keep in step with `visible` (rust-core/crates/automation/src/approval.rs).
+ */
 export function visibleCommand(command: string): string {
-  return JSON.stringify(command).replace(/[\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  return JSON.stringify(command).replace(/[\u007f-\u009f\u00ad\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
 }
 /** Deliberately excludes the secret, even directly after token creation. */
 export function mcpConfiguration(endpoint: string): string {
