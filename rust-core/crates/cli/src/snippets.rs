@@ -19,7 +19,6 @@ use crate::tty::{one_line, Tty};
 /// A snippet and the vault it lives in.
 pub struct Saved {
     /// The vault's id.
-    #[expect(dead_code, reason = "read once snippets are edited in their vault")]
     pub vault_id: String,
     /// The vault's name.
     pub vault_name: String,

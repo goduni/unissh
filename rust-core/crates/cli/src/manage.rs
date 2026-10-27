@@ -55,7 +55,7 @@ pub fn status(home: &Home) -> Res<()> {
 }
 
 /// "3 minutes ago", for a time in the past.
-fn ago(at: SystemTime) -> String {
+pub fn ago(at: SystemTime) -> String {
     let Ok(age) = SystemTime::now().duration_since(at) else {
         return "just now".to_owned();
     };

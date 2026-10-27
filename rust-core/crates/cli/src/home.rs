@@ -286,7 +286,7 @@ fn absolute_env(name: &str) -> Option<PathBuf> {
 }
 
 /// Writes `bytes` to `path` readable by the owner only, replacing it atomically.
-fn write_private(path: &Path, bytes: &[u8]) -> Res<()> {
+pub fn write_private(path: &Path, bytes: &[u8]) -> Res<()> {
     let tmp = path.with_extension("tmp");
     // A leftover from an interrupted write may carry other permissions, and
     // `mode` below only applies to a file being created.

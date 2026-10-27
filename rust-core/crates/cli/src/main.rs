@@ -15,10 +15,12 @@
 
 mod connect;
 mod device;
+mod edit;
 mod escape;
 mod failure;
 mod fleet;
 mod home;
+mod host_edit;
 mod hosts;
 mod login;
 mod manage;
@@ -26,8 +28,10 @@ mod picker;
 mod pool;
 mod recordings;
 mod replay;
+mod secrets;
 mod server;
 mod signals;
+mod snippet_edit;
 mod snippets;
 mod tree;
 mod tty;
@@ -45,9 +49,12 @@ use crate::connect::{exit_code, Direction, Endpoint};
 use crate::device::{Credentials, Device};
 use crate::failure::{Failure, Res};
 use crate::home::Home;
+use crate::host_edit::{GroupsAction, HostsAction};
 use crate::login::{Joining, SignIn};
 use crate::manage::KnownHostsAction;
 use crate::replay::Timing;
+use crate::secrets::{IdentitiesAction, KeysAction, SecretsAction};
+use crate::snippet_edit::SnippetWrite;
 use crate::tty::Tty;
 use crate::tunnel::Forward;
 
@@ -95,9 +102,13 @@ enum Command {
     Status,
     /// Sync the vaults with the server now.
     Sync,
-    /// List the hosts.
+    /// List the hosts, or add, change or delete one.
+    #[command(args_conflicts_with_subcommands = true)]
     Hosts {
-        /// Only hosts whose label, address, vault or tags contain this.
+        #[command(subcommand)]
+        action: Option<Box<HostsAction>>,
+        /// Only hosts whose label, address, vault or tags contain this (after
+        /// `--` when it is add, edit or rm: `unissh hosts -- add`).
         filter: Option<String>,
         /// Only hosts with this tag.
         #[arg(long)]
@@ -159,6 +170,20 @@ enum Command {
     /// The host keys this machine has pinned.
     #[command(subcommand, name = "known-hosts")]
     KnownHosts(KnownHosts),
+    /// Host groups: list, add, change or delete them.
+    #[command(subcommand)]
+    Groups(GroupsAction),
+    /// Keys, passwords, notes and identities in the vaults; a secret is shown
+    /// only with `show --reveal`.
+    #[command(subcommand)]
+    Secrets(SecretsAction),
+    /// SSH keys: generate, import, print the public key, rotate.
+    #[command(subcommand)]
+    Keys(KeysAction),
+    /// Personal identities: a user name and the key or password it logs in
+    /// with, for hosts that log in personally.
+    #[command(subcommand)]
+    Identities(IdentitiesAction),
     /// Recorded sessions: list, replay, export, delete.
     #[command(subcommand)]
     Recordings(Recordings),
@@ -173,11 +198,12 @@ enum Command {
         #[arg(last = true, required = true, value_name = "COMMAND")]
         command: Vec<String>,
     },
-    /// The vaults' snippets.
+    /// The vaults' snippets: list, run, add, edit, delete.
     #[command(subcommand)]
     Snippets(Snippets),
 }
 
+/// `unissh snippets`.
 #[derive(Subcommand)]
 enum Snippets {
     /// List the snippets.
@@ -196,6 +222,8 @@ enum Snippets {
         #[command(flatten)]
         options: RunArgs,
     },
+    #[command(flatten)]
+    Write(SnippetWrite),
 }
 
 /// Which hosts a run goes to: one way of naming them.
@@ -412,7 +440,18 @@ fn run(cli: Cli) -> Res<u8> {
             server::warn_about(&report);
             Ok(0)
         }
-        Command::Hosts { filter, tag, json } => {
+        Command::Hosts {
+            action: Some(action),
+            ..
+        } => edit(home, &credentials, offline, |d| {
+            host_edit::hosts(d, offline, *action)
+        }),
+        Command::Hosts {
+            action: None,
+            filter,
+            tag,
+            json,
+        } => {
             let device = ready(home, &credentials, offline)?;
             let all = hosts::load(&device.core)?;
             let shown = hosts::filter(&all, filter.as_deref(), tag.as_deref());
@@ -475,24 +514,19 @@ fn run(cli: Cli) -> Res<u8> {
             manage::known_hosts(&device.core, action)?;
             Ok(0)
         }
-        Command::Recordings(what) => {
-            let device = ready(home, &credentials, offline)?;
-            match what {
-                Recordings::List { filter, json } => {
-                    recordings::list(&device, filter.as_deref(), json)?;
-                }
-                Recordings::Play {
-                    id,
-                    speed,
-                    idle_limit,
-                } => return recordings::play(&device, &id, Timing { speed, idle_limit }),
-                Recordings::Export { id, file, force } => {
-                    recordings::export(&device, &id, &file, force)?;
-                }
-                Recordings::Rm { id, yes } => recordings::remove(&device, &id, yes, offline)?,
-            }
-            Ok(0)
-        }
+        Command::Groups(action) => edit(home, &credentials, offline, |d| {
+            host_edit::groups(d, offline, action)
+        }),
+        Command::Secrets(action) => edit(home, &credentials, offline, |d| {
+            secrets::secrets(d, offline, action)
+        }),
+        Command::Keys(action) => edit(home, &credentials, offline, |d| {
+            secrets::keys(d, offline, action)
+        }),
+        Command::Identities(action) => edit(home, &credentials, offline, |d| {
+            secrets::identities(d, offline, action)
+        }),
+        Command::Recordings(what) => recording(home, &credentials, offline, what),
         Command::Run {
             hosts: selection,
             options,
@@ -510,11 +544,43 @@ fn run(cli: Cli) -> Res<u8> {
     }
 }
 
+/// A command that writes to the vaults: `write` runs on the unlocked device.
+fn edit(
+    home: Home,
+    credentials: &Credentials,
+    offline: bool,
+    write: impl FnOnce(&Device) -> Res<()>,
+) -> Res<u8> {
+    let device = ready(home, credentials, offline)?;
+    write(&device)?;
+    Ok(0)
+}
+
+/// `unissh recordings`.
+fn recording(home: Home, credentials: &Credentials, offline: bool, what: Recordings) -> Res<u8> {
+    let device = ready(home, credentials, offline)?;
+    match what {
+        Recordings::List { filter, json } => {
+            recordings::list(&device, filter.as_deref(), json)?;
+        }
+        Recordings::Play {
+            id,
+            speed,
+            idle_limit,
+        } => return recordings::play(&device, &id, Timing { speed, idle_limit }),
+        Recordings::Export { id, file, force } => {
+            recordings::export(&device, &id, &file, force)?;
+        }
+        Recordings::Rm { id, yes } => recordings::remove(&device, &id, yes, offline)?,
+    }
+    Ok(0)
+}
+
 fn snippet(home: Home, credentials: &Credentials, offline: bool, action: Snippets) -> Res<u8> {
     let device = ready(home, credentials, offline)?;
-    let saved = snippets::load(&device.core)?;
     match action {
         Snippets::List { json } => {
+            let saved = snippets::load(&device.core)?;
             if json {
                 let text = serde_json::to_string_pretty(&snippets::json(&saved))
                     .map_err(|e| Failure::msg(e.to_string()))?;
@@ -531,8 +597,13 @@ fn snippet(home: Home, credentials: &Credentials, offline: bool, action: Snippet
             hosts: selection,
             options,
         } => {
+            let saved = snippets::load(&device.core)?;
             let command = &hosts::find_named(&saved, &snippet)?.snippet.command;
             fleet_run(&device.core, &selection.selection(), command, &options)
+        }
+        Snippets::Write(action) => {
+            snippet_edit::run(&device, offline, action)?;
+            Ok(0)
         }
     }
 }

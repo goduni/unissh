@@ -159,7 +159,7 @@ pub struct Group {
 impl Named for Group {
     const KIND: &'static str = "group";
     const KINDS: &'static str = "groups";
-    const LISTED_BY: Option<&'static str> = None;
+    const LISTED_BY: Option<&'static str> = Some("unissh groups list");
 
     fn vault_name(&self) -> &str {
         &self.vault_name
@@ -181,6 +181,30 @@ pub fn load_groups(core: &Core) -> Res<Vec<Group>> {
             group,
         },
     )
+}
+
+/// A borrowed one answers to the same names, so a lookup can run over a
+/// narrowed list (`--vault`) without copying it.
+impl<T: Named> Named for &T {
+    const KIND: &'static str = T::KIND;
+    const KINDS: &'static str = T::KINDS;
+    const LISTED_BY: Option<&'static str> = T::LISTED_BY;
+
+    fn vault_name(&self) -> &str {
+        (**self).vault_name()
+    }
+
+    fn label(&self) -> &str {
+        (**self).label()
+    }
+
+    fn address(&self) -> Option<&str> {
+        (**self).address()
+    }
+
+    fn detail(&self) -> String {
+        (**self).detail()
+    }
 }
 
 /// The host `query` names: `vault/label`, else a label (any case), else the
@@ -343,7 +367,9 @@ pub fn resolve_with_hint(
         .map_err(|e| {
             if personal {
                 Failure::msg(format!(
-                    "{} needs your personal identity: {e}. Link one to this host in the UniSSH app",
+                    "{} needs your personal identity: {e}. Link one with \
+                     `unissh hosts edit \"{}\" --identity <name>`",
+                    one_line(&p.label),
                     one_line(&p.label)
                 ))
             } else {
