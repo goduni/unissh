@@ -447,7 +447,7 @@ struct NoPrompts;
 
 impl PromptFactory for NoPrompts {
     fn for_connection(&self, _: &str, _: Cancel, _: Instant) -> Arc<dyn AuthPrompter> {
-        Arc::new(NoPrompts)
+        Arc::new(Self)
     }
 
     fn can_ask(&self) -> bool {
