@@ -1,4 +1,4 @@
-//! An embeddable MCP HTTP adapter, not a standalone server executable.
+//! Embeddable MCP transports (loopback HTTP and stdio), not a standalone server executable.
 //!
 //! No vault or SSH dependency is allowed here. The native app supplies authentication
 //! and a broker implementing [`Backend`]; the broker owns grants, sessions and runs.
@@ -17,7 +17,7 @@ mod server;
 
 use std::{future::Future, pin::Pin};
 
-pub use server::LocalServer;
+pub use server::{serve_io, serve_stdio, LocalServer, MAX_REQUEST_BYTES};
 pub use tokio_util::sync::CancellationToken;
 
 /// Hard logging policy for every sink in the embedding application. SDK events

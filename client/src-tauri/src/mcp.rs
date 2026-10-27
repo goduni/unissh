@@ -13,7 +13,7 @@ use std::{
 use tauri::{Manager, State};
 use unissh_automation::{
     core::{CoreExecutor, PromptFactory},
-    ApprovalMode, Broker, BrokerLimits, Cancel, GrantLimits,
+    load_limits, save_limits, ApprovalMode, Broker, BrokerLimits, Cancel, GrantLimits,
 };
 use unissh_ffi::{AuthPromptRequest, AuthPrompter, Core};
 use unissh_mcp::{credentials::Credentials, CancellationToken, LocalServer};
@@ -226,29 +226,6 @@ impl Controller {
             json!({"enabled":online,"port":port,"endpoint":format!("http://127.0.0.1:{port}/mcp"),"error":error,"integrations":integrations,"activity":review}),
         )
     }
-}
-
-/// Saved application-wide limits, or `None` (defaults) when absent or unreadable.
-fn load_limits(path: &std::path::Path) -> Option<BrokerLimits> {
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
-        Err(e) => {
-            log::warn!("mcp: reading saved limits failed: {e}");
-            return None;
-        }
-    };
-    serde_json::from_slice(&bytes)
-        .inspect_err(|e| log::warn!("mcp: saved limits are invalid ({e}); using the defaults"))
-        .ok()
-}
-
-/// Writes the limits next to the file they replace and renames over it, so a
-/// crash leaves either the old or the new limits, never a torn file.
-fn save_limits(path: &std::path::Path, limits: &BrokerLimits) -> std::io::Result<()> {
-    let temp = path.with_extension("json.tmp");
-    std::fs::write(&temp, serde_json::to_vec(limits)?)?;
-    std::fs::rename(&temp, path)
 }
 
 pub fn revoke(app: &tauri::AppHandle) {

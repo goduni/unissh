@@ -6,26 +6,47 @@
 //! module changes is put back when its guard is dropped.
 
 use std::io;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use zeroize::Zeroizing;
 
 use crate::failure::{Failure, Res};
 
-pub use imp::{read_stdin, wait_for_input, window_size, RawMode, ReplayTerminal, Tty, SUPPORTED};
+pub use imp::{
+    read_stdin, stdin_is_foreground, wait_for_input, window_size, RawMode, ReplayTerminal, Tty,
+    SUPPORTED,
+};
 
 /// `text` without control characters, for one line that came from a server,
 /// a vault or a remote host: printed raw, an escape sequence in it could move
-/// the cursor, rewrite what is on screen or fake a prompt.
+/// the cursor, rewrite what is on screen or fake a prompt. Bidi controls and
+/// zero-width characters go too: they could reorder or hide part of a name.
 pub fn one_line(text: &str) -> String {
-    text.chars().filter(|c| !c.is_control()).collect()
+    text.chars().filter(|c| shown(*c)).collect()
 }
 
 /// [`one_line`] for text that may span lines: line breaks stay.
 pub fn lines(text: &str) -> String {
-    text.chars()
-        .filter(|c| *c == '\n' || !c.is_control())
-        .collect()
+    text.chars().filter(|c| *c == '\n' || shown(*c)).collect()
+}
+
+/// Whether a character of untrusted text may reach the terminal: not a C0, DEL
+/// or C1 control, not a bidi embedding, override, isolate or mark (U+061C,
+/// U+200E/F, U+202A–U+202E, U+2066–U+2069), and not an invisible format
+/// character (U+00AD, U+200B–U+200D, U+2060–U+2064, U+FEFF). The same set as
+/// the approval notation, `unissh_automation::visible`, escapes.
+fn shown(c: char) -> bool {
+    !c.is_control()
+        && !matches!(
+            c,
+            '\u{ad}'
+                | '\u{61c}'
+                | '\u{200b}'..='\u{200f}'
+                | '\u{202a}'..='\u{202e}'
+                | '\u{2060}'..='\u{2064}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{feff}'
+        )
 }
 
 // The quiet-prompt line editor is the Unix terminal's (Windows has no `Tty`);
@@ -111,6 +132,13 @@ impl QuietLine {
         }
     }
 
+    /// How many characters the line holds (UTF-8 continuation bytes are part
+    /// of the character before them).
+    #[cfg(unix)]
+    fn chars(&self) -> usize {
+        self.text.iter().filter(|b| **b & 0xC0 != 0x80).count()
+    }
+
     /// The line so far, leaving an empty one.
     fn take(&mut self) -> Zeroizing<Vec<u8>> {
         std::mem::replace(&mut self.text, Zeroizing::new(Vec::with_capacity(256)))
@@ -187,6 +215,29 @@ impl Tty {
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
+    /// Prints `prompt` and reads a line a key at a time, echoed when `echo`,
+    /// until Enter — or `None` once `deadline` passes or `stop` says so. Works
+    /// whatever mode the terminal is in (a full-screen program may hold it
+    /// raw), and what was typed before the prompt appeared is discarded, so
+    /// keys meant for something else cannot answer it.
+    pub fn line_until(
+        &mut self,
+        prompt: &str,
+        echo: bool,
+        deadline: Instant,
+        stop: &dyn Fn() -> bool,
+    ) -> io::Result<Option<Zeroizing<String>>> {
+        self.say(prompt)?;
+        let bytes = self.read_line_until(echo, deadline, stop);
+        self.say("\r\n")?;
+        let Some(bytes) = bytes? else {
+            return Ok(None);
+        };
+        let text = std::str::from_utf8(&bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        Ok(Some(Zeroizing::new(text.to_owned())))
+    }
+
     /// Asks a yes/no question; anything but `y`/`yes` is no.
     pub fn confirm(&mut self, prompt: &str) -> io::Result<bool> {
         Ok(is_yes(&self.line(prompt)?))
@@ -220,7 +271,7 @@ mod imp {
         tcgetattr, tcgetwinsize, tcsetattr, OptionalActions, OutputModes, Termios,
     };
 
-    use super::{cancelled, ended, Key, QuietLine};
+    use super::{cancelled, ended, Key, QuietLine, STOP_TICK};
     use crate::failure::best_effort;
     use zeroize::Zeroizing;
 
@@ -307,6 +358,48 @@ mod imp {
                 (&self.file).write_all(b".")?;
                 if complete(&text) {
                     return Ok(text);
+                }
+            }
+        }
+
+        /// One line a key at a time ([`QuietLine`]) with the terminal's own
+        /// echo, editing and signals off, echoing what the editor keeps when
+        /// `echo`; `None` at `deadline` or once `stop` turns true.
+        pub(super) fn read_line_until(
+            &self,
+            echo: bool,
+            deadline: Instant,
+            stop: &dyn Fn() -> bool,
+        ) -> io::Result<Option<Zeroizing<Vec<u8>>>> {
+            let _quiet = Quiet::on(&self.file)?;
+            let mut editor = QuietLine::new();
+            let mut byte = [0_u8; 1];
+            loop {
+                let left = deadline.saturating_duration_since(Instant::now());
+                if stop() || left.is_zero() {
+                    return Ok(None);
+                }
+                if !ready(self.file.as_fd(), left.min(STOP_TICK))? {
+                    continue;
+                }
+                if (&self.file).read(&mut byte)? == 0 {
+                    return Err(ended());
+                }
+                let [key] = byte;
+                let (bytes, chars) = (editor.text.len(), editor.chars());
+                match editor.key(key) {
+                    Key::More if echo => {
+                        if editor.text.len() > bytes {
+                            (&self.file).write_all(&byte)?;
+                        }
+                        for _ in editor.chars()..chars {
+                            (&self.file).write_all(b"\x08 \x08")?;
+                        }
+                    }
+                    Key::More => {}
+                    Key::Enter => return Ok(Some(editor.take())),
+                    Key::Cancel => return Err(cancelled()),
+                    Key::End => return Err(ended()),
                 }
             }
         }
@@ -475,6 +568,17 @@ mod imp {
         ready(io::stdin().as_fd(), timeout)
     }
 
+    /// Whether stdin is this process's controlling terminal (not a pipe, not
+    /// some other terminal: `tcgetpgrp` answers only for the controlling one)
+    /// and this process is in its foreground: not started with `&`, not
+    /// suspended and sent on with `bg`.
+    /// (A background process that reads the terminal is stopped, and the one
+    /// in the foreground is someone else, who must not answer for it.)
+    pub fn stdin_is_foreground() -> bool {
+        rustix::termios::tcgetpgrp(io::stdin().as_fd())
+            .is_ok_and(|group| group == rustix::process::getpgrp())
+    }
+
     /// Waits up to `timeout` for `fd` to become readable. A signal arriving
     /// meanwhile does not end the wait early: it goes on for the time left.
     fn ready(fd: BorrowedFd<'_>, timeout: Duration) -> io::Result<bool> {
@@ -515,7 +619,7 @@ mod imp {
 #[cfg(not(unix))]
 mod imp {
     use std::io::{self, Read, Write};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use zeroize::Zeroizing;
 
@@ -556,6 +660,15 @@ mod imp {
             &self,
             _complete: &mut dyn FnMut(&[u8]) -> bool,
         ) -> io::Result<Zeroizing<Vec<u8>>> {
+            match *self {}
+        }
+
+        pub(super) const fn read_line_until(
+            &self,
+            _echo: bool,
+            _deadline: Instant,
+            _stop: &dyn Fn() -> bool,
+        ) -> io::Result<Option<Zeroizing<Vec<u8>>>> {
             match *self {}
         }
     }
@@ -605,6 +718,11 @@ mod imp {
         None
     }
 
+    /// No terminal to be in the foreground of.
+    pub const fn stdin_is_foreground() -> bool {
+        false
+    }
+
     /// Always "ready": the read that follows blocks instead.
     pub const fn wait_for_input(_timeout: Duration) -> io::Result<bool> {
         Ok(true)
@@ -619,6 +737,10 @@ mod imp {
 /// How long the session input loop waits for a key before it looks at the
 /// window size again.
 pub const INPUT_TICK: Duration = Duration::from_millis(100);
+
+/// How often a timed prompt looks whether it is still wanted.
+#[cfg(unix)]
+const STOP_TICK: Duration = Duration::from_millis(200);
 
 #[cfg(test)]
 mod tests {
@@ -662,6 +784,18 @@ mod tests {
         let hostile = "web\x1b[2J\x1b[1;1H\u{9b}31m\x07\nMaster password: ";
         assert_eq!(one_line(hostile), "web[2J[1;1H31mMaster password: ");
         assert_eq!(lines(hostile), "web[2J[1;1H31m\nMaster password: ");
+    }
+
+    /// A label that reverses or hides part of itself: `exe.txt` shown as
+    /// `txt.exe`, a zero-width space splitting a word, a byte-order mark.
+    #[test]
+    fn untrusted_text_loses_its_bidi_and_zero_width_characters() {
+        let hostile = "\u{202e}txt.exe\u{202c} pro\u{200b}d\u{2066}\u{200f}\u{feff}";
+        assert_eq!(one_line(hostile), "txt.exe prod");
+        assert_eq!(lines(hostile), "txt.exe prod");
+        let invisible = "a\u{ad}b\u{61c}c\u{2060}d\u{2064}e";
+        assert_eq!(one_line(invisible), "abcde");
+        assert_eq!(lines(invisible), "abcde");
     }
 
     #[test]

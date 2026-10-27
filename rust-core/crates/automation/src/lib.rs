@@ -19,12 +19,15 @@ use unissh_mcp::{
 use zeroize::Zeroizing;
 
 mod access;
+mod approval;
 #[cfg(feature = "core")]
 pub mod core;
 mod limits;
+pub mod logind;
 mod output;
 pub use access::SavedAccess;
-pub use limits::{BrokerLimits, GrantLimits};
+pub use approval::{visible, PendingApproval};
+pub use limits::{load_limits, save_limits, BrokerLimits, GrantLimits};
 use limits::{Limiter, Slot};
 mod working_directory;
 
@@ -284,6 +287,10 @@ pub struct Broker {
     admission: RwLock<()>,
     revocation_epoch: AtomicU64,
     suspended: AtomicBool,
+    /// Whether a native approver can answer manual grants' commands.
+    manual_approval: AtomicBool,
+    /// Whether any run since start was recorded (there may be something to sync).
+    recorded: AtomicBool,
     access_revision: Mutex<Option<[u64; 2]>>,
 }
 
@@ -299,6 +306,8 @@ impl Broker {
             admission: RwLock::new(()),
             revocation_epoch: AtomicU64::new(0),
             suspended: AtomicBool::new(false),
+            manual_approval: AtomicBool::new(true),
+            recorded: AtomicBool::new(false),
             access_revision: Mutex::new(None),
         });
         let weak = Arc::downgrade(&broker);
@@ -942,6 +951,11 @@ impl Broker {
                     return Err(ToolError::Busy);
                 }
                 let approval_mode = grant.approval_mode;
+                if approval_mode == ApprovalMode::Manual
+                    && !self.manual_approval.load(Ordering::SeqCst)
+                {
+                    return Err(ToolError::ApprovalUnavailable);
+                }
                 let retained = grant.limits.retained_commands;
                 if !state.admit_run(&owner, retained, self.limits().retained_commands) {
                     return Err(ToolError::Busy);
@@ -1382,6 +1396,9 @@ impl Broker {
                     return;
                 }
             };
+            if recording.is_some() {
+                broker.recorded.store(true, Ordering::SeqCst);
+            }
             if let Some(run) = lock(&broker.state).runs.get_mut(&rid) {
                 run.recording = recording.clone();
             }

@@ -28,9 +28,19 @@ Published chunks/cursors are immutable and bytes in these buffers count toward l
 Discarded output is marked truncated while the SSH reader continues draining.
 Cancellation closes a channel; detached remote processes may continue.
 
-`Broker::grant`, `grant_with_policy`, `approve`, `review`, `forget_access`,
+`Broker::grant`, `grant_with_policy`, `approve`, `review`, `pending_approvals`,
+`is_pending`, `set_manual_approval_available`, `made_recordings`, `forget_access`,
 `suspend`, `resume`, `inspect_command` and `search_commands` are trusted native APIs. Keep
-them out of the MCP router. Install native SDK log suppression before binding
+them out of the MCP router. `pending_approvals` gives an approver outside the
+desktop UI (the CLI's terminal) the exact immutable command, inputs, destination
+and application of each waiting run, `is_pending` is the cheap check a question on
+screen polls to be withdrawn, and `visible` renders text in the desktop
+dialog's escaped notation. With `set_manual_approval_available(false)` a manual
+grant's command is refused at submission with `approval_unavailable` instead of
+waiting for a decision nobody can make; a `PromptFactory` whose `can_ask` is false
+turns a host's sign-in prompt into the same error. `made_recordings` says whether
+any run was recorded, even one revoked since, so a server that shuts down knows to sync. `load_limits`/`save_limits` persist the
+application-wide limits (`mcp-limits.json`) for the desktop and the CLI alike. Install native SDK log suppression before binding
 real broker data to HTTP, as documented by `unissh-mcp`.
 
 Host-enabled MCP recordings are created after native authorization through the

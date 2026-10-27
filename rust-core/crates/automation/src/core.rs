@@ -15,6 +15,24 @@ pub trait PromptFactory: Send + Sync {
         cancel: Cancel,
         deadline: Instant,
     ) -> Arc<dyn AuthPrompter>;
+    /// Whether anyone can answer these prompts. A host that asks for an answer
+    /// (a typed password, a one-time code) when nobody can give one fails with
+    /// `approval_unavailable` rather than as an unavailable target.
+    fn can_ask(&self) -> bool {
+        true
+    }
+}
+
+/// A connection's prompter that notes whether the host asked anything.
+struct Noting {
+    inner: Arc<dyn AuthPrompter>,
+    asked: AtomicBool,
+}
+impl AuthPrompter for Noting {
+    fn prompt(&self, request: unissh_ffi::AuthPromptRequest) -> Option<Vec<String>> {
+        self.asked.store(true, Ordering::SeqCst);
+        self.inner.prompt(request)
+    }
 }
 
 /// [`Executor`] backed by the application's [`Core`].
@@ -110,14 +128,18 @@ impl Executor for CoreExecutor {
             .payload
             .downcast_ref::<unissh_ffi::automation::Target>()
             .ok_or(ToolError::TargetUnavailable)?;
-        let prompt = self.prompts.for_connection(
-            attribution,
-            cancel.clone(),
-            deadline.map_or_else(
-                || Instant::now() + Duration::from_secs(330),
-                |until| until.min(Instant::now() + Duration::from_secs(330)),
+        let prompt = Arc::new(Noting {
+            inner: self.prompts.for_connection(
+                attribution,
+                cancel.clone(),
+                deadline.map_or_else(
+                    || Instant::now() + Duration::from_secs(330),
+                    |until| until.min(Instant::now() + Duration::from_secs(330)),
+                ),
             ),
-        );
+            asked: AtomicBool::new(false),
+        });
+        let prompter: Arc<dyn AuthPrompter> = prompt.clone();
         self.core
             .automation_connect(
                 target,
@@ -126,10 +148,16 @@ impl Executor for CoreExecutor {
                     cancel: CancelToken::from_shared(cancel),
                     deadline,
                 },
-                Some(prompt),
+                Some(prompter),
             )
             .map(|c| -> Arc<dyn Connection> { Arc::new(CoreConnection(c)) })
-            .map_err(error)
+            .map_err(|e| {
+                if prompt.asked.load(Ordering::SeqCst) && !self.prompts.can_ask() {
+                    ToolError::ApprovalUnavailable
+                } else {
+                    error(e)
+                }
+            })
     }
 }
 struct CoreConnection(Arc<ManagedConnection>);

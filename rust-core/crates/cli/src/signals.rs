@@ -144,7 +144,6 @@ impl Stop {
 
 /// Installs handlers for `signals` and waits for the first of them, inside
 /// the caller's runtime.
-#[expect(dead_code, reason = "for `unissh mcp`'s shutdown, still on its branch")]
 pub async fn first(signals: &[Signal]) -> io::Result<Signal> {
     let mut stop = Stop::install(signals)?;
     Ok(stop.next().await)

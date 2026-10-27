@@ -78,6 +78,32 @@ impl BrokerLimits {
     }
 }
 
+/// Saved application-wide limits at `path` (the `mcp-limits.json` beside an
+/// application's MCP configuration), or `None` — the defaults — when the file is
+/// absent, unreadable or invalid. Kept outside the versioned credential file so
+/// that file stays readable by releases without configurable limits.
+pub fn load_limits(path: &std::path::Path) -> Option<BrokerLimits> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            log::warn!("mcp: reading saved limits failed: {e}");
+            return None;
+        }
+    };
+    serde_json::from_slice(&bytes)
+        .inspect_err(|e| log::warn!("mcp: saved limits are invalid ({e}); using the defaults"))
+        .ok()
+}
+
+/// Saves application-wide limits to `path`: written beside it and renamed over
+/// it, so a crash leaves either the old or the new limits, never a torn file.
+pub fn save_limits(path: &std::path::Path, limits: &BrokerLimits) -> std::io::Result<()> {
+    let temp = path.with_extension("json.tmp");
+    std::fs::write(&temp, serde_json::to_vec(limits)?)?;
+    std::fs::rename(&temp, path)
+}
+
 /// A counting limiter whose capacity can change while slots are held; a lowered
 /// capacity only refuses new slots, held ones stay valid until released.
 pub(super) struct Limiter {
@@ -212,5 +238,36 @@ impl State {
             }
         }
         total.saturating_sub(self.retained_bytes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{load_limits, save_limits, BrokerLimits};
+
+    #[test]
+    fn saved_limits_read_back_as_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp-limits.json");
+        assert_eq!(load_limits(&path), None, "nothing saved yet");
+        let limits = BrokerLimits {
+            max_connections: 3,
+            retained_commands: 64,
+            output_total_bytes: 2 * 1024 * 1024,
+        };
+        save_limits(&path, &limits).unwrap();
+        assert_eq!(load_limits(&path), Some(limits), "the saved limits");
+        assert!(
+            !path.with_extension("json.tmp").exists(),
+            "no temporary file is left"
+        );
+    }
+
+    #[test]
+    fn a_damaged_limits_file_means_the_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp-limits.json");
+        std::fs::write(&path, br#"{"max_connections":3,"surprise":1}"#).unwrap();
+        assert_eq!(load_limits(&path), None, "unknown fields are refused");
     }
 }

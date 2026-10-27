@@ -24,6 +24,8 @@ mod host_edit;
 mod hosts;
 mod login;
 mod manage;
+mod mcp;
+mod mcp_tty;
 mod picker;
 mod pool;
 mod recordings;
@@ -33,6 +35,7 @@ mod server;
 mod signals;
 mod snippet_edit;
 mod snippets;
+mod system_lock;
 mod tree;
 mod tty;
 mod tunnel;
@@ -201,6 +204,9 @@ enum Command {
     /// The vaults' snippets: list, run, add, edit, delete.
     #[command(subcommand)]
     Snippets(Snippets),
+    /// Serve the hosts you grant to a local AI agent over MCP (stdio; --http
+    /// for loopback HTTP), and manage its integrations, grants and limits.
+    Mcp(mcp::Mcp),
 }
 
 /// `unissh snippets`.
@@ -541,6 +547,7 @@ fn run(cli: Cli) -> Res<u8> {
             )
         }
         Command::Snippets(action) => snippet(home, &credentials, offline, action),
+        Command::Mcp(args) => mcp::run(home, &credentials, offline, args),
     }
 }
 

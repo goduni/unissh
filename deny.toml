@@ -36,6 +36,15 @@ ignore = [
     # (elliptic-curve 0.14, crypto-bigint 0.7) once it is out of release
     # candidates. Revisit then, or sooner if the advisory is extended to 0.5.
     "RUSTSEC-2026-0387",
+
+    # zvariant, zvariant_derive, zbus_names (RUSTSEC-2026-0370, -0372, -0371):
+    # unmaintained as standalone crates, not vulnerable. They were folded into
+    # zbus 6, released in October 2026; the CLI's logind watcher (Linux only)
+    # still uses zbus 5.19, the same version as the desktop app. Remove these
+    # when both move to zbus 6.
+    "RUSTSEC-2026-0370",
+    "RUSTSEC-2026-0371",
+    "RUSTSEC-2026-0372",
 ]
 
 [licenses]

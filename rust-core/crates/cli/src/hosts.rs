@@ -101,7 +101,8 @@ pub fn filter<'h>(hosts: &'h [Host], filter: Option<&str>, tag: Option<&str>) ->
         .collect()
 }
 
-/// A vault item people name on the command line: a host, a snippet, a group.
+/// A vault item people name on the command line: a host, a snippet, a group
+/// (and an MCP integration, which is named the same way outside the vaults).
 pub trait Named {
     /// What it is, for messages ("host").
     const KIND: &'static str;
@@ -110,6 +111,8 @@ pub trait Named {
     const KINDS: &'static str;
     /// The command that lists them, for the "no match" hint.
     const LISTED_BY: Option<&'static str>;
+    /// How a refusal of several matches says to name one.
+    const NAME_ONE: &'static str = "name one as vault/label";
     /// The name of the vault it is in.
     fn vault_name(&self) -> &str;
     /// Its label.
@@ -121,6 +124,11 @@ pub trait Named {
     /// What the list of candidates shows after `vault/label`.
     fn detail(&self) -> String {
         String::new()
+    }
+    /// How one of them is named in a refusal of several matches, before
+    /// [`Self::detail`]: `vault/label` unless it lives outside the vaults.
+    fn qualified(&self) -> String {
+        format!("{}/{}", one_line(self.vault_name()), one_line(self.label()))
     }
 }
 
@@ -189,6 +197,7 @@ impl<T: Named> Named for &T {
     const KIND: &'static str = T::KIND;
     const KINDS: &'static str = T::KINDS;
     const LISTED_BY: Option<&'static str> = T::LISTED_BY;
+    const NAME_ONE: &'static str = T::NAME_ONE;
 
     fn vault_name(&self) -> &str {
         (**self).vault_name()
@@ -204,6 +213,10 @@ impl<T: Named> Named for &T {
 
     fn detail(&self) -> String {
         (**self).detail()
+    }
+
+    fn qualified(&self) -> String {
+        (**self).qualified()
     }
 }
 
@@ -243,17 +256,9 @@ pub fn find_named<'i, T: Named>(items: &'i [T], query: &str) -> Res<&'i T> {
 }
 
 fn ambiguous<T: Named>(query: &str, many: &[&T]) -> String {
-    let mut text = format!(
-        "\"{query}\" matches several {}; name one as vault/label:",
-        T::KINDS
-    );
+    let mut text = format!("\"{query}\" matches several {}; {}:", T::KINDS, T::NAME_ONE);
     for i in many {
-        let _ = write!(
-            text,
-            "\n  {}/{}",
-            one_line(i.vault_name()),
-            one_line(i.label())
-        );
+        let _ = write!(text, "\n  {}", i.qualified());
         let detail = i.detail();
         if !detail.is_empty() {
             let _ = write!(text, "  {}", one_line(&detail));

@@ -1167,6 +1167,8 @@ async fn recordings_capture_before_output_limits_and_finalize_without_polling() 
     assert_eq!(*captures[0].outcome.lock().unwrap(), "completed");
     assert_eq!(b.review()["runs"][0]["recording"]["status"], "saved");
 }
+/// Revocation drops the run but seals its recording, and the broker still knows
+/// a recording was made: what a shutting-down server decides its last sync on.
 #[tokio::test]
 async fn revocation_removes_output_but_finalizes_the_recording() {
     let executor = Arc::new(RecordingExecutor::default());
@@ -1180,6 +1182,7 @@ async fn revocation_removes_output_but_finalizes_the_recording() {
     )
     .await
     .unwrap();
+    assert!(!b.made_recordings());
     b.approve(run["run_id"].as_str().unwrap(), true).unwrap();
     tokio::time::timeout(Duration::from_secs(3), async {
         while executor.fake.execs.load(Ordering::SeqCst) == 0 {
@@ -1208,6 +1211,8 @@ async fn revocation_removes_output_but_finalizes_the_recording() {
         "cancelled"
     );
     assert!(b.review()["runs"].as_array().unwrap().is_empty());
+    // The run is gone from the review, but the recording still has to sync.
+    assert!(b.made_recordings());
 }
 
 #[tokio::test]
@@ -1910,4 +1915,102 @@ fn saved_access_keeps_custom_limits_and_the_old_form_for_defaults() {
     assert_eq!(review["saved_access"][0]["limits"]["max_connections"], 2);
     let old: SavedAccess = serde_json::from_value(saved).unwrap();
     assert!(serde_json::to_value(&old).unwrap().get("limits").is_none());
+}
+
+/// A server without anyone to ask (the CLI without a terminal) refuses a manual
+/// grant's command at submission, with a code saying why, and records nothing;
+/// a trusted grant needs no approver and still runs.
+#[tokio::test]
+async fn manual_commands_are_refused_when_nobody_can_approve() {
+    let fake = Arc::new(Fake::default());
+    let b = Broker::new(fake.clone());
+    b.set_manual_approval_available(false);
+    let t = target(&b, "a").await;
+    assert_eq!(
+        call(
+            &b,
+            "a",
+            "run_command",
+            json!({"session_id":null,"target_id":t,"command":"pwd","request_key":"k"})
+        )
+        .await
+        .unwrap_err(),
+        ToolError::ApprovalUnavailable
+    );
+    assert!(b.review()["runs"].as_array().unwrap().is_empty());
+    let t = trusted_target(&b, "b").await;
+    assert_eq!(
+        run(&b, "b", &t, "ok", "k").await.unwrap()["state"],
+        "completed"
+    );
+    assert_eq!(fake.execs.load(Ordering::SeqCst), 1);
+}
+
+/// An approver that cannot ask just now ends the waiting command with
+/// `approval_unavailable`, not a denial, and runs nothing; a second call finds
+/// nothing waiting.
+#[tokio::test]
+async fn a_command_nobody_could_be_asked_about_fails_as_approval_unavailable() {
+    let fake = Arc::new(Fake::default());
+    let b = Broker::new(fake.clone());
+    let t = target(&b, "a").await;
+    let submitted = call(
+        &b,
+        "a",
+        "run_command",
+        json!({"session_id":null,"target_id":t,"command":"pwd","request_key":"k"}),
+    )
+    .await
+    .unwrap();
+    let rid = submitted["run_id"].as_str().unwrap();
+    b.approval_unavailable(rid).unwrap();
+    assert!(!b.is_pending(rid));
+    let r = call(&b, "a", "get_command", json!({"run_id":rid}))
+        .await
+        .unwrap();
+    assert_eq!(r["state"], "failed");
+    assert_eq!(r["error"], json!(ToolError::ApprovalUnavailable));
+    assert_eq!(b.approval_unavailable(rid), Err(ToolError::ApprovalExpired));
+    assert_eq!(b.approve(rid, true), Err(ToolError::ApprovalExpired));
+    assert_eq!(fake.execs.load(Ordering::SeqCst), 0);
+}
+
+/// A native approver outside the desktop sees the exact command, inputs,
+/// destination and application, and a request the agent cancels drops out
+/// (of the list, and of the cheap check a question polls).
+#[tokio::test]
+async fn pending_approvals_show_the_exact_request_until_it_is_withdrawn() {
+    let b = Broker::new(Arc::new(Fake::default()));
+    let t = target(&b, "a").await;
+    let submitted = call(
+        &b,
+        "a",
+        "run_command",
+        json!({"session_id":null,"target_id":t,"command":"rm -rf x\n\u{1b}[2K","cwd":"/srv",
+            "stdin":"in","env":{"MODE":"prod"},"timeout_ms":5000,"request_key":"k"}),
+    )
+    .await
+    .unwrap();
+    let pending = b.pending_approvals();
+    let [p] = pending.as_slice() else {
+        panic!("one pending approval");
+    };
+    assert_eq!(p.run_id, submitted["run_id"].as_str().unwrap());
+    assert_eq!(
+        (p.integration_id.as_str(), p.application.as_str()),
+        ("a", "a")
+    );
+    assert_eq!(p.target.host, "localhost");
+    assert_eq!(p.command.as_str(), "rm -rf x\n\u{1b}[2K");
+    assert_eq!(p.cwd.as_deref().map(String::as_str), Some("/srv"));
+    assert_eq!(p.stdin.as_deref().map(String::as_str), Some("in"));
+    assert_eq!(p.env.len(), 1);
+    assert_eq!(p.timeout_ms, 5000);
+    assert!(p.expires_in > Duration::from_secs(100));
+    assert!(b.is_pending(&p.run_id));
+    call(&b, "a", "cancel_command", json!({"run_id":p.run_id}))
+        .await
+        .unwrap();
+    assert!(b.pending_approvals().is_empty());
+    assert!(!b.is_pending(&p.run_id));
 }

@@ -1,9 +1,10 @@
 # unissh-mcp
 
-Embeddable HTTP MCP transport for the desktop application. This crate is a
-library, not a separate executable or a public server. It has no dependency on
-the vault, SSH transport or Tauri. The native application supplies authentication
-and an authorization broker through `Authenticator` and `Backend`.
+Embeddable MCP transports for the desktop application and the `unissh` CLI:
+loopback HTTP (`LocalServer`) and stdio (`serve_stdio`). This crate is a library,
+not a separate executable or a public server. It has no dependency on the vault,
+SSH transport or Tauri. The native application supplies authentication and an
+authorization broker through `Authenticator` and `Backend`.
 
 The implementation provides nine tools and strict request decoding:
 `list_targets`, `open_ssh_session`, `list_ssh_sessions`, `close_ssh_session`,
@@ -44,13 +45,28 @@ log-level override must not bypass that suppression. This crate does not install
 global logger. The native logger applies `diagnostics_allowed` before every sink; adversarial
 captured-log tests exercise real SDK requests with tracing-to-log enabled.
 
+`serve_stdio` (and `serve_io` over any byte stream, for tests) has no credential:
+the embedding process owner is the caller, and every request acts as the
+`IntegrationId` the application chose natively at start; nothing in the stream can
+select another. A line longer than `MAX_REQUEST_BYTES` ends the session, the same
+bound as an HTTP body. SDK errors that can quote client messages are replaced by
+fixed text. stdout belongs to the protocol: the embedder must write nothing else to
+it and keep prompts on the controlling terminal and logs on stderr, still behind
+`diagnostics_allowed`.
+
+`approval_unavailable` is returned when the user's answer is needed (a manual
+grant's confirmation, or a host's sign-in prompt) but the embedder has no one to ask
+(the CLI over stdio, or without a terminal of its own). A stdio session gets the
+HTTP guard's limits: 16 requests in flight, 35 seconds each.
+
 Manual bearer headers are the supported authentication mechanism; this is not
 MCP OAuth discovery. Loopback HTTP assumes a trusted local environment: it does
 not authenticate the server endpoint or isolate hostile local OS users. A model
 provider may receive results forwarded by the local AI client.
 
-The transport pins official `rmcp` 3.4.0 (Rust 1.88 minimum; repository toolchain
-1.95). Tests exercise real loopback HTTP with both legacy initialization and
+The transport pins official `rmcp` 3.5.0 (Rust 1.88 minimum; repository toolchain
+1.95) with the `server`, `transport-streamable-http-server` and `transport-io`
+(stdio; it adds only Tokio's `io-std`) features. Tests exercise real loopback HTTP with both legacy initialization and
 modern per-request protocol metadata. No user vault or real SSH server is needed.
 
 ```sh

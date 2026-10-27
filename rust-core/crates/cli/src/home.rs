@@ -7,7 +7,9 @@
 //! - `secret-key` — the account Secret Key, when the user lets this machine
 //!   remember it (0600, and refused when anyone else can read it);
 //! - `last-sync` — when the vaults were last synced;
-//! - `sync.lock` — held while syncing, so two commands never sync at once.
+//! - `sync.lock` — held while syncing, so two commands never sync at once;
+//! - `mcp.json`, `mcp-limits.json` — `unissh mcp` integrations (token digests,
+//!   never tokens) and its application-wide limits, in the desktop's formats.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, ErrorKind, Write};
@@ -26,6 +28,8 @@ const LINK: &str = "link.json";
 const SECRET_KEY: &str = "secret-key";
 const LAST_SYNC: &str = "last-sync";
 const SYNC_LOCK: &str = "sync.lock";
+const MCP_CONFIG: &str = "mcp.json";
+const MCP_LIMITS: &str = "mcp-limits.json";
 
 /// How the account on this machine got here. Decides what `logout` warns about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,6 +103,16 @@ impl Home {
     /// The core's encrypted keyset.
     pub fn keyset(&self) -> PathBuf {
         self.dir.join(KEYSET)
+    }
+
+    /// The MCP integrations (`unissh_mcp::credentials`).
+    pub fn mcp_config(&self) -> PathBuf {
+        self.dir.join(MCP_CONFIG)
+    }
+
+    /// The MCP server's application-wide limits (`unissh_automation::load_limits`).
+    pub fn mcp_limits(&self) -> PathBuf {
+        self.dir.join(MCP_LIMITS)
     }
 
     /// Whether this machine holds an instance — complete or half-written.
@@ -218,7 +232,16 @@ impl Home {
     pub fn wipe(&self) -> Res<()> {
         let leftovers = [LINK, SECRET_KEY, LAST_SYNC].map(|n| Path::new(n).with_extension("tmp"));
         let ours = [
-            DB, DB_JOURNAL, KEYSET, LINK, SECRET_KEY, LAST_SYNC, SYNC_LOCK,
+            DB,
+            DB_JOURNAL,
+            KEYSET,
+            LINK,
+            SECRET_KEY,
+            LAST_SYNC,
+            SYNC_LOCK,
+            MCP_CONFIG,
+            MCP_LIMITS,
+            "mcp-limits.json.tmp",
         ]
         .map(PathBuf::from);
         for name in ours.iter().chain(&leftovers) {
@@ -357,12 +380,16 @@ mod tests {
     #[test]
     fn wipe_removes_every_device_file_and_keeps_foreign_ones() {
         let (_dir, home) = home();
-        for name in [DB, KEYSET, LINK, SECRET_KEY, LAST_SYNC, SYNC_LOCK] {
+        for name in [
+            DB, KEYSET, LINK, SECRET_KEY, LAST_SYNC, SYNC_LOCK, MCP_CONFIG, MCP_LIMITS,
+        ] {
             fs::write(home.dir().join(name), b"x").unwrap();
         }
         fs::write(home.dir().join("notes.txt"), b"mine").unwrap();
         home.wipe().unwrap();
-        for name in [DB, KEYSET, LINK, SECRET_KEY, LAST_SYNC, SYNC_LOCK] {
+        for name in [
+            DB, KEYSET, LINK, SECRET_KEY, LAST_SYNC, SYNC_LOCK, MCP_CONFIG, MCP_LIMITS,
+        ] {
             assert!(!home.dir().join(name).exists(), "{name} survived the wipe");
         }
         assert!(

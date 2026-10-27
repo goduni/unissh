@@ -295,8 +295,9 @@ pub fn shell(core: &Core, host: &Host, mut target: Target) -> Res<i32> {
 /// How long a hang-up waits for the remote to confirm the close.
 const CLOSE_GRACE: Duration = Duration::from_secs(3);
 
-/// How long the end of a recorded session waits for the recording's write.
-const RECORDING_GRACE_MS: u32 = 15_000;
+/// How long the end of a recorded session (or of `unissh mcp`) waits for the
+/// recording's write.
+pub const RECORDING_GRACE_MS: u32 = 15_000;
 
 /// Sends keys to the session until it ends, following window resizes and
 /// acting on `~` escapes.

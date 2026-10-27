@@ -23,6 +23,9 @@ path = "src/bin/unissh-harness.rs"
 [dependencies]
 unissh-ffi = { path = "../ffi" }
 unissh-cloud = { path = "../cloud" }
+# `unissh mcp`: the desktop's MCP transport and broker, over this device's core.
+unissh-mcp = { path = "../mcp" }
+unissh-automation = { path = "../automation", features = ["core"] }
 clap = { version = "4", features = ["derive", "env"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -31,14 +34,24 @@ zeroize = "1"
 tempfile = "3"
 # Catching Ctrl-C, SIGTERM and SIGHUP through a safe API (`signals.rs`), on
 # every platform (Windows has Ctrl-C), and the runtime the commands that need
-# one run on. One entry for all of them. Already in the tree (the core's
-# runtime); no new crate.
+# one run on (`unissh mcp` serves on it too). One entry for all of them.
+# Already in the tree (the core's runtime); no new crate.
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "signal", "time"] }
+# `unissh mcp`'s stderr log. Already in the tree.
+log = "0.4"
 
 # Raw terminal mode, window size, polling the terminal and the user id — through
 # safe wrappers, since the workspace denies `unsafe`. Already in the tree (tempfile).
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["termios", "event", "process"] }
+
+# `unissh mcp` pauses on a session lock or sleep, as the desktop does: logind on
+# the system bus (src/system_lock.rs). The desktop's D-Bus crate (zbus 5, pure
+# Rust, no libdbus), here on the Tokio runtime the server already runs; its
+# `async-io` and blocking API are the desktop's choices for keyring, not needed.
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+futures-util = { version = "0.3", default-features = false }
 
 [lints]
 workspace = true
