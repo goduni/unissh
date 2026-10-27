@@ -11,17 +11,102 @@
 //! when it comes from the current owner of logind's name (asked with
 //! `GetNameOwner` at start and followed through the bus's `NameOwnerChanged`)
 //! and from the object and interface logind itself would use.
+//!
+//! The same local user can also flood our unique name, and that is a second,
+//! separate problem: not what we act on, but whether we get to ask anything at
+//! all. zbus reads a connection's socket in one task, which hands a method
+//! reply to its caller and then broadcasts every message to the connection's
+//! open streams. A plain `MessageStream`/`MessageIterator` holds 64 messages
+//! and never drops one: once it is full the reader waits for it to drain, and
+//! a reply queued on the socket behind the flood never reaches its caller, so
+//! a watcher that asks the bus something while not reading its own stream (at
+//! start, or on wake) waits for ever. Hence two connections per watcher:
+//!
+//! - the *watch* connection only listens. Its match rules are added before its
+//!   stream exists; until then zbus has nowhere to queue a message and drops
+//!   it, so the `AddMatch` replies cannot be stuck behind anything. Once the
+//!   stream is open, nothing is ever asked on it again. A rule is per
+//!   connection, so it has to be added there, and this ordering is what makes
+//!   that safe.
+//! - the *calls* connection only asks (the session, logind's owner,
+//!   `LockedHint`, the inhibitor). It never opens a stream, so whatever is
+//!   unicast to it is dropped on arrival and no reply waits behind it; and it
+//!   carries [`CALL_TIMEOUT`], so even a reply logind itself never sends ends
+//!   in an error instead of a hang.
+//!
+//! The state is read on the calls connection only after the watch stream is
+//! open, so a change between the two is either in the reply or in the stream.
+
+use std::time::Duration;
 
 /// logind's well-known bus name.
 pub const LOGIND: &str = "org.freedesktop.login1";
 /// logind's manager object.
 pub const MANAGER_PATH: &str = "/org/freedesktop/login1";
-/// The manager interface (`PrepareForSleep`, `Inhibit`, `GetSessionByPID`).
+/// The manager interface (`PrepareForSleep`, `Inhibit`, the session lookups).
 pub const MANAGER: &str = "org.freedesktop.login1.Manager";
 /// The session interface (`Lock`, `Unlock`, `LockedHint`).
 pub const SESSION: &str = "org.freedesktop.login1.Session";
+/// The user interface (`Display`).
+pub const USER: &str = "org.freedesktop.login1.User";
 /// The interface of `PropertiesChanged`.
 pub const PROPERTIES: &str = "org.freedesktop.DBus.Properties";
+
+/// How long a call on the calls connection may wait for its reply. Past it the
+/// call fails, logged at warn; a check that fails on wake leaves access paused.
+pub const CALL_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// One way of finding this process's logind session, tried in
+/// [`SESSION_LOOKUPS`] order until one finds it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionLookup {
+    /// `GetSession("auto")`: the caller's session, which logind resolves for a
+    /// process under the user's systemd manager too (where GNOME and KDE start
+    /// apps, and where a PID belongs to no session at all).
+    Auto,
+    /// `GetSessionByPID(own pid)`: for a logind too old to know `auto`.
+    ByPid,
+    /// The `Display` session of `GetUser(own uid)`: the user's graphical
+    /// session, when the process itself belongs to none. Read it with
+    /// [`display_session`].
+    UserDisplay,
+}
+
+/// The order the lookups are tried in: the precise answers first, the user's
+/// display session (right for a desktop app, a guess for a shell) last.
+pub const SESSION_LOOKUPS: [SessionLookup; 3] = [
+    SessionLookup::Auto,
+    SessionLookup::ByPid,
+    SessionLookup::UserDisplay,
+];
+
+/// The session in a user's `Display` property `(id, path)`. logind reports
+/// `("", "/")` when the user has no display session: that is not one.
+pub fn display_session(id: &str, path: &str) -> Option<String> {
+    (!id.is_empty() && path != "/" && !path.is_empty()).then(|| path.to_owned())
+}
+
+/// What a watcher could learn about the lock screen on waking up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WakeCheck {
+    /// No session object to ask: only what was heard before counts.
+    NoSession,
+    /// The session's `LockedHint`, read just now.
+    Hint(bool),
+    /// The read failed or timed out.
+    Failed,
+}
+
+/// Whether the screen counts as locked after a wake: `locked_before` is what
+/// the watcher had heard. A check that failed counts as locked, so access stays
+/// paused (fail closed) until an unlock is heard.
+pub const fn locked_after_wake(locked_before: bool, check: WakeCheck) -> bool {
+    match check {
+        WakeCheck::NoSession => locked_before,
+        WakeCheck::Hint(locked) => locked,
+        WakeCheck::Failed => true,
+    }
+}
 
 /// The bus itself: the only sender of `NameOwnerChanged`.
 const BUS: &str = "org.freedesktop.DBus";
@@ -114,7 +199,10 @@ impl Logind {
 
 #[cfg(test)]
 mod tests {
-    use super::{Header, Heard, Logind, MANAGER, MANAGER_PATH, PROPERTIES, SESSION};
+    use super::{
+        display_session, locked_after_wake, Header, Heard, Logind, SessionLookup, WakeCheck,
+        MANAGER, MANAGER_PATH, PROPERTIES, SESSION, SESSION_LOOKUPS,
+    };
 
     const OWNER: &str = ":1.7";
     const SESSION_PATH: &str = "/org/freedesktop/login1/session/_34";
@@ -253,5 +341,37 @@ mod tests {
             logind.heard(&signal(OWNER, SESSION_PATH, SESSION, "Lock")),
             None
         );
+    }
+
+    /// The caller's own session first, then by PID, then the user's display
+    /// session; logind's "no display session" is not a session.
+    #[test]
+    fn the_session_is_looked_up_precise_first() {
+        assert_eq!(
+            SESSION_LOOKUPS,
+            [
+                SessionLookup::Auto,
+                SessionLookup::ByPid,
+                SessionLookup::UserDisplay
+            ]
+        );
+        assert_eq!(
+            display_session("2", "/org/freedesktop/login1/session/_32").as_deref(),
+            Some("/org/freedesktop/login1/session/_32")
+        );
+        assert_eq!(display_session("", "/"), None);
+        assert_eq!(display_session("2", "/"), None);
+    }
+
+    /// A wake resumes only on a lock screen known to be down: a failed or
+    /// timed-out check keeps access paused.
+    #[test]
+    fn a_failed_wake_check_stays_locked() {
+        for before in [false, true] {
+            assert_eq!(locked_after_wake(before, WakeCheck::NoSession), before);
+            assert!(locked_after_wake(before, WakeCheck::Failed));
+            assert!(locked_after_wake(before, WakeCheck::Hint(true)));
+            assert!(!locked_after_wake(before, WakeCheck::Hint(false)));
+        }
     }
 }
