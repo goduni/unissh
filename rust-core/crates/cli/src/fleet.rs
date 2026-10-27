@@ -17,11 +17,9 @@
 //! then the caller fills the command's parameters for the hosts that will run
 //! ([`Plan::params`]) and [`run`] runs it.
 
-use std::collections::VecDeque;
 use std::fmt::Write as _;
 use std::io::{self, Write as _};
-use std::sync::{mpsc, Mutex, PoisonError};
-use std::thread;
+use std::sync::{Mutex, PoisonError};
 
 use serde_json::{json, Value};
 use unissh_ffi::snippet_params::{builtins_from_profile, split_fleet_params, FleetParams};
@@ -29,7 +27,8 @@ use unissh_ffi::{Core, MultiExecTarget, ResolveStatus};
 
 use crate::connect;
 use crate::failure::{best_effort, Failure, Res, EXIT_FAILURE};
-use crate::hosts::{self, Host};
+use crate::hosts::{self, Host, Target};
+use crate::pool;
 use crate::tty::one_line;
 
 /// How many hosts run at once by default — the app's Fleet limit.
@@ -225,7 +224,7 @@ fn display_names(picked: &[&Host]) -> Vec<String> {
 pub struct Plan<'h> {
     rows: Vec<Row<'h>>,
     /// The targets to run, by row index.
-    work: VecDeque<(usize, MultiExecTarget)>,
+    work: Vec<(usize, Target)>,
 }
 
 impl Plan<'_> {
@@ -243,7 +242,7 @@ impl Plan<'_> {
     }
 
     /// Whether no host will run.
-    pub fn nothing_runs(&self) -> bool {
+    pub const fn nothing_runs(&self) -> bool {
         self.work.is_empty()
     }
 }
@@ -261,7 +260,7 @@ pub fn plan<'h>(core: &Core, picked: &[&'h Host]) -> Res<Plan<'h>> {
         return Err(Failure::msg("no hosts to run on"));
     }
     let mut rows = Vec::with_capacity(picked.len());
-    let mut work = VecDeque::new();
+    let mut work = Vec::new();
     for (index, (host, name)) in picked
         .iter()
         .copied()
@@ -288,18 +287,7 @@ pub fn plan<'h>(core: &Core, picked: &[&'h Host]) -> Res<Plan<'h>> {
                 row.user.clone_from(&target.user);
                 row.address.clone_from(&target.host);
                 row.port = target.port;
-                work.push_back((
-                    index,
-                    MultiExecTarget {
-                        host: target.host,
-                        port: target.port,
-                        user: target.user,
-                        auth: target.auth,
-                        jumps: target.jumps,
-                        proxy: target.proxy,
-                        publickey_only: false,
-                    },
-                ));
+                work.push((index, target));
             }
             Err(failure) => row.outcome = Outcome::Unresolved(failure.message),
         }
@@ -343,8 +331,10 @@ pub fn run(
             let command = rows.get(index)?.command.clone();
             Some((index, target, command))
         })
-        .collect();
-    execute(core, &mut rows, work, options);
+        .collect::<Vec<_>>();
+    execute(&mut rows, &work, options, &|target, command| {
+        exec_one(core, target, command, options.timeout_secs)
+    });
     if options.json {
         print_json(&rows)?;
     } else {
@@ -361,42 +351,20 @@ fn exit_of(rows: &[Row<'_>]) -> u8 {
     }
 }
 
-/// Runs the work `parallel` at a time; each host's output is printed (unless
-/// JSON is wanted) as it finishes.
+/// Runs the work `parallel` at a time with `exec`; each host's output is
+/// printed (unless JSON is wanted) as one block when it finishes, under the
+/// lock on the rows, so two hosts' blocks never interleave.
 fn execute(
-    core: &Core,
     rows: &mut [Row<'_>],
-    work: VecDeque<(usize, MultiExecTarget, String)>,
+    work: &[(usize, Target, String)],
     options: &Options,
+    exec: &(dyn Fn(&Target, String) -> Ran + Sync),
 ) {
-    let workers = usize::try_from(options.parallel)
-        .unwrap_or(usize::MAX)
-        .clamp(1, work.len().max(1));
-    let queue = Mutex::new(work);
-    let (done, results) = mpsc::channel::<(usize, Ran)>();
-    thread::scope(|scope| {
-        for _ in 0..workers {
-            let done = done.clone();
-            let queue = &queue;
-            scope.spawn(move || loop {
-                let next = queue
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .pop_front();
-                let Some((index, target, command)) = next else {
-                    break;
-                };
-                let ran = exec_one(core, target, command, options.timeout_secs);
-                if done.send((index, ran)).is_err() {
-                    break;
-                }
-            });
-        }
-        drop(done);
-        for (index, ran) in results {
-            let Some(row) = rows.get_mut(index) else {
-                continue;
-            };
+    let rows = Mutex::new(rows);
+    pool::each(work, options.parallel, |(index, target, command)| {
+        let ran = exec(target, command.clone());
+        let mut rows = rows.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(row) = rows.get_mut(*index) {
             if !options.json {
                 print_ran(&row.name, &ran);
             }
@@ -405,32 +373,32 @@ fn execute(
     });
 }
 
-/// Runs `command` on one host, saying so when the connection pinned a new host key.
-fn exec_one(core: &Core, target: MultiExecTarget, command: String, timeout_secs: u32) -> Ran {
-    let (host, port) = (target.host.clone(), target.port);
-    let new_host = !connect::is_known(core, &host, port);
-    let result = core
-        .ssh_exec_multi(vec![target], command, 0, timeout_secs)
-        .map_err(Failure::from)
-        .and_then(|mut results| {
-            results
-                .pop()
-                .ok_or_else(|| Failure::msg("the core returned no result"))
-        });
+/// Runs `command` on one host, announcing every host key it pinned on the
+/// way (jump hosts' as well), as `unissh ssh` does.
+fn exec_one(core: &Core, target: &Target, command: String, timeout_secs: u32) -> Ran {
+    let multi = MultiExecTarget {
+        host: target.host.clone(),
+        port: target.port,
+        user: target.user.clone(),
+        auth: target.auth.clone(),
+        jumps: target.jumps.clone(),
+        proxy: target.proxy.clone(),
+        publickey_only: false,
+    };
+    let result = connect::connecting(core, target, || {
+        core.ssh_exec_multi(vec![multi], command, 0, timeout_secs)?
+            .pop()
+            .ok_or_else(|| Failure::msg("the core returned no result"))
+    });
     match result {
-        Ok(r) => {
-            if new_host {
-                connect::announce_pinned(core, &host, port);
-            }
-            Ran {
-                exit: r.exit_status,
-                stdout: r.stdout,
-                stderr: r.stderr,
-                error: r.error,
-                timed_out: r.timed_out,
-                duration_ms: r.duration_ms,
-            }
-        }
+        Ok(r) => Ran {
+            exit: r.exit_status,
+            stdout: r.stdout,
+            stderr: r.stderr,
+            error: r.error,
+            timed_out: r.timed_out,
+            duration_ms: r.duration_ms,
+        },
         Err(failure) => Ran {
             exit: -1,
             stdout: String::new(),
@@ -753,6 +721,52 @@ mod tests {
     }
 
     #[test]
+    fn a_pooled_run_files_each_result_under_its_own_host() {
+        let hosts: Vec<Host> = (0..5)
+            .map(|i| host("team", &format!("h{i}"), &[]))
+            .collect();
+        let mut rows: Vec<Row<'_>> = hosts.iter().map(|h| row(h, Outcome::Planned)).collect();
+        let target = |i: usize| Target {
+            host: format!("h{i}.internal"),
+            port: 22,
+            user: "deploy".to_owned(),
+            auth: unissh_ffi::AuthMethod::Agent {
+                vault_id: "team".to_owned(),
+                key_item_id: "k".to_owned(),
+            },
+            jumps: Vec::new(),
+            proxy: None,
+            ask_password: false,
+        };
+        // Row 2 does not run; the others run a command naming their row.
+        let work: Vec<_> = [4, 0, 3, 1]
+            .into_iter()
+            .map(|i| (i, target(i), format!("echo {i}")))
+            .collect();
+        let options = Options {
+            parallel: 3,
+            timeout_secs: 0,
+            dry_run: false,
+            json: true,
+        };
+        execute(&mut rows, &work, &options, &|target, command| Ran {
+            exit: 0,
+            stdout: format!("{} {command}", target.host),
+            stderr: String::new(),
+            error: None,
+            timed_out: false,
+            duration_ms: 0,
+        });
+        for (i, row) in rows.iter().enumerate() {
+            match &row.outcome {
+                Outcome::Ran(ran) => assert_eq!(ran.stdout, format!("h{i}.internal echo {i}")),
+                Outcome::Planned => assert_eq!(i, 2),
+                Outcome::Skipped(_) | Outcome::Unresolved(_) => panic!("row {i}"),
+            }
+        }
+    }
+
+    #[test]
     fn a_skipped_host_does_not_add_a_parameter_to_ask() {
         let web = host("team", "web", &[]);
         let mut no_user = host("team", "lab", &[]);
@@ -762,7 +776,7 @@ mod tests {
                 row(&web, Outcome::Planned),
                 row(&no_user, Outcome::Skipped("asks".to_owned())),
             ],
-            work: VecDeque::new(),
+            work: Vec::new(),
         };
         let params = plan.params("id {{user}}");
         assert!(params.ask.is_empty(), "{:?}", params.ask);
