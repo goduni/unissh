@@ -51,6 +51,14 @@ pub enum VaultError {
     #[error("grant expired (not_after has passed)")]
     GrantExpired,
 
+    /// This account may only view the vault (its role in the vault's verified
+    /// member set is Viewer): an item write is refused before anything is stored.
+    /// Every other member's verify-before-apply and the server would refuse the
+    /// record anyway, so writing it locally would only leave this device's copy
+    /// diverged, and the record unreadable here too.
+    #[error("this account can only view this vault")]
+    ReadOnly,
+
     /// Crypto-layer error.
     #[error(transparent)]
     Crypto(#[from] CryptoError),

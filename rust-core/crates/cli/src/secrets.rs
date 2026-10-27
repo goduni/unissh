@@ -31,6 +31,8 @@ use crate::tty::{confirm, one_line};
 pub trait Sort {
     /// What one is called in messages ("SSH key").
     const KIND: &'static str;
+    /// The plural of [`Self::KIND`] ("SSH keys").
+    const KINDS: &'static str;
     /// The core's item types it covers.
     const TYPES: &'static [u32];
 }
@@ -39,6 +41,7 @@ pub trait Sort {
 pub struct AnySecret;
 impl Sort for AnySecret {
     const KIND: &'static str = "secret";
+    const KINDS: &'static str = "secrets";
     const TYPES: &'static [u32] = &[SSH_KEY, PASSWORD, NOTE, IDENTITY];
 }
 
@@ -46,6 +49,7 @@ impl Sort for AnySecret {
 pub struct Key;
 impl Sort for Key {
     const KIND: &'static str = "SSH key";
+    const KINDS: &'static str = "SSH keys";
     const TYPES: &'static [u32] = &[SSH_KEY];
 }
 
@@ -53,6 +57,7 @@ impl Sort for Key {
 pub struct Password;
 impl Sort for Password {
     const KIND: &'static str = "stored password";
+    const KINDS: &'static str = "stored passwords";
     const TYPES: &'static [u32] = &[PASSWORD];
 }
 
@@ -60,6 +65,7 @@ impl Sort for Password {
 pub struct IdentityItem;
 impl Sort for IdentityItem {
     const KIND: &'static str = "identity";
+    const KINDS: &'static str = "identities";
     const TYPES: &'static [u32] = &[IDENTITY];
 }
 
@@ -77,6 +83,7 @@ pub struct Entry<S> {
 
 impl<S: Sort> Named for Entry<S> {
     const KIND: &'static str = S::KIND;
+    const KINDS: &'static str = S::KINDS;
     const LISTED_BY: Option<&'static str> = Some("unissh secrets list");
 
     fn vault_name(&self) -> &str {
@@ -985,6 +992,7 @@ pub struct IdentityEntry {
 
 impl Named for IdentityEntry {
     const KIND: &'static str = "identity";
+    const KINDS: &'static str = "identities";
     const LISTED_BY: Option<&'static str> = Some("unissh identities list");
 
     fn vault_name(&self) -> &str {

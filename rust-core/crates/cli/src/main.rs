@@ -18,21 +18,32 @@ mod device;
 mod edit;
 mod escape;
 mod failure;
+mod fleet;
 mod home;
 mod host_edit;
 mod hosts;
 mod login;
 mod manage;
 mod picker;
+mod pool;
+mod recordings;
+mod replay;
 mod secrets;
 mod server;
+mod signals;
 mod snippet_edit;
+mod snippets;
+mod tree;
 mod tty;
+mod tunnel;
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{ArgGroup, Args, Parser, Subcommand};
+use unissh_ffi::snippet_params::{builtins_from_profile, resolve_command};
+use unissh_ffi::Core;
 
 use crate::connect::{exit_code, Direction, Endpoint};
 use crate::device::{Credentials, Device};
@@ -41,8 +52,11 @@ use crate::home::Home;
 use crate::host_edit::{GroupsAction, HostsAction};
 use crate::login::{Joining, SignIn};
 use crate::manage::KnownHostsAction;
+use crate::replay::Timing;
 use crate::secrets::{IdentitiesAction, KeysAction, SecretsAction};
 use crate::snippet_edit::SnippetWrite;
+use crate::tty::Tty;
+use crate::tunnel::Forward;
 
 #[derive(Parser)]
 #[command(
@@ -114,15 +128,44 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
     },
-    /// Copy one file to or from a host: `host:path` on one side.
+    /// Copy a file, or a directory with -r, to or from a host: `host:path` on one side.
     Cp {
-        /// Replace the destination if it exists.
+        /// Replace destination files that exist.
         #[arg(long)]
         force: bool,
+        /// Copy a directory and everything in it; links inside are not followed.
+        #[arg(short = 'r', long)]
+        recursive: bool,
+        /// With -r: how many files to copy at once (1 to 16).
+        #[arg(long, default_value_t = tree::PARALLEL, value_parser = clap::value_parser!(u32).range(1..=16))]
+        parallel: u32,
         /// Source: a local path or host:path.
         source: String,
         /// Destination: a local path or host:path.
         destination: String,
+    },
+    /// Forward ports through a host until Ctrl-C, as `ssh -N` does.
+    #[command(group(
+        ArgGroup::new("forwards")
+            .args(["local", "remote", "dynamic"])
+            .required(true)
+            .multiple(true)
+    ))]
+    Tunnel {
+        /// Host label (or vault/label, or address); `user@host` picks the user.
+        host: String,
+        /// Listen on PORT here and connect to HOST:HOSTPORT from the host
+        /// (BIND defaults to 127.0.0.1).
+        #[arg(short = 'L', value_name = "[BIND:]PORT:HOST:HOSTPORT", value_parser = tunnel::local)]
+        local: Vec<Forward>,
+        /// The host listens on PORT and sends connections to HOST:HOSTPORT
+        /// from here (BIND, on the host, defaults to 127.0.0.1).
+        #[arg(short = 'R', value_name = "[BIND:]PORT:HOST:HOSTPORT", value_parser = tunnel::remote)]
+        remote: Vec<Forward>,
+        /// A SOCKS5 proxy on PORT here, connecting from the host (BIND must be
+        /// loopback; defaults to 127.0.0.1).
+        #[arg(short = 'D', value_name = "[BIND:]PORT", value_parser = tunnel::dynamic)]
+        dynamic: Vec<Forward>,
     },
     /// The host keys this machine has pinned.
     #[command(subcommand, name = "known-hosts")]
@@ -141,7 +184,21 @@ enum Command {
     /// with, for hosts that log in personally.
     #[command(subcommand)]
     Identities(IdentitiesAction),
-    /// Saved commands.
+    /// Recorded sessions: list, replay, export, delete.
+    #[command(subcommand)]
+    Recordings(Recordings),
+    /// Run a command on several hosts at once, as the app's Fleet does.
+    /// `{{name}}` in it is filled as in a snippet; `\{{` is a literal `{{`.
+    Run {
+        #[command(flatten)]
+        hosts: HostSelection,
+        #[command(flatten)]
+        options: RunArgs,
+        /// The command to run, after `--`.
+        #[arg(last = true, required = true, value_name = "COMMAND")]
+        command: Vec<String>,
+    },
+    /// The vaults' snippets: list, run, add, edit, delete.
     #[command(subcommand)]
     Snippets(Snippets),
 }
@@ -149,8 +206,84 @@ enum Command {
 /// `unissh snippets`.
 #[derive(Subcommand)]
 enum Snippets {
+    /// List the snippets.
+    List {
+        /// Print JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run a snippet on hosts, as `unissh run` runs a command. Parameters
+    /// without a --set are asked on the terminal, where Enter takes the default.
+    Run {
+        /// Snippet label (or vault/label).
+        snippet: String,
+        #[command(flatten)]
+        hosts: HostSelection,
+        #[command(flatten)]
+        options: RunArgs,
+    },
     #[command(flatten)]
     Write(SnippetWrite),
+}
+
+/// Which hosts a run goes to: one way of naming them.
+#[derive(Args)]
+#[group(required = true, multiple = false)]
+struct HostSelection {
+    /// The hosts with this tag; repeat for hosts with every one of them.
+    #[arg(long, value_name = "TAG")]
+    tag: Vec<String>,
+    /// The hosts of this group (label or vault/label), nested groups included.
+    #[arg(long, value_name = "GROUP")]
+    group: Option<String>,
+    /// Hosts by label (or vault/label, or address).
+    #[arg(value_name = "HOST")]
+    hosts: Vec<String>,
+}
+
+impl HostSelection {
+    fn selection(self) -> fleet::Selection {
+        if let Some(group) = self.group {
+            fleet::Selection::Group(group)
+        } else if self.tag.is_empty() {
+            fleet::Selection::Hosts(self.hosts)
+        } else {
+            fleet::Selection::Tags(self.tag)
+        }
+    }
+}
+
+#[derive(Args)]
+struct RunArgs {
+    /// Show which hosts would run what, without connecting.
+    #[arg(long)]
+    dry_run: bool,
+    /// How many hosts run at once.
+    #[arg(long, value_name = "N", default_value_t = fleet::DEFAULT_PARALLEL,
+          value_parser = clap::value_parser!(u32).range(1..))]
+    parallel: u32,
+    /// Seconds for the command to finish on each host (the connect is not
+    /// counted); 0 for no limit.
+    #[arg(long, value_name = "SECS", default_value_t = fleet::DEFAULT_TIMEOUT_SECS)]
+    timeout: u32,
+    /// A parameter's value (`{{NAME}}` in the command); repeat for several.
+    /// `--set NAME=` gives it an empty value, not its default.
+    #[arg(long = "set", value_name = "NAME=VALUE", value_parser = snippets::parse_set)]
+    set: Vec<(String, String)>,
+    /// Print JSON: per host, the command, its output and exit status.
+    #[arg(long)]
+    json: bool,
+}
+
+impl RunArgs {
+    const fn options(&self) -> fleet::Options {
+        fleet::Options {
+            parallel: self.parallel,
+            timeout_secs: self.timeout,
+            dry_run: self.dry_run,
+            json: self.json,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -224,6 +357,47 @@ enum KnownHosts {
     },
 }
 
+#[derive(Subcommand)]
+enum Recordings {
+    /// List the recordings, newest first.
+    List {
+        /// Only recordings whose label, host or vault contain this.
+        filter: Option<String>,
+        /// Print JSON (what was recorded is not in it).
+        #[arg(long)]
+        json: bool,
+    },
+    /// Replay a recording in this terminal; Ctrl-C stops it.
+    Play {
+        /// The recording's id, or a part of it only that id contains.
+        id: String,
+        /// Play this many times as fast.
+        #[arg(long, default_value_t = 1.0, value_parser = replay::positive)]
+        speed: f64,
+        /// Cut every pause longer than this many seconds to that.
+        #[arg(long, value_name = "SECONDS", value_parser = replay::positive)]
+        idle_limit: Option<f64>,
+    },
+    /// Save a recording as an asciicast v2 file, as `asciinema` plays it.
+    Export {
+        /// The recording's id, or a part of it only that id contains.
+        id: String,
+        /// Where to write it; `-` is stdout.
+        file: PathBuf,
+        /// Replace the file if it exists.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Delete a recording, here and, once synced, everywhere.
+    Rm {
+        /// The recording's id, or a part of it only that id contains.
+        id: String,
+        /// Do not ask for confirmation.
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
 fn main() -> ExitCode {
     match run(Cli::parse()) {
         Ok(code) => ExitCode::from(code),
@@ -269,11 +443,9 @@ fn run(cli: Cli) -> Res<u8> {
         Command::Hosts {
             action: Some(action),
             ..
-        } => {
-            let device = ready(home, &credentials, offline)?;
-            host_edit::hosts(&device, offline, *action)?;
-            Ok(0)
-        }
+        } => edit(home, &credentials, offline, |d| {
+            host_edit::hosts(d, offline, *action)
+        }),
         Command::Hosts {
             action: None,
             filter,
@@ -301,11 +473,34 @@ fn run(cli: Cli) -> Res<u8> {
         } => ssh(home, &credentials, offline, &host, &command, no_stdin),
         Command::Cp {
             force,
+            recursive,
+            parallel,
             source,
             destination,
         } => {
-            copy(home, &credentials, offline, &source, &destination, force)?;
+            let how = CopyHow {
+                force,
+                recursive,
+                parallel,
+            };
+            copy(home, &credentials, offline, &source, &destination, how)?;
             Ok(0)
+        }
+        Command::Tunnel {
+            host,
+            local,
+            remote,
+            dynamic,
+        } => {
+            // Grouped by kind, as clap collects them: -L, then -R, then -D.
+            let forwards: Vec<Forward> = local.into_iter().chain(remote).chain(dynamic).collect();
+            let named = named_host(home, &credentials, offline, &host)?;
+            tunnel::run(
+                &named.device.core,
+                named.target,
+                &named.host.profile.label,
+                &forwards,
+            )
         }
         Command::KnownHosts(action) => {
             let device = unlocked(home, &credentials)?;
@@ -319,32 +514,130 @@ fn run(cli: Cli) -> Res<u8> {
             manage::known_hosts(&device.core, action)?;
             Ok(0)
         }
-        Command::Groups(action) => {
+        Command::Groups(action) => edit(home, &credentials, offline, |d| {
+            host_edit::groups(d, offline, action)
+        }),
+        Command::Secrets(action) => edit(home, &credentials, offline, |d| {
+            secrets::secrets(d, offline, action)
+        }),
+        Command::Keys(action) => edit(home, &credentials, offline, |d| {
+            secrets::keys(d, offline, action)
+        }),
+        Command::Identities(action) => edit(home, &credentials, offline, |d| {
+            secrets::identities(d, offline, action)
+        }),
+        Command::Recordings(what) => recording(home, &credentials, offline, what),
+        Command::Run {
+            hosts: selection,
+            options,
+            command,
+        } => {
             let device = ready(home, &credentials, offline)?;
-            host_edit::groups(&device, offline, action)?;
+            fleet_run(
+                &device.core,
+                &selection.selection(),
+                &command.join(" "),
+                &options,
+            )
+        }
+        Command::Snippets(action) => snippet(home, &credentials, offline, action),
+    }
+}
+
+/// A command that writes to the vaults: `write` runs on the unlocked device.
+fn edit(
+    home: Home,
+    credentials: &Credentials,
+    offline: bool,
+    write: impl FnOnce(&Device) -> Res<()>,
+) -> Res<u8> {
+    let device = ready(home, credentials, offline)?;
+    write(&device)?;
+    Ok(0)
+}
+
+/// `unissh recordings`.
+fn recording(home: Home, credentials: &Credentials, offline: bool, what: Recordings) -> Res<u8> {
+    let device = ready(home, credentials, offline)?;
+    match what {
+        Recordings::List { filter, json } => {
+            recordings::list(&device, filter.as_deref(), json)?;
+        }
+        Recordings::Play {
+            id,
+            speed,
+            idle_limit,
+        } => return recordings::play(&device, &id, Timing { speed, idle_limit }),
+        Recordings::Export { id, file, force } => {
+            recordings::export(&device, &id, &file, force)?;
+        }
+        Recordings::Rm { id, yes } => recordings::remove(&device, &id, yes, offline)?,
+    }
+    Ok(0)
+}
+
+fn snippet(home: Home, credentials: &Credentials, offline: bool, action: Snippets) -> Res<u8> {
+    let device = ready(home, credentials, offline)?;
+    match action {
+        Snippets::List { json } => {
+            let saved = snippets::load(&device.core)?;
+            if json {
+                let text = serde_json::to_string_pretty(&snippets::json(&saved))
+                    .map_err(|e| Failure::msg(e.to_string()))?;
+                println!("{text}");
+            } else if saved.is_empty() {
+                eprintln!("unissh: no snippets to show");
+            } else {
+                print!("{}", snippets::table(&saved));
+            }
             Ok(0)
         }
-        Command::Secrets(action) => {
-            let device = ready(home, &credentials, offline)?;
-            secrets::secrets(&device, offline, action)?;
-            Ok(0)
+        Snippets::Run {
+            snippet,
+            hosts: selection,
+            options,
+        } => {
+            let saved = snippets::load(&device.core)?;
+            let command = &hosts::find_named(&saved, &snippet)?.snippet.command;
+            fleet_run(&device.core, &selection.selection(), command, &options)
         }
-        Command::Keys(action) => {
-            let device = ready(home, &credentials, offline)?;
-            secrets::keys(&device, offline, action)?;
-            Ok(0)
-        }
-        Command::Identities(action) => {
-            let device = ready(home, &credentials, offline)?;
-            secrets::identities(&device, offline, action)?;
-            Ok(0)
-        }
-        Command::Snippets(Snippets::Write(action)) => {
-            let device = ready(home, &credentials, offline)?;
+        Snippets::Write(action) => {
             snippet_edit::run(&device, offline, action)?;
             Ok(0)
         }
     }
+}
+
+/// Runs `template` on the hosts `selection` picks, as Fleet runs a command:
+/// the hosts resolve first; the parameters the hosts that will run cannot
+/// answer come from `--set` or are asked once; each host then runs the
+/// command filled with those and its own built-ins.
+fn fleet_run(
+    core: &Core,
+    selection: &fleet::Selection,
+    template: &str,
+    options: &RunArgs,
+) -> Res<u8> {
+    let all = hosts::load(core)?;
+    let picked = fleet::select(core, &all, selection)?;
+    let plan = fleet::plan(core, &picked)?;
+    let values = if plan.nothing_runs() {
+        BTreeMap::new()
+    } else {
+        let split = plan.params(template);
+        // Opened only when a value has to be asked.
+        let mut tty: Option<Option<Tty>> = None;
+        snippets::answers(&split.ask, &split.from_host, &options.set, &mut |param| {
+            let tty = tty.get_or_insert_with(|| Tty::open().ok());
+            snippets::ask_on_tty(tty.as_mut(), param)
+        })?
+    };
+    fleet::run(
+        core,
+        plan,
+        &|h| resolve_command(template, &values, &builtins_from_profile(&h.profile)),
+        &options.options(),
+    )
 }
 
 fn log_in(home: &Home, how: Login) -> Res<()> {
@@ -406,6 +699,32 @@ fn split_user(spec: &str) -> (Option<&str>, &str) {
     }
 }
 
+/// A host named on the command line, ready to connect to.
+struct NamedHost {
+    /// The device, unlocked (and synced unless fresh or `--offline`).
+    device: Device,
+    /// The host the name matched; its label is `host.profile.label`.
+    host: hosts::Host,
+    /// How to connect to it, with the user `user@host` named, if any.
+    target: hosts::Target,
+}
+
+/// Unlocks the device and finds and resolves the host `spec` names (a label,
+/// `vault/label`, a prefix or an address; `user@host` picks the user), as
+/// `unissh ssh` names hosts.
+fn named_host(home: Home, credentials: &Credentials, offline: bool, spec: &str) -> Res<NamedHost> {
+    let device = ready(home, credentials, offline)?;
+    let all = hosts::load(&device.core)?;
+    let (user, name) = split_user(spec);
+    let host = hosts::find(&all, name)?.clone();
+    let target = hosts::resolve(&device.core, &host, user)?;
+    Ok(NamedHost {
+        device,
+        host,
+        target,
+    })
+}
+
 fn ssh(
     home: Home,
     credentials: &Credentials,
@@ -414,20 +733,27 @@ fn ssh(
     command: &[String],
     no_stdin: bool,
 ) -> Res<u8> {
-    let device = ready(home, credentials, offline)?;
-    let all = hosts::load(&device.core)?;
-    let (user, name) = split_user(spec);
-    let host = hosts::find(&all, name)?;
-    let target = hosts::resolve(&device.core, host, user)?;
+    let NamedHost {
+        device,
+        host,
+        target,
+    } = named_host(home, credentials, offline, spec)?;
     if !command.is_empty() {
         let status = connect::run(&device.core, target, command.join(" "), no_stdin)?;
         return Ok(exit_code(status));
     }
-    let status = connect::shell(&device.core, host, target)?;
+    let status = connect::shell(&device.core, &host, target)?;
     if host.profile.record_sessions && !offline {
         server::push_recording(&device);
     }
     Ok(exit_code(status))
+}
+
+/// The options of `unissh cp`.
+struct CopyHow {
+    force: bool,
+    recursive: bool,
+    parallel: u32,
 }
 
 fn copy(
@@ -436,7 +762,7 @@ fn copy(
     offline: bool,
     source: &str,
     destination: &str,
-    force: bool,
+    how: CopyHow,
 ) -> Res<()> {
     let (spec, direction) = match (Endpoint::parse(source), Endpoint::parse(destination)) {
         (Endpoint::Remote { host, path }, Endpoint::Local(local)) => (
@@ -447,9 +773,16 @@ fn copy(
             },
         ),
         (Endpoint::Local(local), Endpoint::Remote { host, path }) => {
-            if !local.is_file() {
+            if local.is_dir() {
+                if !how.recursive {
+                    return Err(Failure::msg(format!(
+                        "{} is a directory; pass -r to copy it",
+                        local.display()
+                    )));
+                }
+            } else if !local.is_file() {
                 return Err(Failure::msg(format!(
-                    "{} is not a file (one file at a time)",
+                    "{} is not a file or a directory",
                     local.display()
                 )));
             }
@@ -470,22 +803,33 @@ fn copy(
             return Err(Failure::msg("one side must be a host, as host:path"))
         }
     };
-    let device = ready(home, credentials, offline)?;
-    let all = hosts::load(&device.core)?;
-    let (user, name) = split_user(&spec);
-    let host = hosts::find(&all, name)?;
-    let target = hosts::resolve(&device.core, host, user)?;
-    connect::copy(&device.core, target, direction, force)
+    let named = named_host(home, credentials, offline, &spec)?;
+    connect::copy(
+        &named.device.core,
+        named.target,
+        direction,
+        how.force,
+        how.recursive,
+        how.parallel,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::{split_user, Cli};
-    use clap::CommandFactory;
+    use clap::{CommandFactory, Parser};
 
     #[test]
     fn the_command_line_is_well_formed() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn a_tunnel_needs_at_least_one_forward() {
+        let Err(err) = Cli::try_parse_from(["unissh", "tunnel", "web"]) else {
+            panic!("a tunnel without -L, -R or -D must be refused");
+        };
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
     }
 
     #[test]

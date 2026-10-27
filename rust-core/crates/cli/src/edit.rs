@@ -408,6 +408,7 @@ mod tests {
 
     impl Named for Item {
         const KIND: &'static str = "item";
+        const KINDS: &'static str = "items";
         const LISTED_BY: Option<&'static str> = None;
 
         fn vault_name(&self) -> &str {

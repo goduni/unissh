@@ -307,17 +307,19 @@ export function ConfirmDialog() {
           {confirm.desc}
         </p>
         {needText ? (
-          <input
-            autoFocus
-            className="u-input"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder={needText}
-            aria-label={needText}
-            autoComplete="off"
-            spellCheck={false}
-            style={{ marginTop: 16, fontFamily: MONO, fontSize: 12 }}
-          />
+          <label style={{ display: "grid", gap: 6, marginTop: 16, fontSize: 13, lineHeight: "18px" }}>
+            {t("common.typeToConfirm", { text: needText })}
+            <input
+              autoFocus
+              className="u-input"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder={needText}
+              autoComplete="off"
+              spellCheck={false}
+              style={{ fontFamily: MONO, fontSize: 12 }}
+            />
+          </label>
         ) : null}
       </div>
       <div

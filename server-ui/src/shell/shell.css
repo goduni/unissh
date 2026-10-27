@@ -151,6 +151,26 @@
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+/* The technical group's name is its disclosure: the same quiet label, with a chevron, and a hover. */
+.sh-nav-disclosure {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.sh-nav-disclosure:hover:not(:disabled) {
+  color: var(--foreground);
+}
+.sh-nav-disclosure:disabled {
+  cursor: default;
+}
 .sh-nav-rule {
   height: 1px;
   margin: 6px 8px;

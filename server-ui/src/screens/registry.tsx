@@ -4,7 +4,6 @@ import { Accounts } from "./Accounts";
 import { Audit } from "./Audit";
 import { Config } from "./Config";
 import { Devices } from "./Devices";
-import { Directory } from "./Directory";
 import { Grants } from "./Grants";
 import { Health } from "./Health";
 import { Invites } from "./Invites";
@@ -25,7 +24,6 @@ const SCREENS: Record<Route, ComponentType> = {
   maint: Maintenance,
   spaces: Spaces,
   accounts: Accounts,
-  directory: Directory,
   devices: Devices,
   sessions: Sessions,
   invites: Invites,

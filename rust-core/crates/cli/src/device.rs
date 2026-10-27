@@ -181,6 +181,11 @@ impl AuthPrompter for TtyPrompter {
             .filter(|s| !s.trim().is_empty())
             .collect::<Vec<_>>()
             .join("\n");
+        // A request with nothing to ask and nothing to say (the last round of a
+        // keyboard-interactive exchange) is answered without a word.
+        if request.prompts.is_empty() && header.is_empty() {
+            return Some(Vec::new());
+        }
         let intro = format!(
             "{}@{}:{} asks:\n",
             one_line(&request.user),

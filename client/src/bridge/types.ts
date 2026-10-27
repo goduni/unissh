@@ -507,6 +507,7 @@ export type ApiErrorKind =
   | "notFound"
   | "alreadyExists"
   | "alreadyCloud"
+  | "readOnlyVault"
   | "noServer"
   | "hostKeyMismatch"
   | "rotationInProgress"
@@ -584,6 +585,8 @@ export function apiErrorMessage(e: unknown): string {
         return i18n.t("error.alreadyExists");
       case "alreadyCloud":
         return i18n.t("error.alreadyCloud");
+      case "readOnlyVault":
+        return i18n.t("error.readOnlyVault");
       case "noServer":
         return i18n.t("error.noServer");
       case "hostKeyMismatch":

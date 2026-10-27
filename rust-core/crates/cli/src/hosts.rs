@@ -13,6 +13,7 @@ use crate::failure::{Failure, Res};
 use crate::tty::one_line;
 
 /// A host and the vault it lives in.
+#[derive(Clone)]
 pub struct Host {
     /// The vault's id.
     pub vault_id: String,
@@ -104,6 +105,9 @@ pub fn filter<'h>(hosts: &'h [Host], filter: Option<&str>, tag: Option<&str>) ->
 pub trait Named {
     /// What it is, for messages ("host").
     const KIND: &'static str;
+    /// The plural of [`Self::KIND`] ("hosts", "identities"): spelled out,
+    /// since English plurals are not all a trailing "s".
+    const KINDS: &'static str;
     /// The command that lists them, for the "no match" hint.
     const LISTED_BY: Option<&'static str>;
     /// The name of the vault it is in.
@@ -122,6 +126,7 @@ pub trait Named {
 
 impl Named for Host {
     const KIND: &'static str = "host";
+    const KINDS: &'static str = "hosts";
     const LISTED_BY: Option<&'static str> = Some("unissh hosts");
 
     fn vault_name(&self) -> &str {
@@ -153,6 +158,7 @@ pub struct Group {
 
 impl Named for Group {
     const KIND: &'static str = "group";
+    const KINDS: &'static str = "groups";
     const LISTED_BY: Option<&'static str> = Some("unissh groups list");
 
     fn vault_name(&self) -> &str {
@@ -181,6 +187,7 @@ pub fn load_groups(core: &Core) -> Res<Vec<Group>> {
 /// narrowed list (`--vault`) without copying it.
 impl<T: Named> Named for &T {
     const KIND: &'static str = T::KIND;
+    const KINDS: &'static str = T::KINDS;
     const LISTED_BY: Option<&'static str> = T::LISTED_BY;
 
     fn vault_name(&self) -> &str {
@@ -237,8 +244,8 @@ pub fn find_named<'i, T: Named>(items: &'i [T], query: &str) -> Res<&'i T> {
 
 fn ambiguous<T: Named>(query: &str, many: &[&T]) -> String {
     let mut text = format!(
-        "\"{query}\" matches several {}s; name one as vault/label:",
-        T::KIND
+        "\"{query}\" matches several {}; name one as vault/label:",
+        T::KINDS
     );
     for i in many {
         let _ = write!(
@@ -334,6 +341,19 @@ pub struct Target {
 /// replaces the user name; a Personal host refuses that, because its identity
 /// decides who logs in.
 pub fn resolve(core: &Core, host: &Host, user: Option<&str>) -> Res<Target> {
+    resolve_with_hint(core, host, user, &|label| {
+        format!("connect as user@{label}")
+    })
+}
+
+/// [`resolve`], with `no_user(label)` saying what to do about a host that
+/// names no user (the hint differs between connecting and running).
+pub fn resolve_with_hint(
+    core: &Core,
+    host: &Host,
+    user: Option<&str>,
+    no_user: &dyn Fn(&str) -> String,
+) -> Res<Target> {
     let p = &host.profile;
     let personal = matches!(p.auth, ProfileAuth::Personal);
     if personal && user.is_some() {
@@ -358,10 +378,10 @@ pub fn resolve(core: &Core, host: &Host, user: Option<&str>) -> Res<Target> {
         })?;
     let user = user.map_or(resolved.user, str::to_owned);
     if user.trim().is_empty() {
+        let label = one_line(&p.label);
         return Err(Failure::msg(format!(
-            "{} names no user: connect as user@{}",
-            one_line(&p.label),
-            one_line(&p.label)
+            "{label} names no user: {}",
+            no_user(&label)
         )));
     }
     Ok(Target {
@@ -442,6 +462,27 @@ mod tests {
             err.message.contains("team/db") && err.message.contains("lab/db"),
             "{err}"
         );
+    }
+
+    /// The refusal names the kind in its plural, as spelled, not KIND + "s".
+    #[test]
+    fn an_ambiguous_name_is_refused_with_the_kind_in_its_plural() {
+        struct Identity(&'static str);
+        impl Named for Identity {
+            const KIND: &'static str = "identity";
+            const KINDS: &'static str = "identities";
+            const LISTED_BY: Option<&'static str> = None;
+            fn vault_name(&self) -> &str {
+                self.0
+            }
+            fn label(&self) -> &str {
+                "me"
+            }
+        }
+        let Err(err) = find_named(&[Identity("team"), Identity("lab")], "me") else {
+            panic!("an ambiguous name must not pick one");
+        };
+        assert!(err.message.contains("several identities;"), "{err}");
     }
 
     #[test]

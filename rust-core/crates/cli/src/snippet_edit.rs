@@ -17,35 +17,8 @@ use crate::device::{without_line_ending, Device};
 use crate::edit::{self, commit, list, mint_id, stored, take, VaultArg};
 use crate::failure::{best_effort, Failure, Res};
 use crate::home::write_private;
-use crate::hosts::{self, Named};
+use crate::snippets::{self, Saved};
 use crate::tty::{confirm, one_line};
-
-/// A snippet and the vault it lives in.
-pub struct SnippetEntry {
-    /// The vault's id.
-    pub vault_id: String,
-    /// The vault's name.
-    pub vault_name: String,
-    /// The snippet.
-    pub snippet: Snippet,
-}
-
-impl Named for SnippetEntry {
-    const KIND: &'static str = "snippet";
-    const LISTED_BY: Option<&'static str> = Some("unissh snippets list");
-
-    fn vault_name(&self) -> &str {
-        &self.vault_name
-    }
-
-    fn label(&self) -> &str {
-        &self.snippet.label
-    }
-
-    fn detail(&self) -> String {
-        default_label(&self.snippet.command)
-    }
-}
 
 /// The first line of `command`, at most 40 characters: the app's default
 /// label for a snippet saved without one.
@@ -61,26 +34,14 @@ fn default_label(command: &str) -> String {
 }
 
 /// Every snippet, or those of the vault `scope` names.
-pub fn load(core: &Core, scope: Option<&str>) -> Res<Vec<SnippetEntry>> {
-    hosts::per_vault(
-        core,
-        |vault_id| {
-            if edit::in_scope(scope, &vault_id) {
-                core.list_snippets(vault_id)
-            } else {
-                Ok(Vec::new())
-            }
-        },
-        |vault_id, vault_name, snippet| SnippetEntry {
-            vault_id: vault_id.to_owned(),
-            vault_name: vault_name.to_owned(),
-            snippet,
-        },
-    )
+fn load(core: &Core, scope: Option<&str>) -> Res<Vec<Saved>> {
+    let mut snippets = snippets::load(core)?;
+    snippets.retain(|s| edit::in_scope(scope, &s.vault_id));
+    Ok(snippets)
 }
 
 /// The snippet `query` names (label, vault/label or id) among `all`.
-fn take_snippet(all: Vec<SnippetEntry>, query: &str) -> Res<SnippetEntry> {
+fn take_snippet(all: Vec<Saved>, query: &str) -> Res<Saved> {
     take(all, query, |s| &s.snippet.snippet_id)
 }
 

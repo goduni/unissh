@@ -5259,6 +5259,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
  "unissh-cloud",
  "unissh-ffi",
  "zeroize",

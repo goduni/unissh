@@ -62,6 +62,7 @@ pub mod automation;
 pub mod automation_recording;
 mod key_rotation;
 mod password_fill;
+pub mod snippet_params;
 mod ssh_include;
 mod system_agent;
 mod terminal_workspace;
@@ -221,6 +222,11 @@ pub enum FfiError {
     /// local vault (the local-to-cloud conversion) does not apply to it.
     #[error("vault is already a cloud vault")]
     AlreadyCloud,
+    /// This account can only view the vault (its role there is Viewer), so an
+    /// item write or delete in it is refused and nothing is stored. The server
+    /// and the other members would refuse the change anyway.
+    #[error("you can only view this vault")]
+    ReadOnlyVault,
     /// A cloud operation was given no server: the tenant (space) binding label is
     /// empty. The client must pass the space of an active server.
     #[error("no server to bind to (empty tenant)")]
@@ -3137,7 +3143,7 @@ impl Core {
             .map_err(FfiError::other)?;
             vault
                 .delete_item(item_id.as_bytes())
-                .map_err(FfiError::other)?;
+                .map_err(map_vault_err)?;
             // A4a namespace: the agent stores the key under agent_key_id(vault_id,item_id), not
             // under the bare item_id — it must be unloaded with the same key, otherwise remove is a no-op and
             // a revoked/rotated private key stays alive in the agent until the end of the session.
@@ -3174,7 +3180,7 @@ impl Core {
             .map_err(FfiError::other)?;
             vault
                 .put_item_keep_history(item_id.as_bytes(), ITEM_TYPE_PASSWORD, password.as_bytes())
-                .map_err(FfiError::other)?;
+                .map_err(map_vault_err)?;
             Ok(())
         })
     }
@@ -3219,7 +3225,7 @@ impl Core {
             .map_err(FfiError::other)?;
             vault
                 .put_item_keep_history(item_id.as_bytes(), ITEM_TYPE_NOTE, text.as_bytes())
-                .map_err(FfiError::other)?;
+                .map_err(map_vault_err)?;
             Ok(())
         })
     }
@@ -3538,7 +3544,7 @@ impl Core {
             .map_err(FfiError::other)?;
             vault
                 .put_item(item_id.as_bytes(), ITEM_TYPE_SSH_KEY, normalized.as_bytes())
-                .map_err(FfiError::other)?;
+                .map_err(map_vault_err)?;
             // The key material was replaced under the same id → unload the previous private key from
             // the agent (namespaced), otherwise whatever signs straight from the agent by id — a
             // forwarded agent in a live session — keeps signing with the OLD key. (A connect
@@ -3584,7 +3590,7 @@ impl Core {
                     ITEM_TYPE_SSH_CERT,
                     cert_openssh.as_bytes(),
                 )
-                .map_err(FfiError::other)?;
+                .map_err(map_vault_err)?;
             // The loaded copy still carries the previous certificate (or none):
             // drop it, so the next use reloads the key with this one.
             state.agent.remove(&agent_key_id(&vault_id, &key_item_id));
@@ -4527,7 +4533,7 @@ impl Core {
             .map_err(FfiError::other)?;
             vault
                 .put_item(snippet.snippet_id.as_bytes(), ITEM_TYPE_SNIPPET, &json)
-                .map_err(FfiError::other)?;
+                .map_err(map_vault_err)?;
             Ok(())
         })
     }
@@ -4628,7 +4634,13 @@ impl Core {
                 let Ok(mut r) = serde_json::from_slice::<StoredRecordingMeta>(&item.content) else {
                     continue;
                 };
-                if r.mcp.is_some() && cutoff.is_some_and(|cutoff| r.started_unix < cutoff) {
+                // Retention is applied only where this account may write: a
+                // view-only member cannot delete, so the expired recording is
+                // listed as it is rather than failing the whole listing.
+                if r.mcp.is_some()
+                    && vault.can_write()
+                    && cutoff.is_some_and(|cutoff| r.started_unix < cutoff)
+                {
                     vault.delete_item(&m.item_id).map_err(map_vault_err)?;
                     continue;
                 }
@@ -4748,7 +4760,7 @@ impl Core {
             let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
             vault
                 .put_item(group.group_id.as_bytes(), ITEM_TYPE_GROUP, &json)
-                .map_err(FfiError::other)?;
+                .map_err(map_vault_err)?;
             Ok(())
         })
     }
@@ -5207,7 +5219,7 @@ impl Core {
             let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
             vault
                 .put_item(profile_id.as_bytes(), ITEM_TYPE_CONNECTION, &json)
-                .map_err(FfiError::other)?;
+                .map_err(map_vault_err)?;
             Ok(())
         })
     }
@@ -5346,7 +5358,7 @@ impl Core {
         let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
         vault
             .put_item(identity_id.as_bytes(), ITEM_TYPE_IDENTITY, &json)
-            .map_err(FfiError::other)?;
+            .map_err(map_vault_err)?;
         Ok(())
         })
     }
@@ -5494,7 +5506,7 @@ impl Core {
             let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
             vault
                 .put_item(item_id.as_bytes(), ITEM_TYPE_BINDING, &json)
-                .map_err(FfiError::other)?;
+                .map_err(map_vault_err)?;
             Ok(())
         })
     }
@@ -6022,7 +6034,7 @@ impl Core {
                 let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
                 vault
                     .put_item(s.name.as_bytes(), ITEM_TYPE_CONNECTION, &json)
-                    .map_err(FfiError::other)?;
+                    .map_err(map_vault_err)?;
                 created_ids.push(s.name);
             }
             Ok(HostImportReport {
@@ -6662,10 +6674,12 @@ fn rehome_reference(
 /// membership chain that does not verify (any `Vault::open` error other than a
 /// storage failure) — holds nothing this device can resolve and is skipped. A
 /// storage failure, and any failure inside a vault that did open, aborts (and so
-/// rolls back) the move. The rewrites
-/// are ordinary local edits: in a cloud vault they push on its next sync, and in
-/// a shared vault the user may not write to, that push meets the existing sync
-/// conflict/authority behaviour like any other edit.
+/// rolls back) the move. A shared vault this account can only view is not
+/// rewritten either and is counted as skipped: its references to the moved vault
+/// stay dangling. Rewriting them as a Viewer would author records the server and
+/// every other member refuse, wedging that vault's sync on this device (the core
+/// refuses a Viewer's item writes for that reason). The rewrites are ordinary local edits: in a cloud vault they push on
+/// its next sync.
 fn rehome_references(
     storage: &Storage,
     keyset: &unissh_keychain::UnlockedKeyset,
@@ -6678,9 +6692,9 @@ fn rehome_references(
             continue;
         }
         let vault = match Vault::open(storage, keyset, &rec.vault_id) {
-            Ok(vault) => vault,
+            Ok(vault) if vault.can_write() => vault,
             Err(e @ unissh_vault::VaultError::Storage(_)) => return Err(map_vault_err(e)),
-            Err(_) => {
+            Ok(_) | Err(_) => {
                 skipped += 1;
                 continue;
             }
@@ -6706,7 +6720,7 @@ fn rehome_references(
         }
     }
     if skipped > 0 {
-        log::warn!("vault move: {skipped} vault(s) this keyset cannot open were not checked for references");
+        log::warn!("vault move: {skipped} vault(s) this keyset cannot open or write were not checked for references");
     }
     Ok(())
 }
@@ -6841,7 +6855,7 @@ impl Core {
                 let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
                 vault
                     .put_item(alias.as_bytes(), ITEM_TYPE_CONNECTION, &json)
-                    .map_err(FfiError::other)?;
+                    .map_err(map_vault_err)?;
                 created.push(ImportedSshHost {
                     alias: host.alias,
                     origin_file: host.origin,
@@ -8229,7 +8243,7 @@ fn store_new_ssh_key(
             ITEM_TYPE_SSH_KEY,
             private_pem.as_bytes(),
         )
-        .map_err(FfiError::other)?;
+        .map_err(map_vault_err)?;
     Ok(public)
 }
 
@@ -8242,9 +8256,7 @@ fn drop_certificate(vault: &Vault, key_id: &str) -> Result<(), FfiError> {
         .map_err(FfiError::other)?
         .is_some()
     {
-        vault
-            .delete_item(cert.as_bytes())
-            .map_err(FfiError::other)?;
+        vault.delete_item(cert.as_bytes()).map_err(map_vault_err)?;
     }
     Ok(())
 }
@@ -8258,6 +8270,7 @@ fn map_vault_err(e: unissh_vault::VaultError) -> FfiError {
     match e {
         unissh_vault::VaultError::NotFound => FfiError::NotFound,
         unissh_vault::VaultError::AlreadyExists => FfiError::AlreadyExists,
+        unissh_vault::VaultError::ReadOnly => FfiError::ReadOnlyVault,
         other => FfiError::other(other),
     }
 }

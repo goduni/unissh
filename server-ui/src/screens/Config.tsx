@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { useUi } from "../store/ui";
 import { useAsync } from "../util/useAsync";
-import { Btn, Card, EmptyState, ErrorCard, Missing, Skeleton, Tag, TextInput, Toggle, ToneBadge } from "../ui/primitives";
+import { Btn, Card, EmptyState, ErrorCard, Missing, Skeleton, Tag, Term, TextInput, Toggle, ToneBadge } from "../ui/primitives";
 import { Screen } from "./Screen";
 import type { ConfigResp } from "../api/types";
 import { MONO } from "../theme/tokens";
@@ -23,7 +23,7 @@ const SECTION_ORDER: (keyof ConfigResp)[] = [
 const HOT_LIMIT_KEYS = ["max_object_bytes", "max_objects_per_push"] as const;
 type HotLimitKey = (typeof HOT_LIMIT_KEYS)[number];
 
-/** A line of the ruled list: the key in muted mono, the value beside it; at least 32 px. */
+/** A line of the ruled list: the key in plain words over its config name, the value beside it; at least 32 px. */
 const ROW: CSSProperties = {
   display: "grid",
   gridTemplateColumns: "minmax(140px, 280px) minmax(0, 1fr)",
@@ -35,10 +35,8 @@ const ROW: CSSProperties = {
 };
 const KEY: CSSProperties = {
   minWidth: 0,
-  fontFamily: MONO,
-  fontSize: 12,
-  lineHeight: "16px",
-  color: "var(--muted-foreground)",
+  fontSize: 13,
+  lineHeight: "18px",
   overflowWrap: "anywhere",
 };
 const VALUE: CSSProperties = {
@@ -54,19 +52,19 @@ const VALUE: CSSProperties = {
   color: "var(--foreground)",
   overflowWrap: "anywhere",
 };
-/** The head of a section: a 28 px row on --elevated at 40 %, the TOML table's name in mono. */
+/** The head of a section: a 28 px row on --elevated at 40 %, its name in words, the TOML table's name beside it in mono. */
 const GROUP_HEAD: CSSProperties = {
   display: "flex",
-  alignItems: "center",
+  alignItems: "baseline",
+  gap: 8,
   minHeight: 28,
   margin: 0,
-  padding: "0 16px",
+  padding: "6px 16px",
   background: "color-mix(in oklch, var(--elevated) 40%, transparent)",
-  fontFamily: MONO,
   fontSize: 12,
-  fontWeight: 500,
+  fontWeight: 600,
   lineHeight: "16px",
-  color: "var(--muted-foreground)",
+  color: "var(--foreground)",
 };
 
 export function Config() {
@@ -124,7 +122,7 @@ function ConfigBody() {
   };
 
   const stringify = (v: unknown): string => {
-    if (typeof v === "boolean") return String(v);
+    if (typeof v === "boolean") return v ? t("screen.health.on") : t("screen.health.off");
     if (typeof v === "number") return String(v);
     if (v === null || v === undefined) return "—";
     if (typeof v === "string") return v;
@@ -148,7 +146,8 @@ function ConfigBody() {
           return (
             <section key={name} aria-labelledby={headId}>
               <h2 id={headId} style={{ ...GROUP_HEAD, borderTop: si > 0 ? "1px solid var(--rule)" : undefined }}>
-                [{name}]
+                {t(`screen.config.section.${name}`, { defaultValue: name })}
+                <span style={{ fontFamily: MONO, fontWeight: 400, color: "var(--muted-foreground)" }}>[{name}]</span>
               </h2>
               {entries.length === 0 ? (
                 <div style={{ borderTop: "1px solid var(--rule)" }}>
@@ -162,12 +161,17 @@ function ConfigBody() {
                       name === "limits" && (HOT_LIMIT_KEYS as readonly string[]).includes(key);
                     return (
                       <div key={key} style={ROW}>
-                        <dt style={KEY}>{key}</dt>
+                        <dt style={KEY}>
+                          <Term label={t(`screen.config.key.${name}.${key}`, { defaultValue: key })} code={key} />
+                        </dt>
                         <dd style={VALUE}>
                           {isValidate ? (
                             <>
-                              <Toggle checked={validating} onChange={onToggleValidate} label="validate_signatures" />
-                              <span>{String(validating)}</span>
+                              <Toggle
+                                checked={validating}
+                                onChange={onToggleValidate}
+                                label={t("screen.config.key.sync.validate_signatures")}
+                              />
                               {/* Trust is visible: a write the server no longer verifies is said in a word. */}
                               {!validating ? (
                                 <ToneBadge tone="warning">{t("screen.config.validateOffBadge")}</ToneBadge>
@@ -184,9 +188,7 @@ function ConfigBody() {
                               onError={(msg) => toast("error", msg)}
                             />
                           ) : value === "***" ? (
-                            <Tag tone="neutral" mono>
-                              ***
-                            </Tag>
+                            <Tag tone="neutral">{t("screen.config.secret")}</Tag>
                           ) : value === null || value === undefined || (typeof value === "string" && value.trim() === "") ? (
                             // Not set: an absent value (null, or an empty string such as an unset tls_cert) is the
                             // muted em dash, never a blank.
