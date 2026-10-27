@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { useAsync } from "../util/useAsync";
 import { fmtNum, fmtRelative } from "../util/format";
-import { Btn, Card, ErrorCard, Missing, Skeleton, StateBadge, ToneBadge, type Tone } from "../ui/primitives";
+import { Btn, Card, ErrorCard, Missing, Skeleton, StateBadge, Term, ToneBadge, type Tone } from "../ui/primitives";
 import { Screen } from "./Screen";
 import { MONO } from "../theme/tokens";
 
@@ -46,7 +46,7 @@ export function Health() {
       {/* liveness — ungated */}
       <Card pad={false}>
         <dl style={{ margin: 0 }}>
-          <KvRow k="readyz">
+          <KvRow label={t("screen.health.ready")} code="readyz">
             {ready.loading ? (
               <BadgeSkeleton />
             ) : (
@@ -58,14 +58,14 @@ export function Health() {
               </>
             )}
           </KvRow>
-          <KvRow k="version" last>
+          <KvRow label={t("screen.health.version")} code="version" last>
             {version.loading ? (
               <Skeleton width={120} height={12} />
             ) : (
               <>
                 <span style={MONO_VALUE}>{version.data ? version.data.server : <Missing />}</span>
                 <span style={{ ...MONO_VALUE, ...MUTED }}>
-                  api {version.data ? version.data.api : <Missing />}
+                  {version.data ? t("screen.health.api", { v: version.data.api }) : <Missing />}
                 </span>
               </>
             )}
@@ -104,13 +104,13 @@ function HealthBody() {
   return (
     <Card pad={false}>
       <dl style={{ margin: 0 }} aria-busy={health.loading || undefined}>
-        <KvRow k="status">
+        <KvRow label={t("screen.health.status")} code="status">
           {h ? <StateBadge state={h.status} tone={statusTone(h.status)} /> : <BadgeSkeleton />}
         </KvRow>
-        <KvRow k="version">{mono(h?.version)}</KvRow>
-        <KvRow k="uptime">{mono(h ? fmtUptime(h.uptime_seconds, t("screen.health.uptimeDaysShort")) : null, 72)}</KvRow>
-        <KvRow k="db.backend">{mono(h?.db.backend, 64)}</KvRow>
-        <KvRow k="db.reachable">
+        <KvRow label={t("screen.health.version")} code="version">{mono(h?.version)}</KvRow>
+        <KvRow label={t("screen.health.uptime")} code="uptime">{mono(h ? fmtUptime(h.uptime_seconds, t("screen.health.uptimeDaysShort")) : null, 72)}</KvRow>
+        <KvRow label={t("screen.health.dbBackend")} code="db.backend">{mono(h?.db.backend, 64)}</KvRow>
+        <KvRow label={t("screen.health.dbReachable")} code="db.reachable">
           {h ? (
             <ToneBadge tone={h.db.reachable ? "success" : "destructive"}>
               {h.db.reachable ? t("screen.health.reachable") : t("screen.health.unreachable")}
@@ -119,17 +119,17 @@ function HealthBody() {
             <BadgeSkeleton />
           )}
         </KvRow>
-        <KvRow k="db.pool" hint="in_use / idle / size / max">
+        <KvRow label={t("screen.health.dbPool")} code="db.pool" hint={t("screen.health.dbPoolHint")}>
           {mono(
             pool
               ? `${fmtNum(pool.in_use)} / ${fmtNum(pool.idle)} / ${fmtNum(pool.size)} / ${fmtNum(pool.max)}`
               : null,
           )}
         </KvRow>
-        <KvRow k="janitor.interval">
+        <KvRow label={t("screen.health.janitorInterval")} code="janitor.interval">
           {mono(h ? t("common.unitSeconds", { n: fmtNum(h.janitor.interval_seconds) }) : null, 48)}
         </KvRow>
-        <KvRow k="janitor.last_run">
+        <KvRow label={t("screen.health.janitorLastRun")} code="janitor.last_run">
           {!h ? (
             <Skeleton width={72} height={12} />
           ) : h.janitor.last_run ? (
@@ -138,8 +138,8 @@ function HealthBody() {
             <Missing />
           )}
         </KvRow>
-        <KvRow k="tls">{mono(h?.tls, 64)}</KvRow>
-        <KvRow k="trust_proxy" last>
+        <KvRow label={t("screen.health.tls")} code="tls">{mono(h?.tls, 64)}</KvRow>
+        <KvRow label={t("screen.health.trustProxy")} code="trust_proxy" last>
           {h ? (
             <ToneBadge tone={h.trust_proxy ? "warning" : "neutral"}>
               {h.trust_proxy ? t("screen.health.on") : t("screen.health.off")}
@@ -159,16 +159,18 @@ function BadgeSkeleton() {
 }
 
 /**
- * One line of a ruled key–value list: the key in muted mono (with an optional
+ * One line of a ruled key–value list: the key in plain words over its machine name (with an optional
  * legend for a compound value), the value beside it; at least 32 px, divided by --rule.
  */
 function KvRow({
-  k,
+  label,
+  code,
   hint,
   children,
   last,
 }: {
-  k: string;
+  label: string;
+  code: string;
   hint?: string;
   children: ReactNode;
   last?: boolean;
@@ -188,15 +190,13 @@ function KvRow({
       <dt
         style={{
           minWidth: 0,
-          fontFamily: MONO,
-          fontSize: 12,
-          lineHeight: "16px",
-          color: "var(--muted-foreground)",
+          fontSize: 13,
+          lineHeight: "18px",
           overflowWrap: "anywhere",
         }}
       >
-        {k}
-        {hint ? <span style={{ display: "block", fontSize: 11 }}>{hint}</span> : null}
+        <Term label={label} code={code} />
+        {hint ? <span style={{ display: "block", fontSize: 11, color: "var(--muted-foreground)" }}>{hint}</span> : null}
       </dt>
       <dd
         style={{

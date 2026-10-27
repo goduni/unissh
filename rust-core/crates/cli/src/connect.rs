@@ -15,8 +15,9 @@ use zeroize::Zeroize;
 
 use crate::device::ask_secret;
 use crate::escape::{Escape, Escapes, HELP};
-use crate::failure::{best_effort, Failure, Res, EXIT_CONNECT};
+use crate::failure::{best_effort, Failure, Res, EXIT_BROKEN_PIPE, EXIT_CONNECT};
 use crate::hosts::{Host, Target};
+use crate::tree;
 use crate::tty::{self, RawMode, INPUT_TICK};
 
 /// How a session or command ended, handed over from the core's thread (the
@@ -121,6 +122,16 @@ fn forget_password(target: &mut Target) {
     }
 }
 
+/// Runs `connect` against `target` with the password the host wants typed at
+/// every connection, asked once here, and forgets that password afterwards
+/// whatever `connect` returned.
+pub fn with_password<T>(target: &mut Target, connect: impl FnOnce(&Target) -> Res<T>) -> Res<T> {
+    fill_password(target)?;
+    let connected = connect(&*target);
+    forget_password(target);
+    connected
+}
+
 /// Whether this machine has pinned a key for `host:port` already.
 fn is_known(core: &Core, host: &str, port: u16) -> bool {
     core.list_known_hosts()
@@ -150,12 +161,19 @@ fn announce_pinned(core: &Core, host: &str, port: u16) {
     }
 }
 
-/// Connects to `target` and runs `connect`, announcing a newly pinned key.
-fn connecting<T>(core: &Core, target: &Target, connect: impl FnOnce() -> Res<T>) -> Res<T> {
-    let new_host = !is_known(core, &target.host, target.port);
+/// Connects to `target` and runs `connect`, announcing every newly pinned key:
+/// each jump host's as well as the target's, since each is trusted on first use.
+pub fn connecting<T>(core: &Core, target: &Target, connect: impl FnOnce() -> Res<T>) -> Res<T> {
+    let new_hosts: Vec<(&str, u16)> = target
+        .jumps
+        .iter()
+        .map(|jump| (jump.host.as_str(), jump.port))
+        .chain(std::iter::once((target.host.as_str(), target.port)))
+        .filter(|&(host, port)| !is_known(core, host, port))
+        .collect();
     let connected = connect().map_err(Failure::connecting)?;
-    if new_host {
-        announce_pinned(core, &target.host, target.port);
+    for (host, port) in new_hosts {
+        announce_pinned(core, host, port);
     }
     Ok(connected)
 }
@@ -212,7 +230,6 @@ pub fn shell(core: &Core, host: &Host, mut target: Target) -> Res<i32> {
     if host.profile.agent_forward {
         eprintln!("unissh: agent forwarding is not available in the CLI; connecting without it");
     }
-    fill_password(&mut target)?;
     let size = tty::window_size().unwrap_or((80, 24));
     let recorded = host.profile.record_sessions;
     let recording = recorded.then(|| RecordingRequest {
@@ -224,24 +241,25 @@ pub fn shell(core: &Core, host: &Host, mut target: Target) -> Res<i32> {
     let observer: Arc<dyn SessionObserver> = Arc::new(Screen {
         ended: Arc::clone(&ended),
     });
-    let session = connecting(core, &target, || {
-        Ok(core.open_session(
-            target.host.clone(),
-            target.port,
-            target.user.clone(),
-            target.auth.clone(),
-            target.jumps.clone(),
-            target.proxy.clone(),
-            term(),
-            size.0,
-            size.1,
-            observer,
-            recording,
-            false,
-            PasswordFillMode::Off,
-        )?)
+    let session = with_password(&mut target, |target| {
+        connecting(core, target, || {
+            Ok(core.open_session(
+                target.host.clone(),
+                target.port,
+                target.user.clone(),
+                target.auth.clone(),
+                target.jumps.clone(),
+                target.proxy.clone(),
+                term(),
+                size.0,
+                size.1,
+                observer,
+                recording,
+                false,
+                PasswordFillMode::Off,
+            )?)
+        })
     })?;
-    forget_password(&mut target);
 
     let (status, hung_up) = {
         // Raw only while the session runs: the terminal is back to normal
@@ -335,10 +353,6 @@ struct Streams {
     ended: Arc<Ended>,
 }
 
-/// The status of a command whose output nobody reads any more, as a shell
-/// reports one killed by SIGPIPE (128 + 13) — what `ssh` itself would die of.
-const EXIT_BROKEN_PIPE: i32 = 141;
-
 impl ExecObserver for Streams {
     fn on_stdout(&self, data: Vec<u8>) {
         let mut out = io::stdout().lock();
@@ -346,7 +360,9 @@ impl ExecObserver for Streams {
             // `| head`, `| grep -m1`: the reader is gone, and Rust ignores
             // SIGPIPE, so ending here is ours to do — or a `tail -f` streams on
             // into nothing until the remote command ends.
-            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => self.ended.closed(EXIT_BROKEN_PIPE),
+            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {
+                self.ended.closed(i32::from(EXIT_BROKEN_PIPE));
+            }
             Ok(()) | Err(_) => {}
         }
     }
@@ -364,24 +380,24 @@ impl ExecObserver for Streams {
 /// Runs `command` on the target without a terminal, like `ssh host command`.
 /// Our stdin goes to the command unless `no_stdin`; returns its exit status.
 pub fn run(core: &Core, mut target: Target, command: String, no_stdin: bool) -> Res<i32> {
-    fill_password(&mut target)?;
     let ended = Arc::new(Ended::new());
     let observer: Arc<dyn ExecObserver> = Arc::new(Streams {
         ended: Arc::clone(&ended),
     });
-    let handle = connecting(core, &target, || {
-        Ok(core.ssh_exec_stream(
-            target.host.clone(),
-            target.port,
-            target.user.clone(),
-            target.auth.clone(),
-            command,
-            target.jumps.clone(),
-            target.proxy.clone(),
-            observer,
-        )?)
+    let handle = with_password(&mut target, |target| {
+        connecting(core, target, || {
+            Ok(core.ssh_exec_stream(
+                target.host.clone(),
+                target.port,
+                target.user.clone(),
+                target.auth.clone(),
+                command,
+                target.jumps.clone(),
+                target.proxy.clone(),
+                observer,
+            )?)
+        })
     })?;
-    forget_password(&mut target);
     if no_stdin {
         handle.close_stdin()?;
     } else {
@@ -458,28 +474,41 @@ pub enum Direction {
     },
 }
 
-/// Copies one file over SFTP. An existing destination is replaced only with
-/// `force`.
-pub fn copy(core: &Core, mut target: Target, direction: Direction, force: bool) -> Res<()> {
-    fill_password(&mut target)?;
-    let sftp = connecting(core, &target, || {
-        Ok(core.open_sftp(
-            target.host.clone(),
-            target.port,
-            target.user.clone(),
-            target.auth.clone(),
-            target.jumps.clone(),
-            target.proxy.clone(),
-            1,
-        )?)
+/// Copies one file over SFTP, or with `recursive` a directory and what is in
+/// it, `parallel` files at a time. An existing destination file is replaced
+/// only with `force`.
+pub fn copy(
+    core: &Core,
+    mut target: Target,
+    direction: Direction,
+    force: bool,
+    recursive: bool,
+    parallel: u32,
+) -> Res<()> {
+    // One channel is all a single file uses; a tree keeps `parallel` of them
+    // over the one connection, as the app's SFTP pane does.
+    let channels = if recursive { parallel } else { 1 };
+    let sftp = with_password(&mut target, |target| {
+        connecting(core, target, || {
+            Ok(core.open_sftp(
+                target.host.clone(),
+                target.port,
+                target.user.clone(),
+                target.auth.clone(),
+                target.jumps.clone(),
+                target.proxy.clone(),
+                channels,
+            )?)
+        })
     })?;
-    forget_password(&mut target);
-    let done = transfer(&sftp, direction, force);
+    let done = transfer(&sftp, direction, force, recursive.then_some(parallel));
     sftp.close();
     done
 }
 
-fn transfer(sftp: &SftpFfi, direction: Direction, force: bool) -> Res<()> {
+/// `recursive`: `Some(parallel)` when a directory may be copied, with what is
+/// in it.
+fn transfer(sftp: &SftpFfi, direction: Direction, force: bool, recursive: Option<u32>) -> Res<()> {
     let progress = io::stderr()
         .is_terminal()
         .then(|| -> Arc<dyn SftpProgressObserver> { Arc::new(Progress) });
@@ -490,24 +519,40 @@ fn transfer(sftp: &SftpFfi, direction: Direction, force: bool) -> Res<()> {
             } else {
                 local
             };
+            // `web:` is the login directory, as the walk names it.
+            let is_dir = || {
+                sftp.stat(tree::remote_path(&remote, ""))
+                    .is_ok_and(|s| s.is_dir)
+            };
+            if let Some(parallel) = recursive.filter(|_| is_dir()) {
+                return tree::download_tree(sftp, &remote, &local, force, parallel);
+            }
             if local.exists() && !force {
                 return Err(exists(&local.display().to_string()));
             }
-            download(sftp, remote, &local, progress)?
+            download(sftp, remote.clone(), &local, None, progress).map_err(|e| {
+                if recursive.is_none() && is_dir() {
+                    Failure::msg(format!(
+                        "{} is a directory; pass -r to copy it",
+                        tty::one_line(&remote)
+                    ))
+                } else {
+                    e
+                }
+            })?
         }
         Direction::Upload { local, remote } => {
             let name = local
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
-                .ok_or_else(|| Failure::msg(format!("{} is not a file", local.display())))?;
-            let into_dir = remote.is_empty()
-                || remote.ends_with('/')
-                || sftp.stat(remote.clone()).is_ok_and(|s| s.is_dir);
-            let remote = if into_dir {
-                join_remote(&remote, &name)
-            } else {
-                remote
-            };
+                .ok_or_else(|| Failure::msg(format!("{} is not a file", local.display())));
+            if let (Some(parallel), true) = (recursive, local.is_dir()) {
+                // `.` and `..` have no name of their own; the directory they are does.
+                let name = name.or_else(|_| dir_name(&local))?;
+                let remote = into_remote(sftp, remote, &name);
+                return tree::upload_tree(sftp, &local, &remote, force, parallel);
+            }
+            let remote = into_remote(sftp, remote, &name?);
             if !force && sftp.stat(remote.clone()).is_ok() {
                 return Err(exists(&remote));
             }
@@ -530,14 +575,37 @@ fn transfer(sftp: &SftpFfi, direction: Direction, force: bool) -> Res<()> {
     }
 }
 
+/// The remote path a local file or directory named `name` is copied to: into
+/// `remote` when that is a directory (or the login directory), else `remote`.
+fn into_remote(sftp: &SftpFfi, remote: String, name: &str) -> String {
+    let into_dir = remote.is_empty()
+        || remote.ends_with('/')
+        || sftp.stat(remote.clone()).is_ok_and(|s| s.is_dir);
+    if into_dir {
+        join_remote(&remote, name)
+    } else {
+        remote
+    }
+}
+
+/// The name of a local directory given as `.`, `..` or the like.
+fn dir_name(local: &Path) -> Res<String> {
+    std::fs::canonicalize(local)?
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .ok_or_else(|| Failure::msg(format!("{} has no name to copy it as", local.display())))
+}
+
 /// Downloads into a file beside `local` and renames it over `local` only once
 /// the whole file is there: a copy that fails — a remote file that cannot be
 /// read, a connection that drops — leaves whatever `local` was untouched and
-/// no partial file behind.
-fn download(
+/// no partial file behind. `known_size` is the size a listing gave, which
+/// spares the core a `stat` for its progress.
+pub fn download(
     sftp: &SftpFfi,
     remote: String,
     local: &Path,
+    known_size: Option<u64>,
     progress: Option<Arc<dyn SftpProgressObserver>>,
 ) -> Res<bool> {
     let name = local
@@ -548,7 +616,7 @@ fn download(
         remote,
         part.to_string_lossy().into_owned(),
         0,
-        None,
+        known_size,
         progress,
         None,
     );
@@ -568,7 +636,7 @@ fn download(
     completed
 }
 
-fn exists(path: &str) -> Failure {
+pub fn exists(path: &str) -> Failure {
     Failure::msg(format!("{path} exists; pass --force to replace it"))
 }
 
@@ -581,7 +649,7 @@ fn base_name(remote: &str) -> &str {
         .unwrap_or("download")
 }
 
-fn join_remote(dir: &str, name: &str) -> String {
+pub fn join_remote(dir: &str, name: &str) -> String {
     if dir.is_empty() {
         name.to_owned()
     } else {
@@ -604,7 +672,7 @@ impl SftpProgressObserver for Progress {
     }
 }
 
-fn human(bytes: u64) -> String {
+pub fn human(bytes: u64) -> String {
     const UNITS: [&str; 4] = ["KiB", "MiB", "GiB", "TiB"];
     if bytes < 1024 {
         return format!("{bytes} B");

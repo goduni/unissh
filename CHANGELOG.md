@@ -71,6 +71,15 @@ starts with `0.`:
   and `--idle-limit`; Ctrl-C stops it and the terminal is put back), exports
   it as the asciicast v2 file `asciinema` plays (`export`), and deletes it
   (`rm`, sent to the server like any vault change).
+- `unissh cp -r` copies a directory tree to or from a host, several files at
+  once over one SFTP connection (`--parallel`, 4 by default). Symbolic links
+  inside the tree are skipped and named, not followed; a file that fails is
+  reported, the rest still copy, and the command exits non-zero.
+- `unissh tunnel <host>` forwards ports as `ssh -N` does: `-L`, `-R` and `-D`
+  (SOCKS5), any number of each, through the core's forwards. A forward listens
+  on `127.0.0.1` unless an address is given, and SOCKS listens on loopback only.
+  It prints a line per forward once it listens, fails as a whole if one cannot
+  open, and closes them cleanly on Ctrl-C or SIGTERM.
 - Bindings: `ExecHandleFfi::close_stdin` ends a streaming command's input and
   keeps its output coming; `Core::wait_for_recordings` waits for session
   recordings still to be written (a recorded session counts from the moment it
@@ -100,6 +109,14 @@ starts with `0.`:
     instead of a red button on every row. The audit log is grouped by day.
   - **Removed:** the five accent colours. The fonts are now served from the
     panel itself.
+  - **Words:** screens say what they are for in plain language, with the
+    server's own name (`readyz`, a config key, an event type) in small type
+    underneath. The menu follows tasks — Server, People, Vaults — and folds
+    metrics, maintenance, device pairing and the sync log into a Technical
+    group. Directory is gone; an account's key is in its card.
+  - **Spaces:** a member is added by typing a name or login and picking the
+    account; the account ID field is left only for when the accounts list
+    cannot be read.
 - One resolver for saved hosts, in the core (`Core::resolve_connection`): the
   app, the CLI and local automation now work out a host's user and credential
   the same way. For the app this means a host that names no user logs in as the
@@ -143,6 +160,17 @@ starts with `0.`:
   - Removing a server in the app revokes this device on it, since nothing
     could sign in as it again. Both are best effort: a server the app cannot
     reach keeps the device until it is revoked by hand.
+- In a shared vault you can only view, editing or deleting an item (a host,
+  key, password, note, snippet, group or identity), in the app or the `unissh`
+  CLI, is now refused with "you can only view this vault" and changes nothing.
+  It used to change this device's copy, which the server then refused: the
+  copy no longer matched the other devices, and every later sync from this
+  device failed. Bindings: new `FfiError::ReadOnlyVault`.
+  - Session and MCP command recordings of hosts in a vault you can only view
+    are no longer saved, for the same reason. MCP recording retention leaves
+    such a vault alone: its expired recordings stay listed.
+  - Moving a local vault to a server leaves references to it in a vault you
+    can only view as they were.
 
 ### Security
 

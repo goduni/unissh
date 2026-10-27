@@ -24,7 +24,7 @@ import { filterHosts, searchKeyAction } from "@/support/hostsSearch";
 import { HOST_DRAG_MIME, draggedHostIds, hostDrag } from "@/support/hostDrag";
 import { compareByGroup, effectiveHostFilter, isUngrouped } from "@/support/hostGroups";
 import { appearanceIcon, isKnownIcon, swatchColor, type TagColor } from "@/components/appearance";
-import { ColorTick, useAppearanceIndex } from "@/components/ColorTick";
+import { ColorTick, ColorTickSlot, useAppearanceIndex } from "@/components/ColorTick";
 import { effectiveHostColor, groupColor } from "@/support/hostAppearance";
 
 /** The host's chosen icon, beside its name — nothing when it has none: a host
@@ -35,12 +35,11 @@ function HostGlyph({ h, size }: { h: ConnectionProfile; size: number }) {
   return isKnownIcon(h.icon) ? <Icon name={h.icon} size={size} color={p.txt2} stroke={1.7} /> : null;
 }
 
-/** The colour tick in a fixed slot, so tagged and untagged hosts keep their
- *  names on one line. */
-function TagSlot({ tag, height }: { tag: TagColor | null; height?: number }) {
+/** The icon in a fixed slot, so rows with and without one keep their columns. */
+function GlyphSlot({ h, size }: { h: ConnectionProfile; size: number }) {
   return (
-    <span style={{ width: rem(3), flexShrink: 0, display: "inline-flex" }}>
-      <ColorTick color={tag} height={height} />
+    <span style={{ width: rem(size), flexShrink: 0, display: "inline-flex" }}>
+      <HostGlyph h={h} size={size} />
     </span>
   );
 }
@@ -209,7 +208,7 @@ function HostCard({
       {/* L1 — colour tick, 7px status dot, icon + name (reference: dot keys off a
           live session) */}
       <div style={{ display: "flex", alignItems: "center", gap: rem(8), minWidth: 0 }}>
-        <TagSlot tag={tag} />
+        <ColorTickSlot color={tag} />
         <span
           style={{
             width: rem(7),
@@ -491,13 +490,13 @@ function HostRow({
         aria-label={t("hosts.selectHostLabel", { label: h.label })}
         style={{ opacity: show || selected ? 1 : 0.25 }}
       />
-      <TagSlot tag={tag} height={16} />
+      <ColorTickSlot color={tag} height={16} />
       <StatusDot
         status={session ? "online" : "unknown"}
         size={8}
         srLabel={session ? t("hosts.session") : undefined}
       />
-      <HostGlyph h={h} size={14} />
+      <GlyphSlot h={h} size={14} />
       <span
         style={{
           width: rem(150),
