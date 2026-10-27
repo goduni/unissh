@@ -300,7 +300,8 @@ unissh mcp --http [--port 8765]                      # loopback HTTP, in a termi
 
 - **Transports.** By default it speaks MCP on stdin/stdout: the agent launches it,
   and as the process owner it acts for one integration (`--integration NAME`, or the
-  only one there is), with no token. `--http` serves `http://127.0.0.1:<port>/mcp`
+  only one there is), with no token. An integration is named by its id or as a
+  host is (its label in any case, or the one label the name begins). `--http` serves `http://127.0.0.1:<port>/mcp`
   exactly like the desktop: every integration authenticates with its own
   `Authorization: Bearer <token>`. The port is remembered for next time. Global
   flags (`--offline`, `--home`, `--password-file`) go anywhere; the serving flags

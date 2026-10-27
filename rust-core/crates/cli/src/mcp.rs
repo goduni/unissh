@@ -34,6 +34,7 @@ use crate::connect::RECORDING_GRACE_MS;
 use crate::device::{Credentials, Device};
 use crate::failure::{best_effort, Failure, Res};
 use crate::home::Home;
+use crate::hosts::{find_named, Named};
 use crate::mcp_tty::{self, Prompts, Terminal};
 use crate::tty::{confirm, one_line, stdin_is_foreground, Tty};
 use crate::{hosts, server, signals, system_lock};
@@ -468,50 +469,58 @@ fn open_integrations(home: &Home) -> Res<Integrations> {
     Integrations::load(path.clone()).map_err(|e| Failure::msg(format!("{}: {e}", path.display())))
 }
 
-/// The integration `name` means — its id, else its label in any case — or,
-/// without a name, the only one there is. Never a guess between several.
+/// An integration is named as a vault item is ([`find_named`]): its
+/// label in any case, or the one label a name begins. It lives outside the
+/// vaults, so several that share a label are told apart by their ids.
+impl Named for Integration {
+    const KIND: &'static str = "MCP integration";
+    const KINDS: &'static str = "MCP integrations";
+    const LISTED_BY: Option<&'static str> = Some("unissh mcp integrations list");
+    const NAME_ONE: &'static str = "name one by its id";
+
+    fn vault_name(&self) -> &str {
+        ""
+    }
+
+    fn label(&self) -> &str {
+        &self.label
+    }
+
+    fn detail(&self) -> String {
+        self.label.clone()
+    }
+
+    fn qualified(&self) -> String {
+        one_line(&self.id)
+    }
+}
+
+/// The integration `name` means — its id, else its label as [`Named`] reads
+/// it — or, without a name, the only one there is. Never a guess between
+/// several.
 fn find_integration(all: &[Integration], name: Option<&str>) -> Res<Integration> {
-    let found: Vec<&Integration> = match name {
-        Some(name) => {
-            let by_id: Vec<_> = all.iter().filter(|i| i.id == name).collect();
-            if by_id.is_empty() {
-                let name = name.to_lowercase();
-                all.iter()
-                    .filter(|i| i.label.to_lowercase() == name)
-                    .collect()
-            } else {
-                by_id
-            }
-        }
-        None => all.iter().collect(),
-    };
-    match found.as_slice() {
-        [one] => Ok(Integration {
-            id: one.id.clone(),
-            label: one.label.clone(),
-        }),
-        [] => Err(Failure::msg(name.map_or_else(
-            || NO_INTEGRATION.to_owned(),
-            |name| {
-                format!("no MCP integration is named \"{name}\" (`unissh mcp integrations list`)")
-            },
-        ))),
-        many => {
+    let found = match (name, all) {
+        (Some(name), _) => match all.iter().find(|i| i.id == name) {
+            Some(by_id) => by_id,
+            None => find_named(all, name)?,
+        },
+        (None, [one]) => one,
+        (None, []) => return Err(Failure::msg(NO_INTEGRATION)),
+        (None, many) => {
             let names: Vec<_> = many
                 .iter()
-                .map(|i| format!("\n  {}  ({})", one_line(&i.label), i.id))
+                .map(|i| format!("\n  {}  ({})", one_line(&i.label), one_line(&i.id)))
                 .collect();
-            Err(Failure::msg(format!(
-                "{}; name one by id:{}",
-                if name.is_some() {
-                    "several MCP integrations have that name"
-                } else {
-                    "there are several MCP integrations; choose one with --integration"
-                },
+            return Err(Failure::msg(format!(
+                "there are several MCP integrations; choose one with --integration:{}",
                 names.concat()
-            )))
+            )));
         }
-    }
+    };
+    Ok(Integration {
+        id: found.id.clone(),
+        label: found.label.clone(),
+    })
 }
 
 fn integrations(home: Home, credentials: &Credentials, action: IntegrationsAction) -> Res<()> {
@@ -1149,8 +1158,9 @@ mod tests {
         }
     }
 
-    /// By id, or by label in any case; a label two integrations share is
-    /// refused rather than guessed.
+    /// By id, or by label as hosts are named (any case, or the one label a
+    /// name begins); a label two integrations share is refused rather than
+    /// guessed, and the refusal names them by id.
     #[test]
     fn an_integration_is_named_by_id_or_label_never_guessed() {
         let all = [
@@ -1163,6 +1173,9 @@ mod tests {
             "id1"
         );
         assert_eq!(find_integration(&all, Some("id3")).unwrap().id, "id3");
+        assert_eq!(find_integration(&all, Some("clau")).unwrap().id, "id1");
+        let begun = refused(find_integration(&all, Some("cod")));
+        assert!(begun.contains("name one by its id"), "{begun}");
         let err = refused(find_integration(&all, Some("CODEX")));
         assert!(err.contains("id2") && err.contains("id3"), "{err}");
         assert!(refused(find_integration(&all, Some("cursor"))).contains("no MCP integration"));
