@@ -83,6 +83,23 @@ impl Broker {
         })
     }
 
+    /// Trusted native API: ends `run_id`, still waiting for a decision, with
+    /// `approval_unavailable` rather than a denial: for an approver that cannot
+    /// ask just now (a CLI server sent to the background), so that the agent
+    /// learns nobody was asked. Errors as [`Self::approve`] does when it no
+    /// longer waits.
+    pub fn approval_unavailable(&self, run_id: &str) -> Result<()> {
+        let now = Instant::now();
+        let mut state = lock(&self.state);
+        let run = state
+            .runs
+            .get_mut(run_id)
+            .filter(|r| awaiting(r, now))
+            .ok_or(ToolError::ApprovalExpired)?;
+        finish(run, "failed", Some(ToolError::ApprovalUnavailable));
+        Ok(())
+    }
+
     /// Native lifecycle only: whether someone can confirm commands of manual
     /// grants. While false (a CLI server with no terminal), such a command is
     /// refused at submission with `approval_unavailable` instead of waiting for a

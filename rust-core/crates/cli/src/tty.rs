@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use zeroize::Zeroizing;
 
 pub use imp::{
-    read_stdin, stdin_is_controlling_terminal, wait_for_input, window_size, RawMode, Tty, SUPPORTED,
+    read_stdin, stdin_is_foreground, wait_for_input, window_size, RawMode, Tty, SUPPORTED,
 };
 
 /// `text` without control characters, for one line that came from a server,
@@ -473,11 +473,15 @@ mod imp {
         ready(io::stdin().as_fd(), timeout)
     }
 
-    /// Whether stdin is this process's controlling terminal: not a pipe, and
-    /// not some other terminal. (`tcgetpgrp` answers only for the controlling
-    /// terminal; on any other descriptor it fails.)
-    pub fn stdin_is_controlling_terminal() -> bool {
-        rustix::termios::tcgetpgrp(io::stdin().as_fd()).is_ok()
+    /// Whether stdin is this process's controlling terminal (not a pipe, not
+    /// some other terminal: `tcgetpgrp` answers only for the controlling one)
+    /// and this process is in its foreground: not started with `&`, not
+    /// suspended and sent on with `bg`.
+    /// (A background process that reads the terminal is stopped, and the one
+    /// in the foreground is someone else, who must not answer for it.)
+    pub fn stdin_is_foreground() -> bool {
+        rustix::termios::tcgetpgrp(io::stdin().as_fd())
+            .is_ok_and(|group| group == rustix::process::getpgrp())
     }
 
     /// Waits up to `timeout` for `fd` to become readable. A signal arriving
@@ -584,8 +588,8 @@ mod imp {
         None
     }
 
-    /// No terminal to speak of here.
-    pub const fn stdin_is_controlling_terminal() -> bool {
+    /// No terminal to be in the foreground of.
+    pub const fn stdin_is_foreground() -> bool {
         false
     }
 

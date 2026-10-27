@@ -17,7 +17,7 @@ use unissh_ffi::{AuthPromptRequest, AuthPrompter};
 use unissh_mcp::contract::ToolError;
 
 use crate::device::{is_silent, prompt_intro};
-use crate::tty::{lines, one_line, stdin_is_controlling_terminal, Tty};
+use crate::tty::{lines, one_line, stdin_is_foreground, Tty};
 
 /// How often the approver looks for new requests.
 const POLL: Duration = Duration::from_millis(200);
@@ -27,11 +27,25 @@ const POLL: Duration = Duration::from_millis(200);
 const SWAP_PAUSE: Duration = Duration::from_secs(1);
 
 /// Whether anyone may be asked: only an HTTP server whose stdin is the
-/// controlling terminal, i.e. one the user started in a terminal of their own.
-/// A stdio server shares its terminal with the client that spawned it (a
-/// full-screen agent, say), where whatever types into the terminal could answer.
+/// controlling terminal and that runs in its foreground, i.e. one the user
+/// started in a terminal of their own and is looking at. A stdio server shares
+/// its terminal with the client that spawned it (a full-screen agent, say),
+/// where whatever types into the terminal could answer; a server started with
+/// `&` shares it with whatever runs in the foreground instead. Checked again
+/// before each question ([`still_attended`]).
 pub fn attended(http: bool) -> bool {
-    http && stdin_is_controlling_terminal()
+    http && stdin_is_foreground()
+}
+
+/// Before each question: whether the server is still in the terminal's
+/// foreground. Sent to the background (Ctrl-Z, `bg`), it asks nothing: the
+/// question would stop it, or be answered by whoever has the terminal now.
+fn still_attended(what: &str) -> bool {
+    let attended = stdin_is_foreground();
+    if !attended {
+        log::warn!("not in the terminal's foreground; {what} not asked");
+    }
+    attended
 }
 
 /// One question on the terminal at a time: an approval and a sign-in prompt
@@ -102,6 +116,11 @@ fn ask(
     let Some(_turn) = terminal.turn(deadline, &gone) else {
         return Asked::Withdrawn;
     };
+    if !still_attended("a command approval") {
+        // The agent learns that nobody could be asked, not that someone said no.
+        let _ = broker.approval_unavailable(&request.run_id);
+        return Asked::Decided;
+    }
     let mut decided = false;
     let asked = Tty::open().and_then(|mut tty| {
         tty.say(&question(request).replace('\n', "\r\n"))?;
@@ -232,6 +251,9 @@ impl AuthPrompter for AttributedPrompt {
         }
         let gone = || self.cancel.load(Ordering::SeqCst);
         let _turn = self.terminal.turn(self.deadline, &gone)?;
+        if !still_attended("a sign-in prompt") {
+            return None;
+        }
         let mut tty = Tty::open().ok()?;
         request.name = format!("MCP · {} · {}", self.label, request.name);
         tty.say(&format!("\n{}", prompt_intro(&request)).replace('\n', "\r\n"))

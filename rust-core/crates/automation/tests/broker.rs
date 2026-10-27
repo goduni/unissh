@@ -1946,6 +1946,35 @@ async fn manual_commands_are_refused_when_nobody_can_approve() {
     assert_eq!(fake.execs.load(Ordering::SeqCst), 1);
 }
 
+/// An approver that cannot ask just now ends the waiting command with
+/// `approval_unavailable`, not a denial, and runs nothing; a second call finds
+/// nothing waiting.
+#[tokio::test]
+async fn a_command_nobody_could_be_asked_about_fails_as_approval_unavailable() {
+    let fake = Arc::new(Fake::default());
+    let b = Broker::new(fake.clone());
+    let t = target(&b, "a").await;
+    let submitted = call(
+        &b,
+        "a",
+        "run_command",
+        json!({"session_id":null,"target_id":t,"command":"pwd","request_key":"k"}),
+    )
+    .await
+    .unwrap();
+    let rid = submitted["run_id"].as_str().unwrap();
+    b.approval_unavailable(rid).unwrap();
+    assert!(!b.is_pending(rid));
+    let r = call(&b, "a", "get_command", json!({"run_id":rid}))
+        .await
+        .unwrap();
+    assert_eq!(r["state"], "failed");
+    assert_eq!(r["error"], json!(ToolError::ApprovalUnavailable));
+    assert_eq!(b.approval_unavailable(rid), Err(ToolError::ApprovalExpired));
+    assert_eq!(b.approve(rid, true), Err(ToolError::ApprovalExpired));
+    assert_eq!(fake.execs.load(Ordering::SeqCst), 0);
+}
+
 /// A native approver outside the desktop sees the exact command, inputs,
 /// destination and application, and a request the agent cancels drops out
 /// (of the list, and of the cheap check a question polls).
