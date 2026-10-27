@@ -17,6 +17,7 @@ use crate::device::ask_secret;
 use crate::escape::{Escape, Escapes, HELP};
 use crate::failure::{best_effort, Failure, Res, EXIT_BROKEN_PIPE, EXIT_CONNECT};
 use crate::hosts::{Host, Target};
+use crate::tree;
 use crate::tty::{self, RawMode, INPUT_TICK};
 
 /// How a session or command ended, handed over from the core's thread (the
@@ -473,9 +474,20 @@ pub enum Direction {
     },
 }
 
-/// Copies one file over SFTP. An existing destination is replaced only with
-/// `force`.
-pub fn copy(core: &Core, mut target: Target, direction: Direction, force: bool) -> Res<()> {
+/// Copies one file over SFTP, or with `recursive` a directory and what is in
+/// it, `parallel` files at a time. An existing destination file is replaced
+/// only with `force`.
+pub fn copy(
+    core: &Core,
+    mut target: Target,
+    direction: Direction,
+    force: bool,
+    recursive: bool,
+    parallel: u32,
+) -> Res<()> {
+    // One channel is all a single file uses; a tree keeps `parallel` of them
+    // over the one connection, as the app's SFTP pane does.
+    let channels = if recursive { parallel } else { 1 };
     let sftp = with_password(&mut target, |target| {
         connecting(core, target, || {
             Ok(core.open_sftp(
@@ -485,16 +497,18 @@ pub fn copy(core: &Core, mut target: Target, direction: Direction, force: bool) 
                 target.auth.clone(),
                 target.jumps.clone(),
                 target.proxy.clone(),
-                1,
+                channels,
             )?)
         })
     })?;
-    let done = transfer(&sftp, direction, force);
+    let done = transfer(&sftp, direction, force, recursive.then_some(parallel));
     sftp.close();
     done
 }
 
-fn transfer(sftp: &SftpFfi, direction: Direction, force: bool) -> Res<()> {
+/// `recursive`: `Some(parallel)` when a directory may be copied, with what is
+/// in it.
+fn transfer(sftp: &SftpFfi, direction: Direction, force: bool, recursive: Option<u32>) -> Res<()> {
     let progress = io::stderr()
         .is_terminal()
         .then(|| -> Arc<dyn SftpProgressObserver> { Arc::new(Progress) });
@@ -505,24 +519,40 @@ fn transfer(sftp: &SftpFfi, direction: Direction, force: bool) -> Res<()> {
             } else {
                 local
             };
+            // `web:` is the login directory, as the walk names it.
+            let is_dir = || {
+                sftp.stat(tree::remote_path(&remote, ""))
+                    .is_ok_and(|s| s.is_dir)
+            };
+            if let Some(parallel) = recursive.filter(|_| is_dir()) {
+                return tree::download_tree(sftp, &remote, &local, force, parallel);
+            }
             if local.exists() && !force {
                 return Err(exists(&local.display().to_string()));
             }
-            download(sftp, remote, &local, progress)?
+            download(sftp, remote.clone(), &local, None, progress).map_err(|e| {
+                if recursive.is_none() && is_dir() {
+                    Failure::msg(format!(
+                        "{} is a directory; pass -r to copy it",
+                        tty::one_line(&remote)
+                    ))
+                } else {
+                    e
+                }
+            })?
         }
         Direction::Upload { local, remote } => {
             let name = local
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
-                .ok_or_else(|| Failure::msg(format!("{} is not a file", local.display())))?;
-            let into_dir = remote.is_empty()
-                || remote.ends_with('/')
-                || sftp.stat(remote.clone()).is_ok_and(|s| s.is_dir);
-            let remote = if into_dir {
-                join_remote(&remote, &name)
-            } else {
-                remote
-            };
+                .ok_or_else(|| Failure::msg(format!("{} is not a file", local.display())));
+            if let (Some(parallel), true) = (recursive, local.is_dir()) {
+                // `.` and `..` have no name of their own; the directory they are does.
+                let name = name.or_else(|_| dir_name(&local))?;
+                let remote = into_remote(sftp, remote, &name);
+                return tree::upload_tree(sftp, &local, &remote, force, parallel);
+            }
+            let remote = into_remote(sftp, remote, &name?);
             if !force && sftp.stat(remote.clone()).is_ok() {
                 return Err(exists(&remote));
             }
@@ -545,14 +575,37 @@ fn transfer(sftp: &SftpFfi, direction: Direction, force: bool) -> Res<()> {
     }
 }
 
+/// The remote path a local file or directory named `name` is copied to: into
+/// `remote` when that is a directory (or the login directory), else `remote`.
+fn into_remote(sftp: &SftpFfi, remote: String, name: &str) -> String {
+    let into_dir = remote.is_empty()
+        || remote.ends_with('/')
+        || sftp.stat(remote.clone()).is_ok_and(|s| s.is_dir);
+    if into_dir {
+        join_remote(&remote, name)
+    } else {
+        remote
+    }
+}
+
+/// The name of a local directory given as `.`, `..` or the like.
+fn dir_name(local: &Path) -> Res<String> {
+    std::fs::canonicalize(local)?
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .ok_or_else(|| Failure::msg(format!("{} has no name to copy it as", local.display())))
+}
+
 /// Downloads into a file beside `local` and renames it over `local` only once
 /// the whole file is there: a copy that fails — a remote file that cannot be
 /// read, a connection that drops — leaves whatever `local` was untouched and
-/// no partial file behind.
-fn download(
+/// no partial file behind. `known_size` is the size a listing gave, which
+/// spares the core a `stat` for its progress.
+pub fn download(
     sftp: &SftpFfi,
     remote: String,
     local: &Path,
+    known_size: Option<u64>,
     progress: Option<Arc<dyn SftpProgressObserver>>,
 ) -> Res<bool> {
     let name = local
@@ -563,7 +616,7 @@ fn download(
         remote,
         part.to_string_lossy().into_owned(),
         0,
-        None,
+        known_size,
         progress,
         None,
     );
@@ -583,7 +636,7 @@ fn download(
     completed
 }
 
-fn exists(path: &str) -> Failure {
+pub fn exists(path: &str) -> Failure {
     Failure::msg(format!("{path} exists; pass --force to replace it"))
 }
 
@@ -596,7 +649,7 @@ fn base_name(remote: &str) -> &str {
         .unwrap_or("download")
 }
 
-fn join_remote(dir: &str, name: &str) -> String {
+pub fn join_remote(dir: &str, name: &str) -> String {
     if dir.is_empty() {
         name.to_owned()
     } else {
@@ -619,7 +672,7 @@ impl SftpProgressObserver for Progress {
     }
 }
 
-fn human(bytes: u64) -> String {
+pub fn human(bytes: u64) -> String {
     const UNITS: [&str; 4] = ["KiB", "MiB", "GiB", "TiB"];
     if bytes < 1024 {
         return format!("{bytes} B");

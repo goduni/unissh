@@ -59,6 +59,7 @@ unissh ssh web                 # interactive terminal (~. ends it, ~? lists esca
 unissh ssh root@web            # another user (not for Personal hosts)
 unissh ssh web -- uptime       # one-off command; stdin is piped, the exit code comes back
 unissh cp web:/var/log/app.log .        # one file, either direction; --force replaces
+unissh cp -r ./site web:/srv/www        # a directory and everything in it, either direction
 unissh tunnel web -L 5432:db:5432 -D 1080   # forward ports until Ctrl-C (-L, -R, -D as with ssh)
 unissh known-hosts list|trust|forget
 unissh sync | status | logout
@@ -84,6 +85,20 @@ temporary file beside the destination and renames it into place when the copy is
 complete, so a failed copy leaves an existing file as it was. An upload, as with
 `scp`, writes the remote file in place.
 
+`unissh cp -r` copies a directory: into the destination when that is an
+existing directory, else as the destination. Each file goes as a single-file
+copy would, four at a time over one connection (`--parallel 1` to `16`, as the
+app's Parallel transfers setting). Directories that exist are merged into; a
+file that exists is replaced only with `--force`. Symbolic links inside the tree
+are not followed, and they and anything else that is not a regular file or a
+directory (sockets, pipes, devices) are named as skipped; the app's SFTP pane
+copies links as links, the CLI does not copy them at all. A file that fails is
+named and the copy goes on; the command then exits 1. Unlike `scp`, a download
+creates the destination's missing parent directories. A remote name this system
+cannot hold (on Windows, one with `\` or `:`) is skipped, and on macOS and
+Windows so is a name that differs from another in its directory only in case.
+A copy stopped with Ctrl-C can leave `.unissh-part` files behind.
+
 `unissh tunnel` takes `-L [bind:]port:host:hostport`, `-R [bind:]port:host:hostport`
 and `-D [bind:]port`, each as often as needed (IPv6 addresses in brackets), and
 needs at least one. A forward listens on `127.0.0.1` (for `-R`, on the host)
@@ -92,8 +107,8 @@ never an empty address or `*`, and a SOCKS proxy (`-D`) listens only on loopback
 Port 0 asks for any free port. The forwards open in groups, whatever order they
 were typed in: every `-L`, then every `-R`, then every `-D`. Each one prints a
 line once it listens, with the real port. If stdout's reader is gone when a
-line is written, the forwards close and the exit status is 141. Each forward is its own connection, so a host with two-factor sign-in
-asks once per forward. A forward that cannot open fails the command and closes
+line is written, the forwards close and the exit status is 141. Each forward
+is its own connection, so a host with two-factor sign-in asks once per forward. A forward that cannot open fails the command and closes
 the ones already open. The tunnels stay up until Ctrl-C or SIGTERM, then close
 cleanly; a second Ctrl-C while they close quits at once (status 130). A hang-up
 ends the process as usual, without the clean close, and under `nohup` the tunnels
