@@ -19,7 +19,7 @@ import { useTranslation } from "@/i18n";
 import { isUngrouped } from "@/support/hostGroups";
 import { groupColor } from "@/support/hostAppearance";
 import { AppearancePicker } from "@/components/AppearancePicker";
-import { ColorTick, useAppearanceIndex } from "@/components/ColorTick";
+import { ColorTickSlot, useAppearanceIndex } from "@/components/ColorTick";
 import { appearanceIcon, isKnownColor, swatchColor } from "@/components/appearance";
 
 // Gate: mount the body (and its dialog hooks) only while open, so Escape/focus
@@ -323,7 +323,7 @@ function GroupsModalBody() {
                       color={swatchColor(tag, p) ?? p.txt2}
                     />
                   </span>
-                  <ColorTick color={tag} height={18} />
+                  <ColorTickSlot color={tag} height={18} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     {editing === g.groupId ? (
                       <input

@@ -161,8 +161,9 @@ pub enum FillEvent {
 /// The output must *end* with the prompt — a prompt that has already been
 /// answered (a newline after it) or scrolled past is not waiting for anything.
 /// Escape sequences and stray control characters are stripped first, since
-/// shells and `sudo` alike may colour or retitle around a prompt. Bare prompts
-/// count only with `allow_generic`.
+/// shells and `sudo` alike may colour or retitle around a prompt, and what a
+/// program draws elsewhere on screen meanwhile (a multiplexer's status line) is
+/// left out. Bare prompts count only with `allow_generic`.
 pub(crate) fn classify_tail(
     tail: &[u8],
     login_user: &str,
@@ -225,30 +226,101 @@ fn doas_user(line: &str) -> Option<&str> {
 }
 
 /// Drops escape sequences (CSI, OSC and the other string sequences, two-byte
-/// escapes) and control characters other than `\n` and `\r`.
+/// escapes) and control characters other than `\n` and `\r`, and keeps only
+/// what the cursor follows (see [`at_cursor`]).
 fn strip_controls(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
+    // The text, cut where a sequence jumped the cursor somewhere absolute.
+    let mut parts: Vec<(Option<Jump>, String)> = vec![(None, String::with_capacity(s.len()))];
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
-        match c {
-            '\u{1b}' => skip_escape(&mut chars),
-            '\n' | '\r' => out.push(c),
-            c if c.is_control() => {}
-            c => out.push(c),
+        if c == '\u{1b}' {
+            if let Some(jump) = skip_escape(&mut chars) {
+                parts.push((Some(jump), String::new()));
+            }
+        } else if !c.is_control() || c == '\n' || c == '\r' {
+            if let Some((_, text)) = parts.last_mut() {
+                text.push(c);
+            }
         }
     }
-    out
+    at_cursor(parts)
 }
 
-/// Consumes the rest of an escape sequence whose ESC was just read.
-fn skip_escape(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+/// Where an escape sequence put the cursor, when it put it somewhere absolute.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Jump {
+    /// To this row (CUP, HVP, VPA).
+    Row(u32),
+    /// Back to a saved position (DECRC, SCORC).
+    Restore,
+}
+
+/// The text the cursor now follows, from output cut at its jumps.
+///
+/// A program that draws somewhere else and then jumps away again without
+/// writing more — tmux redrawing its status line or clock while `sudo` waits —
+/// has not touched the line the cursor goes back to: that write is dropped.
+/// A jump back to a row the last write covered keeps that row of it (a redraw
+/// ending on its prompt, or tmux repainting the whole screen and returning to
+/// the prompt's row). Text written after the last jump is the cursor's line,
+/// whatever came before it.
+fn at_cursor(mut parts: Vec<(Option<Jump>, String)>) -> String {
+    while parts.len() > 1 && parts.last().is_some_and(|(_, text)| text.is_empty()) {
+        let back = parts.pop().and_then(|(jump, _)| jump);
+        let went = parts.last().and_then(|(jump, _)| *jump);
+        if let (Some(Jump::Row(a)), Some(Jump::Row(b))) = (went, back) {
+            let row = b.checked_sub(a).and_then(|i| usize::try_from(i).ok());
+            let text = parts.last().map_or("", |(_, text)| text.as_str());
+            if let Some(line) = row.and_then(|i| text.split('\n').nth(i)) {
+                return line.trim_end_matches('\r').to_owned();
+            }
+        }
+        if parts.len() > 1 {
+            parts.pop();
+        }
+    }
+    parts.pop().map(|(_, text)| text).unwrap_or_default()
+}
+
+/// Whether output only draws away from the cursor's line and comes back — a
+/// status-line tick — so that it changes nothing [`at_cursor`] would find.
+/// Such output stays out of the tail: a clock ticking every second would
+/// otherwise push the prompt out of it within a few seconds. Output that does
+/// not start a sequence may finish one the tail ends inside, and is kept.
+fn draws_elsewhere(out: &[u8]) -> bool {
+    out.first() == Some(&0x1b) && strip_controls(&String::from_utf8_lossy(out)).is_empty()
+}
+
+/// The jump a CSI sequence with these parameters and final byte makes, if any.
+fn csi_jump(params: &str, fin: char) -> Option<Jump> {
+    match fin {
+        // A private marker (`?`, `>`…) makes it something else.
+        'H' | 'f' | 'd' if params.bytes().all(|b| b.is_ascii_digit() || b == b';') => {
+            let row = params.split(';').next().unwrap_or_default();
+            if row.is_empty() {
+                Some(Jump::Row(1))
+            } else {
+                row.parse().ok().map(Jump::Row)
+            }
+        }
+        // `CSI u` alone restores; with parameters it is a keyboard-protocol push.
+        'u' if params.is_empty() => Some(Jump::Restore),
+        _ => None,
+    }
+}
+
+/// Consumes the rest of an escape sequence whose ESC was just read, and says
+/// where it put the cursor if that is somewhere absolute.
+fn skip_escape(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<Jump> {
     match chars.next() {
         // CSI: parameter and intermediate bytes up to one final byte.
         Some('[') => {
+            let mut params = String::new();
             for c in chars.by_ref() {
                 if ('\u{40}'..='\u{7e}').contains(&c) {
-                    break;
+                    return csi_jump(&params, c);
                 }
+                params.push(c);
             }
         }
         // OSC, DCS, SOS, PM, APC: a string ended by BEL or ST (`ESC \`).
@@ -273,9 +345,12 @@ fn skip_escape(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
                 }
             }
         }
+        // DECRC: back to the position `ESC 7` saved.
+        Some('8') => return Some(Jump::Restore),
         // Any other two-character escape (`ESC 7`, `ESC =`, …), or a lone ESC.
         Some(_) | None => {}
     }
+    None
 }
 
 /// What a terminal may put between two echoed characters without changing what
@@ -635,6 +710,9 @@ impl GuardState {
     }
 
     fn push_tail(&mut self, out: &[u8]) {
+        if draws_elsewhere(out) {
+            return;
+        }
         self.tail.extend_from_slice(out);
         let excess = self.tail.len().saturating_sub(TAIL_MAX);
         if excess > 0 {
@@ -1204,6 +1282,79 @@ mod tests {
         feed(&g, b"alice: ", now);
         feed(&g, b"", now);
         assert_eq!(ev.take(), vec![offered_sudo(1, false)]);
+    }
+
+    #[test]
+    fn a_status_line_redrawn_elsewhere_keeps_the_offer() {
+        // tmux redraws its status line (a window rename, the clock) while sudo
+        // waits: a jump to the bottom row and back, or a save and restore.
+        let (g, ev) = guard();
+        let now = Instant::now();
+        feed(&g, b"\x1b[3;1H[sudo] password for alice: ", now);
+        feed(
+            &g,
+            b"\x1b[?25l\x1b[24;1H\x1b[42m[0] 0:sudo* 12:34\x1b[49m\x1b[3;26H\x1b[?25h",
+            now,
+        );
+        feed(&g, b"\x1b7\x1b[24;70H12:35\x1b8", now);
+        assert_eq!(ev.take(), vec![offered_sudo(1, false)]);
+    }
+
+    #[test]
+    fn a_clock_ticking_for_minutes_keeps_the_offer() {
+        // `status-interval 1`: each tick is one write that jumps to the status
+        // row and back. Enough of them would fill the tail past the prompt.
+        let (g, ev) = guard();
+        let now = Instant::now();
+        feed(&g, b"\x1b[1;1H[sudo] password for alice: ", now);
+        for s in 0..300 {
+            let tick = format!(
+                "\x1b[?25l\x1b[30m\x1b[42m\x1b[30;1H[r] 0:sudo*\x1b[101X\x1b[101C21:12:{:02}\
+                 \x1b(B\x1b[m\x1b[?12l\x1b[?25h\x1b[1;27H",
+                s % 60
+            );
+            feed(&g, tick.as_bytes(), now);
+        }
+        assert_eq!(ev.take(), vec![offered_sudo(1, false)]);
+    }
+
+    #[test]
+    fn a_full_repaint_returning_to_the_prompt_row_offers() {
+        // tmux repaints the whole screen (a resize, `refresh-client`): the
+        // prompt on row 1, blank rows, the status line, then back to row 1.
+        let (g, ev) = guard();
+        let now = Instant::now();
+        let mut repaint =
+            b"\x1b[1;30r\x1b[1;25H\x1b[?25l\x1b[H[sudo] password for alice:\x1b[K".to_vec();
+        repaint.extend(b"\r\n\x1b[K".repeat(28));
+        repaint.extend(b"\x1b[30m\x1b[42m\r\n[r] 0:sudo*\x1b[101X\x1b[101C21:12:17\x1b(B\x1b[m");
+        repaint.extend(b"\x1b[?12l\x1b[?25h\x1b[1;27H");
+        feed(&g, &repaint, now);
+        assert_eq!(ev.take(), vec![offered_sudo(1, false)]);
+    }
+
+    #[test]
+    fn a_redraw_ending_on_its_prompt_row_offers() {
+        let (g, ev) = guard();
+        let now = Instant::now();
+        feed(
+            &g,
+            b"\x1b[1;1Halice@h:~$ sudo id\x1b[2;1H[sudo] password for alice: \x1b[2;27H",
+            now,
+        );
+        assert_eq!(ev.take(), vec![offered_sudo(1, false)]);
+    }
+
+    #[test]
+    fn output_written_at_the_cursor_after_a_jump_withdraws_the_offer() {
+        let (g, ev) = guard();
+        let now = Instant::now();
+        feed(&g, b"\x1b[3;1H[sudo] password for alice: ", now);
+        feed(&g, b"\x1b[4;1Hsudo: timed out", now);
+        assert_eq!(
+            ev.take(),
+            vec![offered_sudo(1, false), FillEvent::Withdrawn { offer_id: 1 }]
+        );
     }
 
     #[test]

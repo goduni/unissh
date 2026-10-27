@@ -17,6 +17,8 @@ pub enum ApiError {
     AlreadyExists,
     /// The vault is already a cloud vault (a local-only operation was asked of it).
     AlreadyCloud,
+    /// This account can only view the vault (Viewer): the write was refused.
+    ReadOnlyVault,
     /// No server to bind to: the cloud operation got an empty space/tenant.
     NoServer,
     /// Pinned host key changed — possible MITM. The UI must warn and offer trust.
@@ -67,6 +69,7 @@ impl From<FfiError> for ApiError {
             FfiError::NotFound => Self::NotFound,
             FfiError::AlreadyExists => Self::AlreadyExists,
             FfiError::AlreadyCloud => Self::AlreadyCloud,
+            FfiError::ReadOnlyVault => Self::ReadOnlyVault,
             FfiError::NoServer => Self::NoServer,
             FfiError::HostKeyMismatch {
                 host,

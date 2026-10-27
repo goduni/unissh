@@ -16,6 +16,9 @@ use crate::tty::lines;
 pub const EXIT_FAILURE: u8 = 1;
 /// Exit code of a connection that failed before a remote command could run.
 pub const EXIT_CONNECT: u8 = 255;
+/// Exit code when the output's reader is gone (`| head`), as a shell reports a
+/// process killed by SIGPIPE (128 + 13) — what `ssh` itself would die of.
+pub const EXIT_BROKEN_PIPE: u8 = 141;
 
 /// A command failure: the message for the terminal and the exit code.
 #[derive(Debug)]
@@ -26,6 +29,8 @@ pub struct Failure {
     pub exit: u8,
     /// The server's code, when the server refused.
     code: Option<String>,
+    /// The person at the terminal ended a prompt (Ctrl-C or Ctrl-D).
+    cancelled: bool,
 }
 
 impl Failure {
@@ -35,7 +40,14 @@ impl Failure {
             message: message.into(),
             exit: EXIT_FAILURE,
             code: None,
+            cancelled: false,
         }
+    }
+
+    /// Whether this is a cancel at a prompt rather than something that failed:
+    /// a retry loop must stop on it, not ask again.
+    pub const fn is_cancelled(&self) -> bool {
+        self.cancelled
     }
 
     /// The same failure, reported as a connection failure (exit 255).
@@ -79,6 +91,7 @@ impl From<FfiError> for Failure {
                     message: host_key_warning(&host, port, &fingerprint),
                     exit: EXIT_CONNECT,
                     code: None,
+                    cancelled: false,
                 }
             }
             FfiError::HostUntrusted
@@ -86,6 +99,7 @@ impl From<FfiError> for Failure {
             | FfiError::NotFound
             | FfiError::AlreadyExists
             | FfiError::AlreadyCloud
+            | FfiError::ReadOnlyVault
             | FfiError::NoServer
             | FfiError::PayloadTooLarge { .. }
             | FfiError::RotationInProgress { .. }
@@ -115,7 +129,13 @@ impl From<CloudError> for Failure {
 
 impl From<std::io::Error> for Failure {
     fn from(e: std::io::Error) -> Self {
-        Self::msg(e.to_string())
+        Self {
+            cancelled: matches!(
+                e.kind(),
+                std::io::ErrorKind::Interrupted | std::io::ErrorKind::UnexpectedEof
+            ),
+            ..Self::msg(e.to_string())
+        }
     }
 }
 
@@ -157,5 +177,22 @@ pub type Res<T> = Result<T, Failure>;
 pub fn best_effort<T, E>(result: Result<T, E>) {
     if result.is_err() {
         // Deliberately ignored; see the doc comment.
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Error, ErrorKind};
+
+    use super::Failure;
+
+    /// Ctrl-C or Ctrl-D at a prompt stays a cancel on its way up, so a retry
+    /// loop can stop on it; anything else is a plain failure.
+    #[test]
+    fn a_cancelled_prompt_stays_a_cancel() {
+        assert!(Failure::from(Error::new(ErrorKind::Interrupted, "cancelled")).is_cancelled());
+        assert!(Failure::from(Error::new(ErrorKind::UnexpectedEof, "cancelled")).is_cancelled());
+        assert!(!Failure::from(Error::new(ErrorKind::NotFound, "no such file")).is_cancelled());
+        assert!(!Failure::msg("wrong master password or Secret Key").is_cancelled());
     }
 }

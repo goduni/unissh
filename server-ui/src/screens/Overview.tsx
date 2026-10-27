@@ -21,9 +21,8 @@ import {
 } from "../ui/primitives";
 import { Screen } from "./Screen";
 
-/** A fact's name: the panel's words in Geologica, a machine's in mono; 12 px muted. */
+/** A fact's name, in the panel's words; 12 px muted. */
 const FACT_KEY: CSSProperties = { fontSize: 12, lineHeight: "16px", color: "var(--muted-foreground)" };
-const FACT_KEY_MONO: CSSProperties = { ...FACT_KEY, fontFamily: MONO };
 /** A machine's value: mono 12 px in full text. */
 const MONO_VALUE: CSSProperties = { fontFamily: MONO, fontSize: 12, lineHeight: "20px", color: "var(--foreground)" };
 /** A line of the attention card: the state as a word, then what it means. */
@@ -60,7 +59,7 @@ export function Overview() {
 
   const ov = adminOv.data;
 
-  // The instance in three facts: what runs, whether it answers, which generation.
+  // The server in two facts: what runs, and whether it answers.
   const facts: { key: string; label: ReactNode; value: ReactNode }[] = [
     {
       key: "version",
@@ -75,24 +74,17 @@ export function Overview() {
     },
     {
       key: "readyz",
-      label: <span style={FACT_KEY_MONO}>readyz</span>,
+      label: (
+        <span style={FACT_KEY} title="readyz">
+          {t("screen.overview.ready")}
+        </span>
+      ),
       value: ready.loading ? (
         <Skeleton width={64} height={20} radius="var(--radius-sm)" />
       ) : ready.data ? (
         <ToneBadge tone="success">{t("screen.health.state.ok")}</ToneBadge>
       ) : (
         <ToneBadge tone="destructive">{t("screen.health.state.failing")}</ToneBadge>
-      ),
-    },
-    {
-      key: "instance_generation",
-      label: <span style={FACT_KEY_MONO}>instance_generation</span>,
-      value: ov ? (
-        <span style={MONO_VALUE}>{fmtNum(ov.instance_generation)}</span>
-      ) : adminOv.loading ? (
-        <Skeleton width={40} height={14} />
-      ) : (
-        <Missing />
       ),
     },
   ];
@@ -111,14 +103,14 @@ export function Overview() {
       note: ov ? t("screen.overview.deltaSessions", { count: ov.active_sessions }) : undefined,
     },
     { label: t("nav.vaults"), value: ov ? String(ov.vaults) : "", route: "vaults" },
-    { label: t("nav.objects"), value: ov ? fmtNum(ov.objects) : "", route: "objects" },
+    { label: t("screen.overview.objects"), value: ov ? fmtNum(ov.objects) : "", route: "objects" },
     {
       label: t("nav.invites"),
       value: ov ? String(ov.pending_invites) : "",
       route: "invites",
       note: ov ? t("screen.overview.deltaPending") : undefined,
     },
-    { label: "next_seq", value: ov ? fmtNum(ov.next_seq) : "", route: "maint" },
+    { label: t("screen.overview.nextSeq"), value: ov ? fmtNum(ov.next_seq) : "", route: "maint" },
   ];
 
   // Only what is wrong or about to be: a warning or a failure, a line each. A healthy readyz is already said in the

@@ -13,6 +13,7 @@ use crate::failure::{Failure, Res};
 use crate::tty::one_line;
 
 /// A host and the vault it lives in.
+#[derive(Clone)]
 pub struct Host {
     /// The vault's id.
     pub vault_id: String,
