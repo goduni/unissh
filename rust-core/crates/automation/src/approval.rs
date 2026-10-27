@@ -97,6 +97,7 @@ impl Broker {
             .filter(|r| awaiting(r, now))
             .ok_or(ToolError::ApprovalExpired)?;
         finish(run, "failed", Some(ToolError::ApprovalUnavailable));
+        drop(state);
         Ok(())
     }
 

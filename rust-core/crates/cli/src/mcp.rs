@@ -787,8 +787,16 @@ impl GrantArgs {
         let limits = GrantLimits {
             max_connections: self.max_connections.unwrap_or(d.max_connections),
             max_active_commands: self.max_active_commands.unwrap_or(d.max_active_commands),
-            retained_commands: self.command_history.unwrap_or(d.retained_commands),
-            retained_sessions: self.session_history.unwrap_or(d.retained_sessions),
+            // A history left unset follows a raised concurrency limit up, as
+            // its floor is that limit; one given explicitly is checked as is.
+            retained_commands: self.command_history.unwrap_or_else(|| {
+                d.retained_commands
+                    .max(self.max_active_commands.unwrap_or(d.max_active_commands))
+            }),
+            retained_sessions: self.session_history.unwrap_or_else(|| {
+                d.retained_sessions
+                    .max(self.max_connections.unwrap_or(d.max_connections))
+            }),
             output_per_run_bytes: match self.output_per_command {
                 Some(mib) => mib.checked_mul(MIB).unwrap_or(0),
                 None => d.output_per_run_bytes,
@@ -1104,6 +1112,11 @@ mod tests {
         .limits()
         .ok();
         assert_eq!(given.map(|l| l.max_connections), Some(64));
+        assert_eq!(
+            given.map(|l| l.retained_sessions),
+            Some(64),
+            "history follows up"
+        );
         assert_eq!(
             given.map(|l| l.output_per_run_bytes),
             Some(64 * 1024 * 1024)
