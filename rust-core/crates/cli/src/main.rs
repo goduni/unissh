@@ -24,6 +24,7 @@ mod manage;
 mod picker;
 mod pool;
 mod server;
+mod signals;
 mod tree;
 mod tty;
 mod tunnel;

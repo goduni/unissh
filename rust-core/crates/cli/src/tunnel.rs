@@ -10,13 +10,13 @@
 use std::fmt;
 use std::io::{self, Write};
 use std::sync::Arc;
-use std::thread;
 
 use unissh_ffi::{Core, SshTunnel};
 
 use crate::connect::{connecting, with_password};
 use crate::failure::{Failure, Res, EXIT_BROKEN_PIPE};
 use crate::hosts::Target;
+use crate::signals;
 use crate::tty::one_line;
 
 /// Where a forward listens when the spec names no address.
@@ -367,84 +367,16 @@ pub fn run(core: &Core, mut target: Target, label: &str, forwards: &[Forward]) -
         .map_err(|e| Failure::msg(format!("cannot wait for Ctrl-C: {e}")))
 }
 
-/// The status of a process that a second Ctrl-C ended (128 + SIGINT).
-const EXIT_INTERRUPTED: i32 = 130;
-
 /// Blocks until Ctrl-C or SIGTERM (Ctrl-C elsewhere). From then on, another
-/// one ends the process at once, so that a close that hangs on a dead
-/// connection never holds the terminal.
+/// one ends the process at once (status 130 after Ctrl-C), so that a close
+/// that hangs on a dead connection never holds the terminal.
 fn wait_for_stop() -> io::Result<()> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    let mut stop = {
-        let _context = runtime.enter();
-        Stop::install()?
-    };
+    let mut stop = signals::Caught::install(signals::STOP)?;
     eprintln!("unissh: forwarding; Ctrl-C closes the tunnels");
-    runtime.block_on(stop.next());
+    stop.wait();
     eprintln!("unissh: closing the tunnels (Ctrl-C again to quit at once)");
-    thread::spawn(move || {
-        runtime.block_on(stop.next());
-        quit_now();
-    });
+    stop.quit_on_next();
     Ok(())
-}
-
-#[expect(
-    clippy::exit,
-    reason = "a second Ctrl-C quits without waiting for the close; the OS closes the sockets"
-)]
-fn quit_now() {
-    std::process::exit(EXIT_INTERRUPTED);
-}
-
-/// The signals that end the tunnels, caught so that they close cleanly.
-#[cfg(unix)]
-struct Stop {
-    interrupt: tokio::signal::unix::Signal,
-    terminate: tokio::signal::unix::Signal,
-}
-
-#[cfg(unix)]
-impl Stop {
-    /// Needs the runtime's context.
-    fn install() -> io::Result<Self> {
-        use tokio::signal::unix::{signal, SignalKind};
-        Ok(Self {
-            interrupt: signal(SignalKind::interrupt())?,
-            terminate: signal(SignalKind::terminate())?,
-        })
-    }
-
-    /// The next Ctrl-C or SIGTERM.
-    async fn next(&mut self) {
-        tokio::select! {
-            _ = self.interrupt.recv() => {}
-            _ = self.terminate.recv() => {}
-        }
-    }
-}
-
-/// Ctrl-C, caught so that the tunnels close cleanly.
-#[cfg(not(unix))]
-struct Stop {
-    interrupt: tokio::signal::windows::CtrlC,
-}
-
-#[cfg(not(unix))]
-impl Stop {
-    /// Needs the runtime's context.
-    fn install() -> io::Result<Self> {
-        Ok(Self {
-            interrupt: tokio::signal::windows::ctrl_c()?,
-        })
-    }
-
-    /// The next Ctrl-C.
-    async fn next(&mut self) {
-        self.interrupt.recv().await;
-    }
 }
 
 #[cfg(test)]
