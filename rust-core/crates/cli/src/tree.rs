@@ -19,12 +19,12 @@ use std::io::{self, IsTerminal, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::thread;
 
 use unissh_ffi::{SftpFfi, SftpProgressObserver};
 
 use crate::connect::{download, exists, human, join_remote};
 use crate::failure::{best_effort, Failure, Res};
+use crate::pool;
 use crate::tty;
 
 /// How many files go at once when `--parallel` is not given: the app's default.
@@ -310,23 +310,6 @@ fn make_remote_dir(sftp: &SftpFfi, path: &str) -> Result<bool, String> {
     }
 }
 
-/// Runs `work` on every item, on up to `workers` threads at once.
-fn each<T: Sync>(items: &[T], workers: u32, work: impl Fn(&T) + Sync) {
-    let next = AtomicUsize::new(0);
-    let workers = usize::try_from(workers)
-        .unwrap_or(1)
-        .clamp(1, items.len().max(1));
-    thread::scope(|scope| {
-        for _ in 0..workers {
-            scope.spawn(|| {
-                while let Some(item) = items.get(next.fetch_add(1, Ordering::Relaxed)) {
-                    work(item);
-                }
-            });
-        }
-    });
-}
-
 /// The final line of a copy.
 fn summary(copied: usize, files: usize, skipped: usize, into: &str) -> String {
     let plural = |n: usize| if n == 1 { "" } else { "s" };
@@ -518,7 +501,7 @@ pub fn download_tree(
         .iter()
         .filter(|(rel, _)| !under(&cut, rel))
         .collect();
-    each(&files, parallel, |(rel, size)| {
+    pool::each(&files, parallel, |(rel, size)| {
         let to = local_path(local, rel);
         let shown = to.display().to_string();
         let leg = Leg::new(&board);
@@ -579,7 +562,7 @@ pub fn upload_tree(
         .iter()
         .filter(|(rel, _)| !under(&cut, rel))
         .collect();
-    each(&files, parallel, |(rel, _)| {
+    pool::each(&files, parallel, |(rel, _)| {
         let to = remote_path(remote, rel);
         let taken = !force && !fresh.contains(parent_rel(rel)) && sftp.lstat(to.clone()).is_ok();
         let leg = Leg::new(&board);
@@ -602,13 +585,10 @@ pub fn upload_tree(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        each, local_path, remote_path, summary, under, walk, Board, Entry, Kind, Names, Tree,
-    };
+    use super::{local_path, remote_path, summary, under, walk, Board, Entry, Kind, Names, Tree};
     use crate::failure::{Failure, EXIT_FAILURE};
     use std::collections::BTreeSet;
     use std::path::Path;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn entry(name: &str, kind: Kind) -> Entry {
         Entry {
@@ -797,23 +777,6 @@ mod tests {
             Path::new("out").join("a").join("b.txt")
         );
         assert_eq!(local_path(Path::new("out"), ""), Path::new("out"));
-    }
-
-    #[test]
-    fn each_runs_every_item_once_whatever_the_worker_count() {
-        for workers in [1, 3, 16] {
-            let runs: Vec<AtomicUsize> = std::iter::repeat_with(|| AtomicUsize::new(0))
-                .take(10)
-                .collect();
-            let items: Vec<usize> = (0..10).collect();
-            each(&items, workers, |&i| {
-                runs[i].fetch_add(1, Ordering::Relaxed);
-            });
-            assert!(
-                runs.iter().all(|r| r.load(Ordering::Relaxed) == 1),
-                "{workers} workers"
-            );
-        }
     }
 
     #[test]

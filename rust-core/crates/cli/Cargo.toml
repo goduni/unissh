@@ -27,6 +27,11 @@ clap = { version = "4", features = ["derive", "env"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 zeroize = "1"
+# Catching Ctrl-C, SIGTERM and SIGHUP through a safe API (`signals.rs`), on
+# every platform (Windows has Ctrl-C), and the runtime the commands that need
+# one run on. One entry for all of them. Already in the tree (the core's
+# runtime); no new crate.
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "signal", "time"] }
 
 # Raw terminal mode, window size, polling the terminal and the user id — through
 # safe wrappers, since the workspace denies `unsafe`. Already in the tree (tempfile).

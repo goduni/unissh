@@ -22,14 +22,17 @@ mod hosts;
 mod login;
 mod manage;
 mod picker;
+mod pool;
 mod server;
+mod signals;
 mod tree;
 mod tty;
+mod tunnel;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{ArgGroup, Args, Parser, Subcommand};
 
 use crate::connect::{exit_code, Direction, Endpoint};
 use crate::device::{Credentials, Device};
@@ -37,6 +40,7 @@ use crate::failure::{Failure, Res};
 use crate::home::Home;
 use crate::login::{Joining, SignIn};
 use crate::manage::KnownHostsAction;
+use crate::tunnel::Forward;
 
 #[derive(Parser)]
 #[command(
@@ -119,6 +123,29 @@ enum Command {
         source: String,
         /// Destination: a local path or host:path.
         destination: String,
+    },
+    /// Forward ports through a host until Ctrl-C, as `ssh -N` does.
+    #[command(group(
+        ArgGroup::new("forwards")
+            .args(["local", "remote", "dynamic"])
+            .required(true)
+            .multiple(true)
+    ))]
+    Tunnel {
+        /// Host label (or vault/label, or address); `user@host` picks the user.
+        host: String,
+        /// Listen on PORT here and connect to HOST:HOSTPORT from the host
+        /// (BIND defaults to 127.0.0.1).
+        #[arg(short = 'L', value_name = "[BIND:]PORT:HOST:HOSTPORT", value_parser = tunnel::local)]
+        local: Vec<Forward>,
+        /// The host listens on PORT and sends connections to HOST:HOSTPORT
+        /// from here (BIND, on the host, defaults to 127.0.0.1).
+        #[arg(short = 'R', value_name = "[BIND:]PORT:HOST:HOSTPORT", value_parser = tunnel::remote)]
+        remote: Vec<Forward>,
+        /// A SOCKS5 proxy on PORT here, connecting from the host (BIND must be
+        /// loopback; defaults to 127.0.0.1).
+        #[arg(short = 'D', value_name = "[BIND:]PORT", value_parser = tunnel::dynamic)]
+        dynamic: Vec<Forward>,
     },
     /// The host keys this machine has pinned.
     #[command(subcommand, name = "known-hosts")]
@@ -273,6 +300,22 @@ fn run(cli: Cli) -> Res<u8> {
             copy(home, &credentials, offline, &source, &destination, how)?;
             Ok(0)
         }
+        Command::Tunnel {
+            host,
+            local,
+            remote,
+            dynamic,
+        } => {
+            // Grouped by kind, as clap collects them: -L, then -R, then -D.
+            let forwards: Vec<Forward> = local.into_iter().chain(remote).chain(dynamic).collect();
+            let named = named_host(home, &credentials, offline, &host)?;
+            tunnel::run(
+                &named.device.core,
+                named.target,
+                &named.host.profile.label,
+                &forwards,
+            )
+        }
         Command::KnownHosts(action) => {
             let device = unlocked(home, &credentials)?;
             let action = match action {
@@ -347,6 +390,32 @@ fn split_user(spec: &str) -> (Option<&str>, &str) {
     }
 }
 
+/// A host named on the command line, ready to connect to.
+struct NamedHost {
+    /// The device, unlocked (and synced unless fresh or `--offline`).
+    device: Device,
+    /// The host the name matched; its label is `host.profile.label`.
+    host: hosts::Host,
+    /// How to connect to it, with the user `user@host` named, if any.
+    target: hosts::Target,
+}
+
+/// Unlocks the device and finds and resolves the host `spec` names (a label,
+/// `vault/label`, a prefix or an address; `user@host` picks the user), as
+/// `unissh ssh` names hosts.
+fn named_host(home: Home, credentials: &Credentials, offline: bool, spec: &str) -> Res<NamedHost> {
+    let device = ready(home, credentials, offline)?;
+    let all = hosts::load(&device.core)?;
+    let (user, name) = split_user(spec);
+    let host = hosts::find(&all, name)?.clone();
+    let target = hosts::resolve(&device.core, &host, user)?;
+    Ok(NamedHost {
+        device,
+        host,
+        target,
+    })
+}
+
 fn ssh(
     home: Home,
     credentials: &Credentials,
@@ -355,16 +424,16 @@ fn ssh(
     command: &[String],
     no_stdin: bool,
 ) -> Res<u8> {
-    let device = ready(home, credentials, offline)?;
-    let all = hosts::load(&device.core)?;
-    let (user, name) = split_user(spec);
-    let host = hosts::find(&all, name)?;
-    let target = hosts::resolve(&device.core, host, user)?;
+    let NamedHost {
+        device,
+        host,
+        target,
+    } = named_host(home, credentials, offline, spec)?;
     if !command.is_empty() {
         let status = connect::run(&device.core, target, command.join(" "), no_stdin)?;
         return Ok(exit_code(status));
     }
-    let status = connect::shell(&device.core, host, target)?;
+    let status = connect::shell(&device.core, &host, target)?;
     if host.profile.record_sessions && !offline {
         server::push_recording(&device);
     }
@@ -425,14 +494,10 @@ fn copy(
             return Err(Failure::msg("one side must be a host, as host:path"))
         }
     };
-    let device = ready(home, credentials, offline)?;
-    let all = hosts::load(&device.core)?;
-    let (user, name) = split_user(&spec);
-    let host = hosts::find(&all, name)?;
-    let target = hosts::resolve(&device.core, host, user)?;
+    let named = named_host(home, credentials, offline, &spec)?;
     connect::copy(
-        &device.core,
-        target,
+        &named.device.core,
+        named.target,
         direction,
         how.force,
         how.recursive,
@@ -443,11 +508,19 @@ fn copy(
 #[cfg(test)]
 mod tests {
     use super::{split_user, Cli};
-    use clap::CommandFactory;
+    use clap::{CommandFactory, Parser};
 
     #[test]
     fn the_command_line_is_well_formed() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn a_tunnel_needs_at_least_one_forward() {
+        let Err(err) = Cli::try_parse_from(["unissh", "tunnel", "web"]) else {
+            panic!("a tunnel without -L, -R or -D must be refused");
+        };
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
     }
 
     #[test]

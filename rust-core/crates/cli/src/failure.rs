@@ -16,6 +16,9 @@ use crate::tty::lines;
 pub const EXIT_FAILURE: u8 = 1;
 /// Exit code of a connection that failed before a remote command could run.
 pub const EXIT_CONNECT: u8 = 255;
+/// Exit code when the output's reader is gone (`| head`), as a shell reports a
+/// process killed by SIGPIPE (128 + 13) — what `ssh` itself would die of.
+pub const EXIT_BROKEN_PIPE: u8 = 141;
 
 /// A command failure: the message for the terminal and the exit code.
 #[derive(Debug)]
