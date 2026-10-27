@@ -6,7 +6,8 @@
 //! commands are approved, the application-wide limits — are subcommands here,
 //! stored in this device's data directory in the desktop's own formats. Nothing
 //! an agent sends can grant, approve or widen anything, and the commands that
-//! widen access want the master password typed on a terminal ([`unlocked_by_hand`]).
+//! widen access show what they will do and then want the master password typed,
+//! as its confirmation, in the foreground of a terminal ([`unlock_confirmed`]).
 //!
 //! What this cannot do: an agent with a shell as the same OS user, on a device
 //! that unlocks without a typed password (a password file), has whatever the
@@ -35,7 +36,7 @@ use crate::failure::{best_effort, Failure, Res};
 use crate::home::Home;
 use crate::manage::confirm;
 use crate::mcp_tty::{self, Prompts, Terminal};
-use crate::tty::{one_line, Tty};
+use crate::tty::{one_line, stdin_is_foreground, Tty};
 use crate::{hosts, server, system_lock};
 
 // `unissh mcp`: serve, or manage what it serves. (Plain comments on clap
@@ -97,13 +98,10 @@ enum IntegrationsAction {
         label: String,
     },
     /// Give one a new token; its access is revoked and has to be granted again.
-    /// Asks for the master password on the terminal.
+    /// Shows what changes, then asks for the master password on the terminal.
     Rotate {
         /// Label or id.
         integration: String,
-        /// Do not ask for confirmation (the master password is still asked).
-        #[arg(long)]
-        yes: bool,
     },
     /// Remove one, with its access.
     Rm {
@@ -170,9 +168,6 @@ struct GrantArgs {
     /// Output kept per command, in MiB (1–64).
     #[arg(long, value_name = "MIB")]
     output_per_command: Option<u32>,
-    /// Do not ask for confirmation (the master password is still asked).
-    #[arg(long)]
-    yes: bool,
 }
 
 #[derive(Args)]
@@ -201,7 +196,8 @@ const UNATTENDED_UNLOCK: &str = "unissh mcp asks nothing on a terminal here (ove
 
 /// Widening access with nobody at a terminal.
 const WIDENING_NEEDS_A_TERMINAL: &str = "this widens what an agent may do, so it asks for the \
-     master password on a terminal (a password file does not count), and there is none here. \
+     master password on a terminal (a password file does not count), and it runs only in the \
+     foreground of a terminal of its own: not with its input piped, not in the background. \
      Run it in a terminal";
 
 const MIB: u32 = 1024 * 1024;
@@ -414,25 +410,38 @@ fn unattended(home: Home, credentials: &Credentials, offline: bool) -> Res<Devic
     Ok(device)
 }
 
-/// The vaults, unlocked with the master password typed on this terminal now,
-/// for a command that widens what an agent may do. A password file does not
-/// count (an agent that can read it could run the command too), nor does
-/// `--yes`. A copy without a master password has nothing to type; there the
-/// change is confirmed on the terminal instead. Returns whether a password was
-/// typed. An agent that controls a terminal of its own and knows the password
-/// gets past this: see the module docs.
-fn unlocked_by_hand(home: Home) -> Res<(Device, bool)> {
-    let device = Device::open(home)?;
-    let mut tty = Tty::open().map_err(|_| Failure::msg(WIDENING_NEEDS_A_TERMINAL))?;
+/// This device, still locked, for a command that widens what an agent may do.
+/// It runs only in the foreground of a terminal of its own (stdin is the
+/// controlling terminal, as for attended serving): a child process with its
+/// input piped, or one sent to the background, is refused.
+fn widening(home: Home) -> Res<Device> {
+    if !stdin_is_foreground() || Tty::open().is_err() {
+        return Err(Failure::msg(WIDENING_NEEDS_A_TERMINAL));
+    }
+    Device::open(home)
+}
+
+/// Unlocks `device` for a widening command. With a master password, `summary`
+/// (everything the command will do) is shown first and typing the password
+/// confirms it; a password file does not count (an agent that can read it
+/// could run the command too). Returns `true` then. A copy without a master
+/// password has nothing to type: it unlocks, returns `false`, and the caller
+/// confirms on the terminal. An agent that controls a terminal of its own and
+/// knows the password gets past this: see the module docs.
+fn unlock_confirmed(device: &Device, summary: &str) -> Res<bool> {
     let typed = device.core.instance_requires_password() == Some(true);
     if typed {
-        tty.say("This widens what an agent may do: type the master password.\n")?;
+        let mut tty = Tty::open().map_err(|_| Failure::msg(WIDENING_NEEDS_A_TERMINAL))?;
+        tty.say(summary)?;
+        tty.say(
+            "This widens what an agent may do. Type the master password to confirm it \
+             (Ctrl-C changes nothing).\n",
+        )?;
     }
-    drop(tty);
     device.unlock(&Credentials {
         password_file: None,
     })?;
-    Ok((device, typed))
+    Ok(typed)
 }
 
 /// The broker over this device's core, as the desktop builds it.
@@ -537,15 +546,13 @@ fn integrations(home: Home, credentials: &Credentials, action: IntegrationsActio
             }
         }
         IntegrationsAction::Add { label } => {
-            let (device, typed) = unlocked_by_hand(home)?;
-            if !typed {
-                confirm(
-                    false,
-                    &format!(
-                        "\"{}\" will be able to connect to unissh mcp.\n",
-                        one_line(&label)
-                    ),
-                )?;
+            let device = widening(home)?;
+            let summary = format!(
+                "\"{}\" will be able to connect to unissh mcp.\n",
+                one_line(&label)
+            );
+            if !unlock_confirmed(&device, &summary)? {
+                confirm(false, &summary)?;
             }
             let (id, token) = open_integrations(&device.home)?
                 .create(label.clone())
@@ -557,17 +564,17 @@ fn integrations(home: Home, credentials: &Credentials, action: IntegrationsActio
                 one_line(&label)
             );
         }
-        IntegrationsAction::Rotate { integration, yes } => {
-            let (device, typed) = unlocked_by_hand(home)?;
+        IntegrationsAction::Rotate { integration } => {
+            let device = widening(home)?;
             let store = open_integrations(&device.home)?;
             let found = find_integration(&store.list(), Some(&integration))?;
-            confirm(
-                yes && typed,
-                &format!(
-                    "A new token for \"{}\" revokes its access; grant it hosts again afterwards.\n",
-                    one_line(&found.label)
-                ),
-            )?;
+            let summary = format!(
+                "A new token for \"{}\" revokes its access; grant it hosts again afterwards.\n",
+                one_line(&found.label)
+            );
+            if !unlock_confirmed(&device, &summary)? {
+                confirm(false, &summary)?;
+            }
             forget(&device, Some(&found.id))?;
             let (_, token) = store
                 .rotate(&found.id)
@@ -650,14 +657,25 @@ fn grants(home: Home, credentials: &Credentials, offline: bool, action: GrantsAc
 
 fn grant(home: Home, offline: bool, args: &GrantArgs) -> Res<()> {
     let limits = args.limits()?;
-    let (device, typed) = unlocked_by_hand(home)?;
-    if !offline {
-        server::sync_if_stale(&device);
-    }
+    let device = widening(home)?;
     let integration = find_integration(
         &open_integrations(&device.home)?.list(),
         Some(&args.integration),
     )?;
+    // Before the password: the hosts as named (resolving them needs the
+    // vaults open), with everything else the grant will say.
+    let named: String = args
+        .hosts
+        .iter()
+        .map(|h| format!("  {}\n", one_line(h)))
+        .collect();
+    let typed = unlock_confirmed(
+        &device,
+        &grant_summary(&integration.label, &named, args, &limits),
+    )?;
+    if !offline {
+        server::sync_if_stale(&device);
+    }
     let broker = broker(&device, Arc::new(NoPrompts));
     // The ticket comes first, as in the desktop's host picker: a vault change
     // from here on (while the hosts load, while the summary waits for an
@@ -682,30 +700,17 @@ fn grant(home: Home, offline: bool, args: &GrantArgs) -> Res<()> {
     if broker.grant_ticket().map_err(broker_failure)? != ticket {
         return Err(broker_failure(ToolError::GrantExpired));
     }
+    if !typed {
+        confirm(
+            false,
+            &grant_summary(&integration.label, &shown, args, &limits),
+        )?;
+    }
     let mode = if args.trusted {
         ApprovalMode::Trusted
     } else {
         ApprovalMode::Manual
     };
-    confirm(
-        args.yes && typed,
-        &format!(
-            "\"{}\" may reach, {}:\n{shown}{}\
-             Command output can reach the AI provider. This replaces its previous access.\n",
-            one_line(&integration.label),
-            args.expires.map_or_else(
-                || "with no expiry".to_owned(),
-                |s| format!("for {}", span(s.into()))
-            ),
-            if args.trusted {
-                "Commands run WITHOUT confirmation, with the SSH user's permissions; only the \
-                 agent's own settings stand between a prompt and a command.\n"
-            } else {
-                "Each command is confirmed on the terminal of `unissh mcp --http`; over stdio, \
-                 or without a terminal, commands are refused.\n"
-            }
-        ),
-    )?;
     broker
         .grant_with_limits(
             &integration.id,
@@ -718,8 +723,36 @@ fn grant(home: Home, offline: bool, args: &GrantArgs) -> Res<()> {
             limits,
         )
         .map_err(broker_failure)?;
-    println!("Granted.");
+    println!("Granted \"{}\":\n{shown}", one_line(&integration.label));
     Ok(())
+}
+
+/// Everything a grant will do, for its confirmation: the integration, the
+/// `hosts` (one per line), the expiry, whether commands are confirmed, and the
+/// ceilings.
+fn grant_summary(label: &str, hosts: &str, args: &GrantArgs, limits: &GrantLimits) -> String {
+    format!(
+        "\"{}\" may reach, {}:\n{hosts}{}\
+         Each command runs for up to {}; at most {} connections and {} commands at once, \
+         {} MiB of output kept per command.\n\
+         Command output can reach the AI provider. This replaces its previous access.\n",
+        one_line(label),
+        args.expires.map_or_else(
+            || "with no expiry".to_owned(),
+            |s| format!("for {}", span(s.into()))
+        ),
+        if args.trusted {
+            "Commands run WITHOUT confirmation, with the SSH user's permissions; only the \
+             agent's own settings stand between a prompt and a command.\n"
+        } else {
+            "Each command is confirmed on the terminal of `unissh mcp --http`; over stdio, \
+             or without a terminal, commands are refused.\n"
+        },
+        span(u64::from(args.command_limit / 1000)),
+        limits.max_connections,
+        limits.max_active_commands,
+        limits.output_per_run_bytes / MIB,
+    )
 }
 
 impl LimitArgs {
@@ -967,7 +1000,8 @@ fn broker_failure(error: ToolError) -> Failure {
 #[cfg(test)]
 mod tests {
     use super::{
-        command_ceiling_ms, duration_seconds, find_integration, grant_rows, GrantArgs, LimitArgs,
+        command_ceiling_ms, duration_seconds, find_integration, grant_rows, grant_summary,
+        GrantArgs, LimitArgs,
     };
     use crate::failure::Res;
     use serde_json::json;
@@ -1021,10 +1055,41 @@ mod tests {
             command_history: None,
             session_history: None,
             output_per_command: None,
-            yes: false,
         };
         edit(&mut args);
         args
+    }
+
+    /// What a grant is confirmed on (before the master password is typed) says
+    /// all it will do: the integration, the hosts, the expiry, whether commands
+    /// run unconfirmed, and the ceilings.
+    #[test]
+    fn a_grant_summary_says_everything_it_will_do() {
+        let args = grant_args(|a| {
+            a.trusted = true;
+            a.expires = Some(8 * 3600);
+            a.command_limit = 30 * 60 * 1000;
+            a.max_connections = Some(2);
+            a.max_active_commands = Some(3);
+            a.output_per_command = Some(5);
+        });
+        let limits = args.limits().unwrap();
+        let summary = grant_summary("Claude\u{1b}[2J Code", "  web\n  db\n", &args, &limits);
+        for part in [
+            "\"Claude[2J Code\" may reach, for 8h:\n  web\n  db\n",
+            "WITHOUT confirmation",
+            "up to 30m",
+            "at most 2 connections and 3 commands at once",
+            "5 MiB of output",
+            "replaces its previous access",
+        ] {
+            assert!(summary.contains(part), "{part:?} in {summary:?}");
+        }
+        let manual = grant_args(|_| {});
+        let summary = grant_summary("a", "  web\n", &manual, &manual.limits().unwrap());
+        assert!(summary.contains("with no expiry"), "{summary:?}");
+        assert!(summary.contains("Each command is confirmed"), "{summary:?}");
+        assert!(!summary.contains("WITHOUT"), "{summary:?}");
     }
 
     /// A grant's limits are the defaults with what was given, in the desktop
