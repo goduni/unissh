@@ -80,6 +80,15 @@ starts with `0.`:
   on `127.0.0.1` unless an address is given, and SOCKS listens on loopback only.
   It prints a line per forward once it listens, fails as a whole if one cannot
   open, and closes them cleanly on Ctrl-C or SIGTERM.
+- `unissh run` runs one command on many hosts, as the app's Fleet does: by tag,
+  by group (nested groups included) or by name, a bounded number at a time with
+  a per-host deadline, each output line led by the host's label (or `--json`),
+  a summary at the end and a non-zero exit when any host failed; `--dry-run`
+  shows the plan without connecting. `{{name}}` parameters in the command are
+  filled as the app's Fleet fills them (`--set name=value`, else asked on the
+  terminal). `unissh snippets list` and `unissh snippets run` run saved
+  snippets the same way.
+  The parameter rules now also live in the core (`unissh_ffi::snippet_params`).
 - Bindings: `ExecHandleFfi::close_stdin` ends a streaming command's input and
   keeps its output coming; `Core::wait_for_recordings` waits for session
   recordings still to be written (a recorded session counts from the moment it

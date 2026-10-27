@@ -6,6 +6,9 @@
 // closing `}}`. `\{{` is a literal `{{`. Anything else — `{{ spaced }}`, a
 // stray brace, an unterminated placeholder — is literal text, so there is no
 // error case: a shell command full of braces still goes through untouched.
+//
+// Keep in sync with rust-core/crates/ffi/src/snippet_params.rs, the same rules
+// for the CLI: a change here goes there too, with its test mirrored.
 
 import type { ConnectionProfile } from "@/bridge/types";
 

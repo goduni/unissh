@@ -17,6 +17,7 @@ mod connect;
 mod device;
 mod escape;
 mod failure;
+mod fleet;
 mod home;
 mod hosts;
 mod login;
@@ -27,14 +28,18 @@ mod recordings;
 mod replay;
 mod server;
 mod signals;
+mod snippets;
 mod tree;
 mod tty;
 mod tunnel;
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{ArgGroup, Args, Parser, Subcommand};
+use unissh_ffi::snippet_params::{builtins_from_profile, resolve_command};
+use unissh_ffi::Core;
 
 use crate::connect::{exit_code, Direction, Endpoint};
 use crate::device::{Credentials, Device};
@@ -43,6 +48,7 @@ use crate::home::Home;
 use crate::login::{Joining, SignIn};
 use crate::manage::KnownHostsAction;
 use crate::replay::Timing;
+use crate::tty::Tty;
 use crate::tunnel::Forward;
 
 #[derive(Parser)]
@@ -156,6 +162,100 @@ enum Command {
     /// Recorded sessions: list, replay, export, delete.
     #[command(subcommand)]
     Recordings(Recordings),
+    /// Run a command on several hosts at once, as the app's Fleet does.
+    /// `{{name}}` in it is filled as in a snippet; `\{{` is a literal `{{`.
+    Run {
+        #[command(flatten)]
+        hosts: HostSelection,
+        #[command(flatten)]
+        options: RunArgs,
+        /// The command to run, after `--`.
+        #[arg(last = true, required = true, value_name = "COMMAND")]
+        command: Vec<String>,
+    },
+    /// The vaults' snippets.
+    #[command(subcommand)]
+    Snippets(Snippets),
+}
+
+#[derive(Subcommand)]
+enum Snippets {
+    /// List the snippets.
+    List {
+        /// Print JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run a snippet on hosts, as `unissh run` runs a command. Parameters
+    /// without a --set are asked on the terminal, where Enter takes the default.
+    Run {
+        /// Snippet label (or vault/label).
+        snippet: String,
+        #[command(flatten)]
+        hosts: HostSelection,
+        #[command(flatten)]
+        options: RunArgs,
+    },
+}
+
+/// Which hosts a run goes to: one way of naming them.
+#[derive(Args)]
+#[group(required = true, multiple = false)]
+struct HostSelection {
+    /// The hosts with this tag; repeat for hosts with every one of them.
+    #[arg(long, value_name = "TAG")]
+    tag: Vec<String>,
+    /// The hosts of this group (label or vault/label), nested groups included.
+    #[arg(long, value_name = "GROUP")]
+    group: Option<String>,
+    /// Hosts by label (or vault/label, or address).
+    #[arg(value_name = "HOST")]
+    hosts: Vec<String>,
+}
+
+impl HostSelection {
+    fn selection(self) -> fleet::Selection {
+        if let Some(group) = self.group {
+            fleet::Selection::Group(group)
+        } else if self.tag.is_empty() {
+            fleet::Selection::Hosts(self.hosts)
+        } else {
+            fleet::Selection::Tags(self.tag)
+        }
+    }
+}
+
+#[derive(Args)]
+struct RunArgs {
+    /// Show which hosts would run what, without connecting.
+    #[arg(long)]
+    dry_run: bool,
+    /// How many hosts run at once.
+    #[arg(long, value_name = "N", default_value_t = fleet::DEFAULT_PARALLEL,
+          value_parser = clap::value_parser!(u32).range(1..))]
+    parallel: u32,
+    /// Seconds for the command to finish on each host (the connect is not
+    /// counted); 0 for no limit.
+    #[arg(long, value_name = "SECS", default_value_t = fleet::DEFAULT_TIMEOUT_SECS)]
+    timeout: u32,
+    /// A parameter's value (`{{NAME}}` in the command); repeat for several.
+    /// `--set NAME=` gives it an empty value, not its default.
+    #[arg(long = "set", value_name = "NAME=VALUE", value_parser = snippets::parse_set)]
+    set: Vec<(String, String)>,
+    /// Print JSON: per host, the command, its output and exit status.
+    #[arg(long)]
+    json: bool,
+}
+
+impl RunArgs {
+    const fn options(&self) -> fleet::Options {
+        fleet::Options {
+            parallel: self.parallel,
+            timeout_secs: self.timeout,
+            dry_run: self.dry_run,
+            json: self.json,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -393,7 +493,80 @@ fn run(cli: Cli) -> Res<u8> {
             }
             Ok(0)
         }
+        Command::Run {
+            hosts: selection,
+            options,
+            command,
+        } => {
+            let device = ready(home, &credentials, offline)?;
+            fleet_run(
+                &device.core,
+                &selection.selection(),
+                &command.join(" "),
+                &options,
+            )
+        }
+        Command::Snippets(action) => snippet(home, &credentials, offline, action),
     }
+}
+
+fn snippet(home: Home, credentials: &Credentials, offline: bool, action: Snippets) -> Res<u8> {
+    let device = ready(home, credentials, offline)?;
+    let saved = snippets::load(&device.core)?;
+    match action {
+        Snippets::List { json } => {
+            if json {
+                let text = serde_json::to_string_pretty(&snippets::json(&saved))
+                    .map_err(|e| Failure::msg(e.to_string()))?;
+                println!("{text}");
+            } else if saved.is_empty() {
+                eprintln!("unissh: no snippets to show");
+            } else {
+                print!("{}", snippets::table(&saved));
+            }
+            Ok(0)
+        }
+        Snippets::Run {
+            snippet,
+            hosts: selection,
+            options,
+        } => {
+            let command = &hosts::find_named(&saved, &snippet)?.snippet.command;
+            fleet_run(&device.core, &selection.selection(), command, &options)
+        }
+    }
+}
+
+/// Runs `template` on the hosts `selection` picks, as Fleet runs a command:
+/// the hosts resolve first; the parameters the hosts that will run cannot
+/// answer come from `--set` or are asked once; each host then runs the
+/// command filled with those and its own built-ins.
+fn fleet_run(
+    core: &Core,
+    selection: &fleet::Selection,
+    template: &str,
+    options: &RunArgs,
+) -> Res<u8> {
+    let all = hosts::load(core)?;
+    let picked = fleet::select(core, &all, selection)?;
+    let plan = fleet::plan(core, &picked)?;
+    let values = if plan.nothing_runs() {
+        BTreeMap::new()
+    } else {
+        let split = plan.params(template);
+        // Opened only when a value has to be asked.
+        let mut tty: Option<Option<Tty>> = None;
+        snippets::answers(&split.ask, &split.from_host, &options.set, &mut |param| {
+            let tty = tty.get_or_insert_with(|| Tty::open().ok());
+            snippets::ask_on_tty(tty.as_mut(), param)
+        })?
+    };
+    fleet::run(
+        core,
+        plan,
+        &|h| resolve_command(template, &values, &builtins_from_profile(&h.profile)),
+        &options.options(),
+    )
 }
 
 fn log_in(home: &Home, how: Login) -> Res<()> {
