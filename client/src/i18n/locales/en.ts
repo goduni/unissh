@@ -628,6 +628,7 @@ export const en = {
     notFound: "Not found",
     alreadyExists: "Already exists",
     alreadyCloud: "This vault is already a cloud vault",
+    readOnlyVault: "You can only view this vault — nothing was changed",
     noServer: "No server to bind to — sign in to a server first",
     hostKeyMismatch: "Host key changed ({{host}}:{{port}})",
     rotationInProgress: "A rotation of this key is already in progress: “{{item}}” holds the candidate key. See its row in Keys.",

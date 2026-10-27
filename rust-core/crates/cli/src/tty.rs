@@ -10,8 +10,11 @@ use std::time::{Duration, Instant};
 
 use zeroize::Zeroizing;
 
+use crate::failure::{Failure, Res};
+
 pub use imp::{
-    read_stdin, stdin_is_foreground, wait_for_input, window_size, RawMode, Tty, SUPPORTED,
+    read_stdin, stdin_is_foreground, wait_for_input, window_size, RawMode, ReplayTerminal, Tty,
+    SUPPORTED,
 };
 
 /// `text` without control characters, for one line that came from a server,
@@ -157,6 +160,24 @@ fn is_yes(answer: &str) -> bool {
     matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
+/// Before a destructive command: shows `warning` and asks to go on, on the
+/// terminal. With `yes` it goes on without asking, but the warning is still
+/// printed (to stderr): `--yes` skips the question, not what the user is told.
+pub fn confirm(yes: bool, warning: &str) -> Res<()> {
+    if yes {
+        eprint!("{warning}");
+        return Ok(());
+    }
+    let mut tty = Tty::open()
+        .map_err(|e| Failure::msg(format!("cannot ask for confirmation ({e}); pass --yes")))?;
+    tty.say(warning)?;
+    if tty.confirm("Continue? [y/N] ")? {
+        Ok(())
+    } else {
+        Err(Failure::msg("nothing changed"))
+    }
+}
+
 impl Tty {
     /// Prints `prompt` and reads a line, echoed.
     pub fn line(&mut self, prompt: &str) -> io::Result<String> {
@@ -246,7 +267,9 @@ mod imp {
 
     use rustix::event::{poll, PollFd, PollFlags, Timespec};
     use rustix::io::Errno;
-    use rustix::termios::{tcgetattr, tcgetwinsize, tcsetattr, OptionalActions, Termios};
+    use rustix::termios::{
+        tcgetattr, tcgetwinsize, tcsetattr, OptionalActions, OutputModes, Termios,
+    };
 
     use super::{cancelled, ended, Key, QuietLine, STOP_TICK};
     use crate::failure::best_effort;
@@ -459,6 +482,78 @@ mod imp {
         }
     }
 
+    /// The controlling terminal during a replay, written to and read from
+    /// directly — not stdin — so that whatever the terminal says back is read
+    /// here and never waits in a queue for the shell.
+    ///
+    /// Keys are raw: one typed meanwhile neither echoes into the replay nor
+    /// raises a signal. Output is still processed, so output that is not from
+    /// a terminal (a recorded command's bare `\n`) starts its lines at the left
+    /// edge. Dropped, it reads and discards input for [`DRAIN`], then puts the
+    /// settings back discarding what is still pending (TCSAFLUSH): nothing
+    /// from the replay reaches the shell as typed input.
+    pub struct ReplayTerminal {
+        file: File,
+        saved: Termios,
+    }
+
+    /// How long a replay goes on reading input after its last write: answers
+    /// already on their way from the terminal arrive within it.
+    const DRAIN: Duration = Duration::from_millis(150);
+
+    impl ReplayTerminal {
+        /// Opens the controlling terminal and makes its keys raw.
+        pub fn open() -> io::Result<Self> {
+            let file = OpenOptions::new().read(true).write(true).open("/dev/tty")?;
+            let saved = tcgetattr(file.as_fd())?;
+            let mut raw = saved.clone();
+            raw.make_raw();
+            raw.output_modes.insert(OutputModes::OPOST);
+            tcsetattr(file.as_fd(), OptionalActions::Now, &raw)?;
+            Ok(Self { file, saved })
+        }
+
+        /// Waits up to `timeout` for keys and reads them into `buf`:
+        /// `Some(0)` when none came, `None` when the terminal hung up.
+        pub fn keys(&self, timeout: Duration, buf: &mut [u8]) -> io::Result<Option<usize>> {
+            if !ready(self.file.as_fd(), timeout)? {
+                return Ok(Some(0));
+            }
+            Ok(match read_fd(self.file.as_fd(), buf)? {
+                0 => None,
+                n => Some(n),
+            })
+        }
+    }
+
+    impl Write for ReplayTerminal {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            (&self.file).write(buf)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            (&self.file).flush()
+        }
+    }
+
+    impl Drop for ReplayTerminal {
+        fn drop(&mut self) {
+            let fd = self.file.as_fd();
+            let start = Instant::now();
+            let mut discarded = [0_u8; 256];
+            loop {
+                let left = DRAIN.saturating_sub(start.elapsed());
+                // Nothing more, the time is up, or the terminal is gone.
+                if !matches!(ready(fd, left), Ok(true))
+                    || !matches!(read_fd(fd, &mut discarded), Ok(n) if n > 0)
+                {
+                    break;
+                }
+            }
+            best_effort(tcsetattr(fd, OptionalActions::Flush, &self.saved));
+        }
+    }
+
     /// The terminal's size as `(columns, rows)`, when stdin or stdout is one.
     pub fn window_size() -> Option<(u32, u32)> {
         let size = tcgetwinsize(io::stdout().as_fd())
@@ -506,8 +601,13 @@ mod imp {
 
     /// Reads what is available on stdin, unbuffered: `0` is end of input.
     pub fn read_stdin(buf: &mut [u8]) -> io::Result<usize> {
+        read_fd(io::stdin().as_fd(), buf)
+    }
+
+    /// Reads what is available on `fd`, retrying when a signal interrupts.
+    fn read_fd(fd: BorrowedFd<'_>, buf: &mut [u8]) -> io::Result<usize> {
         loop {
-            match rustix::io::read(io::stdin().as_fd(), &mut *buf) {
+            match rustix::io::read(fd, &mut *buf) {
                 Ok(n) => return Ok(n),
                 Err(e) if e == Errno::INTR => {}
                 Err(e) => return Err(e.into()),
@@ -518,7 +618,7 @@ mod imp {
 
 #[cfg(not(unix))]
 mod imp {
-    use std::io::{self, Read};
+    use std::io::{self, Read, Write};
     use std::time::{Duration, Instant};
 
     use zeroize::Zeroizing;
@@ -580,6 +680,36 @@ mod imp {
         /// Always fails here.
         pub fn enter() -> io::Result<Self> {
             Err(unsupported())
+        }
+    }
+
+    /// The terminal during a replay: stdout here, and no keys — Ctrl-C ends
+    /// the process as usual.
+    pub struct ReplayTerminal {
+        out: io::Stdout,
+    }
+
+    impl ReplayTerminal {
+        /// stdout.
+        pub fn open() -> io::Result<Self> {
+            Ok(Self { out: io::stdout() })
+        }
+
+        /// Shows what was written, then waits `timeout`; no key ever comes.
+        pub fn keys(&self, timeout: Duration, _buf: &mut [u8]) -> io::Result<Option<usize>> {
+            (&self.out).flush()?;
+            std::thread::sleep(timeout);
+            Ok(Some(0))
+        }
+    }
+
+    impl Write for ReplayTerminal {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.out.write(buf)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.out.flush()
         }
     }
 

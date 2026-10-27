@@ -66,6 +66,38 @@ starts with `0.`:
   ever asked on the terminal or read from an owner-only file; no session token
   is stored. `unissh logout` revokes the device and deletes its data. The old
   core harness is now the `unissh-harness` binary.
+- `unissh recordings` lists the session recordings of every vault
+  (`--json` for scripts), replays one in the terminal (`play`, with `--speed`
+  and `--idle-limit`; Ctrl-C stops it and the terminal is put back), exports
+  it as the asciicast v2 file `asciinema` plays (`export`), and deletes it
+  (`rm`, sent to the server like any vault change).
+- `unissh cp -r` copies a directory tree to or from a host, several files at
+  once over one SFTP connection (`--parallel`, 4 by default). Symbolic links
+  inside the tree are skipped and named, not followed; a file that fails is
+  reported, the rest still copy, and the command exits non-zero.
+- `unissh tunnel <host>` forwards ports as `ssh -N` does: `-L`, `-R` and `-D`
+  (SOCKS5), any number of each, through the core's forwards. A forward listens
+  on `127.0.0.1` unless an address is given, and SOCKS listens on loopback only.
+  It prints a line per forward once it listens, fails as a whole if one cannot
+  open, and closes them cleanly on Ctrl-C or SIGTERM.
+- `unissh run` runs one command on many hosts, as the app's Fleet does: by tag,
+  by group (nested groups included) or by name, a bounded number at a time with
+  a per-host deadline, each output line led by the host's label (or `--json`),
+  a summary at the end and a non-zero exit when any host failed; `--dry-run`
+  shows the plan without connecting. `{{name}}` parameters in the command are
+  filled as the app's Fleet fills them (`--set name=value`, else asked on the
+  terminal). `unissh snippets list` and `unissh snippets run` run saved
+  snippets the same way.
+  The parameter rules now also live in the core (`unissh_ffi::snippet_params`).
+- `unissh` edits the vaults as the app does: `hosts add|edit|rm` (every field of
+  the host editor: login, jump hosts, proxy, group, colour, icon, tags, startup
+  snippets, recording, agent forwarding, personal identity), `groups`,
+  `secrets` (passwords and notes, `show --reveal` as the gated reveal), `keys`
+  (generate, import, public key, certificate, rotate in place; abandon a staged
+  rotation), `identities` and `snippets add|edit|rm`. Secrets are asked on the
+  terminal or read from stdin or an owner-only file, never taken as arguments;
+  every change syncs at once unless `--offline`, and a vault you can only view
+  refuses it before anything is stored.
 - `unissh mcp`: the desktop's MCP server in the CLI, with the same tools and
   broker. It speaks stdio by default (`claude mcp add unissh -- unissh mcp`), or
   loopback HTTP with bearer tokens (`--http`). `unissh mcp integrations`,
@@ -165,6 +197,17 @@ starts with `0.`:
   - Removing a server in the app revokes this device on it, since nothing
     could sign in as it again. Both are best effort: a server the app cannot
     reach keeps the device until it is revoked by hand.
+- In a shared vault you can only view, editing or deleting an item (a host,
+  key, password, note, snippet, group or identity), in the app or the `unissh`
+  CLI, is now refused with "you can only view this vault" and changes nothing.
+  It used to change this device's copy, which the server then refused: the
+  copy no longer matched the other devices, and every later sync from this
+  device failed. Bindings: new `FfiError::ReadOnlyVault`.
+  - Session and MCP command recordings of hosts in a vault you can only view
+    are no longer saved, for the same reason. MCP recording retention leaves
+    such a vault alone: its expired recordings stay listed.
+  - Moving a local vault to a server leaves references to it in a vault you
+    can only view as they were.
 
 ### Security
 
@@ -176,6 +219,12 @@ starts with `0.`:
   The check runs when a server is added, so a server added by an earlier
   version is not checked again: one whose address starts with `http://` and is
   not this machine should be removed and added again over `https://`.
+- The desktop's Linux lock watcher accepted lock, unlock and sleep signals from
+  any local process: another user on the machine could resume agent access
+  paused by a screen lock. It now accepts them only from logind. The approval
+  dialog also spells out invisible format characters (zero-width and word
+  joiners, invisible operators, soft hyphen, the Arabic letter mark) in a
+  command.
 
 ### Compatibility
 
@@ -198,15 +247,6 @@ hosts already did.
 **Mixed-version caveat.** An older client keeps a host's colour and icon when it
 edits the host, but editing a *group* in an older client clears that group's
 colour and icon: older builds rewrote every group field they did not know.
-
-### Security
-
-- The desktop's Linux lock watcher accepted lock, unlock and sleep signals from
-  any local process: another user on the machine could resume agent access
-  paused by a screen lock. It now accepts them only from logind. The approval
-  dialog also spells out invisible format characters (zero-width and word
-  joiners, invisible operators, soft hyphen, the Arabic letter mark) in a
-  command.
 
 ## [0.6.1] — 2026-10-16
 

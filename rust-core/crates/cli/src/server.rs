@@ -209,6 +209,52 @@ pub fn push_recording(device: &Device) {
     }
 }
 
+/// After a write to a vault, sends it to the server the way the app does,
+/// and says where the change stands: `done` ("Deleted", "Saved") is what
+/// happened here.
+///
+/// A local vault never syncs; with `offline` the change waits for the next
+/// sync. A sync that cannot reach the server is a warning — the change goes
+/// with the next one. A server that refuses the change is a failure: the
+/// change stays on this machine only, and the user must hear that rather than
+/// believe it went through. (A Viewer's write never gets here: the core
+/// refuses it before storing anything, `FfiError::ReadOnlyVault`. A refusal
+/// here means the server knows of a role or policy this device does not yet.)
+pub fn push_after_write(device: &Device, cloud: bool, offline: bool, done: &str) -> Res<()> {
+    if !cloud {
+        println!("{done}.");
+        return Ok(());
+    }
+    if offline {
+        println!("{done} here; the change is sent with the next sync.");
+        return Ok(());
+    }
+    match sync(device) {
+        Ok(report) => {
+            println!("{done}.");
+            warn_about(&report);
+            Ok(())
+        }
+        Err(e) if is_refusal(&e) => Err(Failure::msg(format!(
+            "{done} on this machine only: the server refused the change ({e}). \
+             This account may not change the vault; the other devices keep what it had."
+        ))),
+        Err(e) => {
+            println!("{done} here.");
+            eprintln!("unissh: the change is sent with the next sync: {e}");
+            Ok(())
+        }
+    }
+}
+
+/// Whether a sync failed because the server refused what this device sent —
+/// not because it could not be reached — so that a retry changes nothing.
+/// The push reports a refusal as `sync push rejected (<code>): …` (see
+/// `unissh_cloud::transport`); `forbidden` is the vault's permission check.
+fn is_refusal(failure: &Failure) -> bool {
+    failure.message.contains("sync push rejected (forbidden)")
+}
+
 /// One line about a sync, for `unissh sync`.
 pub fn summary(report: &FfiSyncReport) -> String {
     format!(
@@ -245,7 +291,8 @@ pub fn warn_about(report: &FfiSyncReport) {
 mod tests {
     use std::time::Duration;
 
-    use super::{reuse_for, REUSE};
+    use super::{is_refusal, reuse_for, REUSE};
+    use crate::failure::Failure;
 
     /// Half the token's remaining life, never more than the cap and nothing
     /// for one already expired; a server that does not say gets the cap.
@@ -255,5 +302,17 @@ mod tests {
         assert_eq!(reuse_for(Some(1_900), 1_000), REUSE);
         assert_eq!(reuse_for(Some(900), 1_000), Duration::ZERO);
         assert_eq!(reuse_for(None, 1_000), REUSE);
+    }
+
+    /// A push the vault's permissions refused fails the write; a server that
+    /// could not be reached only delays it. The text is what the cloud
+    /// transport reports for each.
+    #[test]
+    fn a_refused_push_is_told_apart_from_an_unreachable_server() {
+        let refused = "sync push rejected (forbidden): viewer cannot write objects";
+        assert!(is_refusal(&Failure::msg(refused)), "{refused}");
+        for later in ["sync push: connection refused", "sync push http 502"] {
+            assert!(!is_refusal(&Failure::msg(later)), "{later}");
+        }
     }
 }

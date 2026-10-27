@@ -12,7 +12,7 @@ use crate::device::{open_core, Credentials, Device, NOT_SIGNED_IN};
 use crate::failure::{Failure, Res};
 use crate::home::{Home, Link, Origin};
 use crate::server;
-use crate::tty::{one_line, Tty};
+use crate::tty::{confirm, one_line};
 
 /// `unissh status`: what this machine is signed in to. Needs no unlock.
 pub fn status(home: &Home) -> Res<()> {
@@ -55,7 +55,7 @@ pub fn status(home: &Home) -> Res<()> {
 }
 
 /// "3 minutes ago", for a time in the past.
-fn ago(at: SystemTime) -> String {
+pub fn ago(at: SystemTime) -> String {
     let Ok(age) = SystemTime::now().duration_since(at) else {
         return "just now".to_owned();
     };
@@ -242,24 +242,6 @@ fn is_only_device(link: &Link, access: &str) -> Res<bool> {
     Ok(!devices
         .iter()
         .any(|d| d.device_id != link.device_id && d.status == "active"))
-}
-
-/// Shows `warning` and asks to go on. With `yes` it goes on without asking,
-/// but the warning is still printed (to stderr): `--yes` skips the question,
-/// not what the user is told.
-pub fn confirm(yes: bool, warning: &str) -> Res<()> {
-    if yes {
-        eprint!("{warning}");
-        return Ok(());
-    }
-    let mut tty = Tty::open()
-        .map_err(|e| Failure::msg(format!("cannot ask for confirmation ({e}); pass --yes")))?;
-    tty.say(warning)?;
-    if tty.confirm("Continue? [y/N] ")? {
-        Ok(())
-    } else {
-        Err(Failure::msg("nothing changed"))
-    }
 }
 
 #[cfg(test)]

@@ -34,9 +34,8 @@ use crate::connect::RECORDING_GRACE_MS;
 use crate::device::{Credentials, Device};
 use crate::failure::{best_effort, Failure, Res};
 use crate::home::Home;
-use crate::manage::confirm;
 use crate::mcp_tty::{self, Prompts, Terminal};
-use crate::tty::{one_line, stdin_is_foreground, Tty};
+use crate::tty::{confirm, one_line, stdin_is_foreground, Tty};
 use crate::{hosts, server, system_lock};
 
 // `unissh mcp`: serve, or manage what it serves. (Plain comments on clap
