@@ -27,6 +27,8 @@ clap = { version = "4", features = ["derive", "env"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 zeroize = "1"
+# `export --force`: an owner-only file beside the target, renamed over it.
+tempfile = "3"
 # Catching Ctrl-C, SIGTERM and SIGHUP through a safe API (`signals.rs`), on
 # every platform (Windows has Ctrl-C), and the runtime the commands that need
 # one run on. One entry for all of them. Already in the tree (the core's
@@ -37,9 +39,6 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "signal"
 # safe wrappers, since the workspace denies `unsafe`. Already in the tree (tempfile).
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["termios", "event", "process"] }
-
-[dev-dependencies]
-tempfile = "3"
 
 [lints]
 workspace = true

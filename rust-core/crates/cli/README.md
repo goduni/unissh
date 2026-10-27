@@ -62,6 +62,7 @@ unissh cp web:/var/log/app.log .        # one file, either direction; --force re
 unissh cp -r ./site web:/srv/www        # a directory and everything in it, either direction
 unissh tunnel web -L 5432:db:5432 -D 1080   # forward ports until Ctrl-C (-L, -R, -D as with ssh)
 unissh known-hosts list|trust|forget
+unissh recordings list|play|export|rm   # see Recordings below
 unissh sync | status | logout
 ```
 
@@ -113,6 +114,69 @@ the ones already open. The tunnels stay up until Ctrl-C or SIGTERM, then close
 cleanly; a second Ctrl-C while they close quits at once (status 130). A hang-up
 ends the process as usual, without the clean close, and under `nohup` the tunnels
 stay up. A connection that drops is not reopened.
+
+### Recordings
+
+```bash
+unissh recordings list [filter] [--json]       # every vault's, newest first; times in UTC
+unissh recordings play <id> [--speed 2] [--idle-limit 3]
+unissh recordings export <id> session.cast     # --force replaces; `-` writes to stdout
+unissh recordings rm <id> [--yes]
+```
+
+A recording is named by its id, or by any part of it that only one id contains
+(the distinctive end is usually enough); an ambiguous part is refused, with the
+candidates listed. The filter matches the label, host or vault.
+
+`play` replays the output with its timing, `--speed` times as fast, with every
+pause longer than `--idle-limit` seconds cut to that. Ctrl-C stops it. Keys
+typed meanwhile go nowhere. However it ends (Ctrl-C, SIGTERM, SIGHUP, an error),
+the terminal is put back: the main screen if the recording left it, a visible
+cursor, plain text, no mouse reporting or bracketed paste, and the keyboard as it
+was. A replay stopped by Ctrl-C exits with 130, by a signal with 128 plus its
+number. It needs stdout to be a terminal; it warns when this one is smaller than
+the recording's.
+
+A recording is not trusted: whoever can write to a shared vault, or a recorded
+host that was compromised, decides what is in it. So `play` passes on what draws
+on the screen and drops what reaches past it: every OSC string (the clipboard,
+the title), DCS, SOS, PM and APC strings, and the queries a terminal answers by
+typing the answer in (device attributes, cursor and status reports, mode and
+window reports, its version, ENQ), in their 8-bit forms too. It also drops the
+modes that change what the keyboard sends or lock it (keyboard lock, local echo,
+newline mode, VT52), and the reset at the end puts back the screen modes a
+recording may leave on (VT52, synchronized output, reverse video, cursor shape,
+margins). Keys are read from the controlling terminal
+itself, and when the replay ends what is still coming in is read and discarded
+before the keyboard is given back, so nothing reaches the shell as typed input.
+That last guarantee is Unix-only: on Windows, `play` writes to stdout and does
+not read the console, so an answer a console gives to something the filter let
+through could still land in the shell's input.
+
+`export` writes the recording exactly as the core keeps it: an
+[asciicast v2](https://docs.asciinema.org/manual/asciicast/v2/) document that
+`asciinema play` plays and anyone can read without UniSSH. The file is
+owner-only (0600): `--force` writes a new file beside it and renames it over the
+old one, so the old file's mode does not carry over; it refuses a symbolic link.
+`--json` lists only metadata, never what was recorded.
+
+`rm` asks first (`--yes` skips the question). On a cloud vault it sends the
+deletion to the server, so the recording goes from every device of the vault;
+with `--offline`, or when the server cannot be reached, it goes with the next
+sync. In a vault this account can only view (a Viewer), `rm` is refused before
+anything is deleted, and the recording stays where it is. Should the server
+still refuse a deletion this machine allowed (the role changed since the last
+sync, say), the command fails and says the recording is deleted on this machine
+only.
+
+**An export holds what the session showed**, in plain text: everything the
+remote printed, including what it echoed of what was typed. Keystrokes are not
+recorded. A password typed at a prompt that does not echo is not in it; in the
+app, a saved password it fills at a prompt is masked out of the output should
+that prompt echo it, but anything else the session printed is there. A recording
+of an MCP command also carries, in its header, the exact command, its standard
+input and environment, and its raw output. Treat an export like the vault item
+it came from.
 
 ## Data
 

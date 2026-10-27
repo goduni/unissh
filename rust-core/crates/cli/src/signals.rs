@@ -18,11 +18,6 @@
 //! end, and install before anything the signal should interrupt has started,
 //! so that none is missed.
 
-#![expect(
-    dead_code,
-    reason = "the async and noting forms are for `unissh mcp` and `unissh recordings play`, still on their branches"
-)]
-
 use std::future::poll_fn;
 use std::io;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -149,6 +144,7 @@ impl Stop {
 
 /// Installs handlers for `signals` and waits for the first of them, inside
 /// the caller's runtime.
+#[expect(dead_code, reason = "for `unissh mcp`'s shutdown, still on its branch")]
 pub async fn first(signals: &[Signal]) -> io::Result<Signal> {
     let mut stop = Stop::install(signals)?;
     Ok(stop.next().await)
