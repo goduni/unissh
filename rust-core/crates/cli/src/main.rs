@@ -22,6 +22,7 @@ mod hosts;
 mod login;
 mod manage;
 mod picker;
+mod pool;
 mod server;
 mod tree;
 mod tty;
