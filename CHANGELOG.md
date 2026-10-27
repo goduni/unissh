@@ -32,6 +32,8 @@ starts with `0.`:
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-10-27
+
 ### Added
 
 - Hosts and groups take a colour tag and an icon (#134), set under Appearance
@@ -247,6 +249,15 @@ hosts already did.
 **Mixed-version caveat.** An older client keeps a host's colour and icon when it
 edits the host, but editing a *group* in an older client clears that group's
 colour and icon: older builds rewrote every group field they did not know.
+
+**View-only members.** This version refuses, on the device, an edit to a shared
+vault the account can only view. An older client still stores such an edit and
+then cannot push it (the server refuses it), which stops that device's sync
+until the change is dropped (#166); upgrade the clients of view-only members.
+
+The command-line client keeps its MCP integrations, grants and limits in its
+own data directory on that machine (`mcp.json`, `mcp-limits.json`); nothing of
+them is synced, and `unissh logout` deletes them.
 
 ## [0.6.1] — 2026-10-16
 
