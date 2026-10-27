@@ -23,6 +23,7 @@ mod approval;
 #[cfg(feature = "core")]
 pub mod core;
 mod limits;
+pub mod logind;
 mod output;
 pub use access::SavedAccess;
 pub use approval::{visible, PendingApproval};
