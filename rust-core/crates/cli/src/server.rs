@@ -215,9 +215,11 @@ pub fn push_recording(device: &Device) {
 ///
 /// A local vault never syncs; with `offline` the change waits for the next
 /// sync. A sync that cannot reach the server is a warning — the change goes
-/// with the next one. A server that refuses the change (the account may not
-/// write to the vault) is a failure: the change stays on this machine only,
-/// and the user must hear that rather than believe it went through.
+/// with the next one. A server that refuses the change is a failure: the
+/// change stays on this machine only, and the user must hear that rather than
+/// believe it went through. (A Viewer's write never gets here: the core
+/// refuses it before storing anything, `FfiError::ReadOnlyVault`. A refusal
+/// here means the server knows of a role or policy this device does not yet.)
 pub fn push_after_write(device: &Device, cloud: bool, offline: bool, done: &str) -> Res<()> {
     if !cloud {
         println!("{done}.");

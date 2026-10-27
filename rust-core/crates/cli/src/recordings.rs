@@ -340,8 +340,10 @@ fn save(path: &Path, bytes: &[u8], force: bool) -> Res<()> {
 }
 
 /// `unissh recordings rm`: deletes the recording, then sends the deletion to
-/// the server unless `offline` (or the vault is local). A deletion the server
-/// refuses fails the command ([`server::push_after_write`]).
+/// the server unless `offline` (or the vault is local). In a vault this
+/// account can only view, the core refuses the deletion before anything is
+/// stored (`FfiError::ReadOnlyVault`); a deletion the server still refuses
+/// fails the command ([`server::push_after_write`]).
 pub fn remove(device: &Device, query: &str, yes: bool, offline: bool) -> Res<()> {
     let all = load(&device.core)?;
     let found = find(&all, query)?;

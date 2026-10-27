@@ -29,6 +29,7 @@ use serde::Deserialize;
 use zeroize::Zeroizing;
 
 use crate::failure::{best_effort, Failure, Res};
+use crate::signals::{self, Signal};
 use crate::tty::{self, ReplayTerminal};
 
 /// How fast to replay.
@@ -422,7 +423,7 @@ fn reset_sequence(alt_screen: bool) -> String {
 const CTRL_C: u8 = 0x03;
 
 /// Exit status of a replay stopped with Ctrl-C (128 + SIGINT, as a shell says).
-const STOPPED: u8 = 130;
+const STOPPED: u8 = Signal::Interrupt.exit_status();
 
 /// How long a failed write waits to see whether a signal explains it: the
 /// hang-up that makes the terminal fail and its SIGHUP arrive apart.
@@ -503,10 +504,7 @@ impl Screen {
 
 /// The exit status for a signal noted in `signal` (128 + its number).
 fn signalled(signal: &AtomicU8) -> Option<u8> {
-    match signal.load(Ordering::SeqCst) {
-        0 => None,
-        signo => Some(128_u8.saturating_add(signo)),
-    }
+    Signal::from_number(signal.load(Ordering::SeqCst)).map(Signal::exit_status)
 }
 
 /// [`signalled`], waiting up to [`SIGNAL_GRACE`] for one: after a failure,
@@ -542,7 +540,10 @@ pub fn play(cast: &str, timing: Timing) -> Res<u8> {
         }
     }
     let signal = Arc::new(AtomicU8::new(0));
-    signals::watch(&signal)?;
+    // SIGINT, SIGTERM and SIGHUP are noted from here on, so that the replay
+    // stops and puts the terminal back instead of dying with it raw.
+    // Installed before the replay starts, so none is missed.
+    signals::watch(signals::STOP_OR_HANG_UP, &signal)?;
     let term = ReplayTerminal::open()
         .map_err(|e| Failure::msg(format!("a replay needs the controlling terminal: {e}")))?;
     let mut screen = Screen {
@@ -553,66 +554,6 @@ pub fn play(cast: &str, timing: Timing) -> Res<u8> {
     match screen.run(&cast.frames, &signal) {
         Ok(status) => Ok(status),
         Err(e) => signalled_soon(&signal).ok_or_else(|| e.into()),
-    }
-}
-
-/// SIGINT, SIGTERM and SIGHUP during a replay: noted, so that the replay stops
-/// and puts the terminal back instead of dying with it raw.
-#[cfg(unix)]
-mod signals {
-    use std::future::poll_fn;
-    use std::sync::atomic::{AtomicU8, Ordering};
-    use std::sync::Arc;
-    use std::task::Poll;
-    use std::thread;
-
-    use tokio::signal::unix::{signal, SignalKind};
-
-    use crate::failure::Res;
-
-    /// Starts watching; the first signal's number lands in `noted`. Watched
-    /// from here on, for the rest of the process — a replay is the last thing
-    /// the command does.
-    pub fn watch(noted: &Arc<AtomicU8>) -> Res<()> {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_io()
-            .build()?;
-        // Registered before the replay starts, so none is missed.
-        let mut watched = {
-            let _context = runtime.enter();
-            [
-                (signal(SignalKind::interrupt())?, 2_u8),
-                (signal(SignalKind::terminate())?, 15),
-                (signal(SignalKind::hangup())?, 1),
-            ]
-        };
-        let noted = Arc::clone(noted);
-        thread::spawn(move || {
-            let signo = runtime.block_on(poll_fn(|cx| {
-                for (stream, signo) in &mut watched {
-                    if stream.poll_recv(cx).is_ready() {
-                        return Poll::Ready(*signo);
-                    }
-                }
-                Poll::Pending
-            }));
-            noted.store(signo, Ordering::SeqCst);
-        });
-        Ok(())
-    }
-}
-
-/// Elsewhere a signal ends the process as usual.
-#[cfg(not(unix))]
-mod signals {
-    use std::sync::atomic::AtomicU8;
-    use std::sync::Arc;
-
-    use crate::failure::Res;
-
-    /// Nothing to watch here.
-    pub const fn watch(_noted: &Arc<AtomicU8>) -> Res<()> {
-        Ok(())
     }
 }
 
