@@ -545,17 +545,18 @@ fn save(
 }
 
 /// After the host `failed` to save: removes the password stored for it just
-/// before, so no orphan is left, and says how that went.
-fn unstore_password(core: &Core, vault_id: &str, id: &str, failed: Failure) -> Failure {
-    match core.delete_item(vault_id.to_owned(), id.to_owned()) {
-        Ok(()) => Failure::msg(format!(
-            "{failed}; the password stored for it was removed again"
-        )),
-        Err(e) => Failure::msg(format!(
-            "{failed}; the password stored for it could not be removed ({e}): \
+/// before, so no orphan is left, and says how that went. The failure keeps
+/// its exit status and server code; only its message grows.
+fn unstore_password(core: &Core, vault_id: &str, id: &str, mut failed: Failure) -> Failure {
+    let outcome = match core.delete_item(vault_id.to_owned(), id.to_owned()) {
+        Ok(()) => "the password stored for it was removed again".to_owned(),
+        Err(e) => format!(
+            "the password stored for it could not be removed ({e}): \
              delete it with `unissh secrets rm \"{id}\"`"
-        )),
-    }
+        ),
+    };
+    failed.message = format!("{}; {outcome}", failed.message);
+    failed
 }
 
 /// The login a host's flags ask for: `--auth`, or what `--key`,

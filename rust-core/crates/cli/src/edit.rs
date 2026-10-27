@@ -21,7 +21,7 @@ use crate::failure::{Failure, Res};
 use crate::home::read_private;
 use crate::hosts::{find_named, Named};
 use crate::server;
-use crate::tty::{one_line, Tty};
+use crate::tty::{self, one_line, Tty};
 
 /// `--vault`: the vault a command works in.
 #[derive(Args, Clone, Default)]
@@ -254,7 +254,7 @@ impl SecretFrom {
             read_private(path)?
                 .ok_or_else(|| Failure::msg(format!("{} does not exist", path.display())))?
         } else if self.stdin {
-            read_secret(io::stdin().lock())?
+            read_secret(tty::read_stdin)?
         } else {
             ask(what, prompt, shape)?
         };
@@ -289,16 +289,26 @@ fn ask(what: &str, prompt: &str, shape: Shape) -> Res<Zeroizing<String>> {
     })
 }
 
-/// All of `input` (stdin), for a secret. It is read into a buffer that is
-/// wiped when it is dropped; when the secret outgrows it, a buffer twice the
-/// size takes over and the old one is wiped, so no copy of the secret is left
-/// behind in freed memory. (`read_to_string` would grow its string by
-/// reallocating, leaving each smaller copy unwiped.)
-fn read_secret(mut input: impl io::Read) -> Res<Zeroizing<String>> {
-    let mut buf = Zeroizing::new(vec![0_u8; 8192]);
+/// The least room each read of stdin gets: the size of std's stdin buffer.
+/// A read at least that large goes past std's buffer, which is never wiped,
+/// so no part of a secret is left in it.
+const STDIN_READ: usize = 8 * 1024;
+
+/// All of stdin, for a secret, from `read` ([`tty::read_stdin`]). On Unix
+/// that reads the descriptor itself; elsewhere it reads through std's stdin,
+/// whose buffer a read of [`STDIN_READ`] or more skips, so each read is given
+/// at least that much room, also after a short read.
+///
+/// The secret goes into a buffer that is wiped when it is dropped; when the
+/// room left is less than [`STDIN_READ`], a buffer twice the size takes over
+/// and the old one is wiped, so no copy of the secret is left behind in freed
+/// memory. (`read_to_string` would grow its string by reallocating, leaving
+/// each smaller copy unwiped.)
+fn read_secret(mut read: impl FnMut(&mut [u8]) -> io::Result<usize>) -> Res<Zeroizing<String>> {
+    let mut buf = Zeroizing::new(vec![0_u8; STDIN_READ]);
     let mut filled = 0_usize;
     loop {
-        if filled == buf.len() {
+        if buf.len().saturating_sub(filled) < STDIN_READ {
             let mut bigger = Zeroizing::new(vec![0_u8; buf.len().saturating_mul(2)]);
             if let (Some(to), Some(from)) = (bigger.get_mut(..filled), buf.get(..filled)) {
                 to.copy_from_slice(from);
@@ -308,7 +318,7 @@ fn read_secret(mut input: impl io::Read) -> Res<Zeroizing<String>> {
         let Some(rest) = buf.get_mut(filled..) else {
             break;
         };
-        match input.read(rest) {
+        match read(rest) {
             Ok(0) => break,
             Ok(n) => filled = filled.saturating_add(n),
             Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
@@ -400,8 +410,9 @@ pub fn commit(device: &Device, vault_id: &str, offline: bool, done: &str) -> Res
 
 #[cfg(test)]
 mod tests {
-    use super::{choose_vault, list, read_secret, slug, take};
+    use super::{choose_vault, list, read_secret, slug, take, STDIN_READ};
     use crate::hosts::Named;
+    use std::io::Read as _;
     use unissh_ffi::{FfiSyncTarget, VaultInfo};
 
     struct Item(&'static str);
@@ -479,7 +490,30 @@ mod tests {
     #[test]
     fn a_secret_on_stdin_is_read_whole_past_the_first_buffer() {
         let long = "k".repeat(20_000);
-        assert_eq!(read_secret(long.as_bytes()).unwrap().as_str(), long);
-        assert!(read_secret(&[0xff_u8, 0xfe][..]).is_err(), "not text");
+        let mut input = long.as_bytes();
+        assert_eq!(read_secret(|b| input.read(b)).unwrap().as_str(), long);
+        let mut input = &[0xff_u8, 0xfe][..];
+        assert!(read_secret(|b| input.read(b)).is_err(), "not text");
+    }
+
+    /// Every read gets room for a whole stdin buffer, also after short
+    /// reads, so std never buffers part of the secret on the way.
+    #[test]
+    fn each_read_of_a_secret_has_room_for_a_whole_stdin_buffer() {
+        let mut input = "k".repeat(20_000).into_bytes();
+        let mut smallest = usize::MAX;
+        let read = read_secret(|b| {
+            smallest = smallest.min(b.len());
+            let n = input.len().min(b.len()).min(3_000);
+            b[..n].copy_from_slice(&input[..n]);
+            input.drain(..n);
+            Ok(n)
+        })
+        .unwrap();
+        assert_eq!(read.len(), 20_000);
+        assert!(
+            smallest >= STDIN_READ,
+            "a read got {smallest} bytes of room"
+        );
     }
 }
