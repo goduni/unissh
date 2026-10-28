@@ -117,6 +117,16 @@ starts with `0.`:
   `set_manual_approval_available`, `made_recordings`, `PromptFactory::can_ask`,
   the `logind` signal filter and the limits file helpers the desktop now uses
   too.
+- `unissh keys rotation begin|run|finish` is the app's guided key rotation in
+  the CLI: `begin` creates the new key beside the old one and lists the
+  machines that have to learn it; `run` installs it on each machine and proves a
+  key-only login with it, removing nothing, with a line per machine and
+  `--host` to retry some; `finish` checks every machine again, names the ones a
+  finish would lock out and asks, then removes the old key where the new one
+  logs in, checks the old key is refused, and makes the new key current. The
+  plan, the steps and the `authorized_keys` commands moved from the app into the
+  core (`unissh_ffi::key_rotation_plan`), so the app's rotation dialog and the
+  CLI run the same ones; the dialog looks and works as before.
 - Bindings: `ExecHandleFfi::close_stdin` ends a streaming command's input and
   keeps its output coming; `Core::wait_for_recordings` waits for session
   recordings still to be written (a recorded session counts from the moment it

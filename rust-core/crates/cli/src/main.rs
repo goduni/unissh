@@ -30,6 +30,7 @@ mod picker;
 mod pool;
 mod recordings;
 mod replay;
+mod rotation;
 mod secrets;
 mod server;
 mod signals;
