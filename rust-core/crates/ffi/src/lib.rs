@@ -61,6 +61,7 @@ mod approvals;
 pub mod automation;
 pub mod automation_recording;
 mod key_rotation;
+pub mod key_rotation_plan;
 mod password_fill;
 pub mod snippet_params;
 mod ssh_include;
