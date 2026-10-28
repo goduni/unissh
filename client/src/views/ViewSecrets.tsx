@@ -7,6 +7,7 @@ import { writeSecretToClipboard } from "@/bridge/clipboard";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { useTranslation } from "@/i18n";
+import type { TFunction } from "i18next";
 import { usePalette } from "@/theme/ThemeProvider";
 import { MONO, rem, TEXT, UI } from "@/theme/tokens";
 import { Btn, Icon, NO_AUTOCORRECT, Spinner, Tag, Toggle, VaultBadge } from "@/components/primitives";
@@ -258,10 +259,15 @@ function KeyRow({
   const [usage, setUsage] = useState<KeyUsage | null>(null);
   useEffect(() => {
     let alive = true;
+    // Never show the previous vault's or item's count while this one loads.
+    setUsage(null);
     if (!vault) return;
     api.keyUsage(vault, item.itemId).then(
       (u) => alive && setUsage(u),
-      () => alive && setUsage(null),
+      (e) => {
+        logWarn(`key usage lookup failed: ${apiErrorMessage(e)}`);
+        if (alive) setUsage(null);
+      },
     );
     return () => {
       alive = false;
@@ -411,10 +417,10 @@ function KeyRow({
     if (!vault) return;
     // Warn if the key still backs any login (a host's own, a jump hop, an
     // identity), so deleting it doesn't silently break those connections.
-    const count = await usageCountNow(vault, item.itemId);
+    const now = await usageNow(vault, item.itemId);
     ctx.confirm({
       title: t("secrets.deleteKeyTitle"),
-      body: count > 0 ? t("secrets.deleteKeyInUse", { item: item.itemId, count }) : item.itemId,
+      body: now ? t("secrets.deleteKeyInUse", { item: item.itemId, uses: usedBy(t, now) }) : item.itemId,
       danger: true,
       confirmLabel: t("common.delete"),
       icon: "trash",
@@ -490,15 +496,7 @@ function KeyRow({
         </span>
         {usage && (
           <MetaChip icon="link" tone={uses === 0 ? "warn" : "neutral"}>
-            {uses === 0
-              ? t("secrets.unused")
-              : [
-                  usage.hosts.length > 0 && t("secrets.usedByHosts", { count: usage.hosts.length }),
-                  usage.identities.length > 0 &&
-                    t("secrets.usedByIdentities", { count: usage.identities.length }),
-                ]
-                  .filter(Boolean)
-                  .join(", ")}
+            {uses === 0 ? t("secrets.unused") : usedBy(t, usage)}
           </MetaChip>
         )}
         {old && (
@@ -720,13 +718,27 @@ function KeyIdentityList({ label, identities }: { label: string; identities: Key
   );
 }
 
-/** A fresh usage count right before a delete; 0 (the plain confirm) when the
- *  core cannot answer, so a failed lookup never blocks the delete. */
-async function usageCountNow(vaultId: string, itemId: string): Promise<number> {
+/** "2 hosts, 1 identity": what uses a key or password, hosts and identities
+ *  apart (each pluralised); empty for an unused one. */
+function usedBy(t: TFunction, u: KeyUsage): string {
+  return [
+    u.hosts.length > 0 && t("secrets.usedByHosts", { count: u.hosts.length }),
+    u.identities.length > 0 && t("secrets.usedByIdentities", { count: u.identities.length }),
+  ]
+    .filter(Boolean)
+    .join(", ");
+}
+
+/** A fresh usage right before a delete; null (the plain confirm) when nothing
+ *  uses the item or the core cannot answer, so a failed lookup never blocks
+ *  the delete. */
+async function usageNow(vaultId: string, itemId: string): Promise<KeyUsage | null> {
   try {
-    return keyUsageCount(await api.keyUsage(vaultId, itemId));
-  } catch {
-    return 0;
+    const u = await api.keyUsage(vaultId, itemId);
+    return keyUsageCount(u) > 0 ? u : null;
+  } catch (e) {
+    logWarn(`key usage lookup before delete failed: ${apiErrorMessage(e)}`);
+    return null;
   }
 }
 
@@ -1117,10 +1129,10 @@ function PasswordCard({ item }: { item: ItemInfo }) {
   const onDelete = async () => {
     if (!vault) return;
     // Same warning as a key's: hosts (own login, hop, proxy) and identities.
-    const count = await usageCountNow(vault, item.itemId);
+    const now = await usageNow(vault, item.itemId);
     ctx.confirm({
       title: t("secrets.deletePasswordTitle"),
-      body: count > 0 ? t("secrets.deletePasswordInUse", { item: item.itemId, count }) : item.itemId,
+      body: now ? t("secrets.deletePasswordInUse", { item: item.itemId, uses: usedBy(t, now) }) : item.itemId,
       danger: true,
       confirmLabel: t("common.delete"),
       icon: "trash",

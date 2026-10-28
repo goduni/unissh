@@ -517,10 +517,11 @@ fn remove<S>(device: &Device, offline: bool, entry: &Entry<S>, yes: bool) -> Res
     } else {
         // The core's one answer (#169): hosts by login, inline or referenced
         // hop and proxy, plus identities.
-        let uses = core.key_usage(vault_id.clone(), id.clone())?.count();
-        if uses > 0 {
+        let usage = core.key_usage(vault_id.clone(), id.clone())?;
+        if usage.count() > 0 {
             warning.push_str(&format!(
-                "It is used by {uses} host(s) or identities. Deleting it will break their login.\n"
+                "It is used by {}. Deleting it will break their login.\n",
+                used_by(usage.hosts.len(), usage.identities.len())
             ));
         }
     }
@@ -541,6 +542,22 @@ fn remove<S>(device: &Device, offline: bool, entry: &Entry<S>, yes: bool) -> Res
             one_line(id)
         ),
     )
+}
+
+/// "2 hosts and 1 identity": what uses a secret, hosts and identities apart.
+fn used_by(hosts: usize, identities: usize) -> String {
+    let host = (hosts > 0).then(|| match hosts {
+        1 => "1 host".to_owned(),
+        n => format!("{n} hosts"),
+    });
+    let identity = (identities > 0).then(|| match identities {
+        1 => "1 identity".to_owned(),
+        n => format!("{n} identities"),
+    });
+    host.into_iter()
+        .chain(identity)
+        .collect::<Vec<_>>()
+        .join(" and ")
 }
 
 // ---------- unissh keys ----------
@@ -1206,7 +1223,7 @@ pub fn find_identity(core: &Core, query: &str) -> Res<IdentityEntry> {
 
 #[cfg(test)]
 mod tests {
-    use super::needs_passphrase;
+    use super::{needs_passphrase, used_by};
     use unissh_ffi::FfiError;
 
     /// The core's wording for a key that needs its passphrase is what makes
@@ -1221,5 +1238,13 @@ mod tests {
         )));
         assert!(needs_passphrase(&other("key is passphrase-protected")));
         assert!(!needs_passphrase(&other("incorrect passphrase")));
+    }
+
+    /// The delete warning names hosts and identities apart, each pluralised.
+    #[test]
+    fn the_delete_warning_counts_hosts_and_identities_apart() {
+        assert_eq!(used_by(1, 0), "1 host");
+        assert_eq!(used_by(0, 2), "2 identities");
+        assert_eq!(used_by(3, 1), "3 hosts and 1 identity");
     }
 }

@@ -68,7 +68,7 @@ pub struct KeyUsage {
 
 impl KeyUsage {
     /// What "used by N" counts: distinct hosts plus identities.
-    pub const fn count(&self) -> usize {
+    pub fn count(&self) -> usize {
         self.hosts.len().saturating_add(self.identities.len())
     }
 }
@@ -192,7 +192,7 @@ impl Core {
         // A reference may name the vault by any id `resolve_vid` accepts, so
         // compare what they resolve to, not the strings.
         let names = named_vaults(&hosts);
-        let same: HashSet<String> = self.with_state_mut(|state| {
+        let same: HashSet<String> = self.with_state(|state| {
             let vid = resolve_vid(&state.storage, &vault_id);
             Ok(names
                 .into_iter()
