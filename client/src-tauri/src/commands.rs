@@ -726,6 +726,9 @@ pub async fn list_items(
     Ok(v.into_iter().map(Into::into).collect())
 }
 
+/// Generates a NEW key: the app has no flow that replaces a key's material
+/// under its id (rotation has its own commands), so this is create-only and an
+/// id already taken is `AlreadyExists`.
 #[tauri::command]
 pub async fn generate_ssh_key(
     vault_id: String,
@@ -733,9 +736,12 @@ pub async fn generate_ssh_key(
     state: State<'_, AppState>,
 ) -> ApiResult<String> {
     let core = state.core.clone();
-    blocking(move || core.generate_ssh_key(vault_id, item_id)).await
+    blocking(move || core.create_ssh_key(vault_id, item_id)).await
 }
 
+/// Imports a NEW key (create-only, like `generate_ssh_key`). An encrypted key
+/// without its passphrase is `PassphraseRequired`, a wrong one
+/// `WrongPassphrase`.
 #[tauri::command]
 pub async fn import_ssh_key(
     vault_id: String,
@@ -745,7 +751,21 @@ pub async fn import_ssh_key(
     state: State<'_, AppState>,
 ) -> ApiResult<String> {
     let core = state.core.clone();
-    blocking(move || core.import_ssh_key(vault_id, item_id, openssh_private, passphrase)).await
+    blocking(move || core.create_imported_ssh_key(vault_id, item_id, openssh_private, passphrase))
+        .await
+}
+
+/// A fresh item id for a new item labelled `label`, minted by the core (for
+/// a password stored for a new host; hosts, groups and snippets get theirs
+/// when saved with an empty id).
+#[tauri::command]
+pub async fn new_item_id(
+    vault_id: String,
+    label: String,
+    state: State<'_, AppState>,
+) -> ApiResult<String> {
+    let core = state.core.clone();
+    blocking(move || core.new_item_id(vault_id, label)).await
 }
 
 #[tauri::command]
@@ -978,12 +998,14 @@ pub async fn import_known_hosts(
 
 // ---------- connection profiles (hosts) ----------
 
+/// Saves a host; an empty `profileId` is a new host, whose id the core mints.
+/// Returns the host's id.
 #[tauri::command]
 pub async fn save_connection(
     vault_id: String,
     profile: dto::ConnectionProfile,
     state: State<'_, AppState>,
-) -> ApiResult<()> {
+) -> ApiResult<String> {
     let core = state.core.clone();
     let p = profile.into();
     blocking(move || core.save_connection(vault_id, p)).await
@@ -1022,15 +1044,26 @@ pub async fn delete_connection(
 
 // ---------- identities (personal SSH creds) ----------
 
+/// Saves an identity: `create_only` refuses an id already taken
+/// (`AlreadyExists`, the "new identity" form); without it the identity at
+/// that id is replaced (the edit form).
 #[tauri::command]
 pub async fn save_identity(
     vault_id: String,
     identity: dto::Identity,
+    create_only: bool,
     state: State<'_, AppState>,
 ) -> ApiResult<()> {
     let core = state.core.clone();
     let i = identity.into();
-    blocking(move || core.save_identity(vault_id, i)).await
+    blocking(move || {
+        if create_only {
+            core.create_identity(vault_id, i)
+        } else {
+            core.save_identity(vault_id, i)
+        }
+    })
+    .await
 }
 
 #[tauri::command]
@@ -1247,12 +1280,14 @@ pub async fn import_putty_sessions(
 
 // ---------- groups ----------
 
+/// Saves a snippet; an empty `snippetId` is a new one, whose id the core
+/// mints. Returns the snippet's id.
 #[tauri::command]
 pub async fn save_snippet(
     vault_id: String,
     snippet: dto::Snippet,
     state: State<'_, AppState>,
-) -> ApiResult<()> {
+) -> ApiResult<String> {
     let core = state.core.clone();
     let s = snippet.into();
     blocking(move || core.save_snippet(vault_id, s)).await
@@ -1278,12 +1313,14 @@ pub async fn delete_snippet(
     blocking(move || core.delete_snippet(vault_id, snippet_id)).await
 }
 
+/// Saves a group; an empty `groupId` is a new one, whose id the core mints.
+/// Returns the group's id.
 #[tauri::command]
 pub async fn save_group(
     vault_id: String,
     group: dto::ServerGroup,
     state: State<'_, AppState>,
-) -> ApiResult<()> {
+) -> ApiResult<String> {
     let core = state.core.clone();
     let g = group.into();
     blocking(move || core.save_group(vault_id, g)).await

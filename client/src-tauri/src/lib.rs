@@ -363,6 +363,7 @@ pub fn run() {
             // items / keys / certs
             commands::list_items,
             commands::generate_ssh_key,
+            commands::new_item_id,
             commands::import_ssh_key,
             commands::import_ssh_certificate,
             commands::get_public_key,

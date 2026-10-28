@@ -16,7 +16,7 @@ import { useApp } from "@/store/app";
 import { useCtx } from "@/store/ctx";
 import { useNarrow } from "@/store/responsive";
 import * as api from "@/bridge/api";
-import { apiErrorMessage, ItemType } from "@/bridge/types";
+import { apiErrorMessage, isApiError, ItemType } from "@/bridge/types";
 import { logWarn } from "@/bridge/log";
 import type { ConnectionProfile, ItemInfo, Identity, KeyRotationLink, ServerStatus, VaultInfo } from "@/bridge/types";
 import { isOwnedCloud, serverShortLabel, vaultLoc, vaultServer } from "@/bridge/vaults";
@@ -1695,7 +1695,8 @@ function NewIdentityCard({
   const save = async () => {
     if (!vault || !name.trim() || !user.trim()) return;
     try {
-      await api.saveIdentity(vault, {
+      // Create-only: a name already taken is refused, never replaced.
+      await api.createIdentity(vault, {
         identityId: name.trim(),
         label: name.trim(),
         user: user.trim(),
@@ -1708,7 +1709,8 @@ function NewIdentityCard({
       setUser("");
       setCred("none");
     } catch (e) {
-      ctx.toast(apiErrorMessage(e), "err");
+      if (isApiError(e) && e.kind === "alreadyExists") ctx.toast(t("secrets.identityNameTaken"), "warn");
+      else ctx.toast(apiErrorMessage(e), "err");
     }
   };
 

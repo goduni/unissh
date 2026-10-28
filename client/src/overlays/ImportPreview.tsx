@@ -22,7 +22,7 @@ import { useIsMobile, useNarrow } from "@/store/responsive";
 import { useDialogFocus, useDialogKeys } from "@/components/a11y";
 import { toast } from "@/store/toast";
 import { guard } from "@/store/action";
-import { apiErrorMessage, ItemType } from "@/bridge/types";
+import { apiErrorMessage, isApiError, ItemType } from "@/bridge/types";
 import { defaultImportGroup } from "./importTarget";
 import { filterConfigToSelected } from "./configFilter";
 import {
@@ -399,7 +399,9 @@ function ImportPreviewBody() {
                 pathToItem.set(keyPath, keyItemId);
               } catch (e) {
                 const raw = apiErrorMessage(e);
-                skips.push({ host: h.host, reason: classifySkip(raw), raw });
+                const encrypted =
+                  isApiError(e) && (e.kind === "passphraseRequired" || e.kind === "wrongPassphrase");
+                skips.push({ host: h.host, reason: encrypted ? "encrypted" : classifySkip(raw), raw });
                 continue;
               }
             }

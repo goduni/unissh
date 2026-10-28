@@ -44,7 +44,7 @@ import { useApp } from "@/store/app";
 import { useCtx } from "@/store/ctx";
 import { useIsMobile, useNarrow } from "@/store/responsive";
 import * as api from "@/bridge/api";
-import { apiErrorMessage, ItemType } from "@/bridge/types";
+import { apiErrorMessage, isApiError, ItemType } from "@/bridge/types";
 import { cloudVaultServers, isOwnedCloud, serverShortLabel, vaultLoc } from "@/bridge/vaults";
 import type {
   ConnectionProfile,
@@ -342,19 +342,12 @@ function SwitchRow({
   );
 }
 
-// Inline picker — re-uses Input's chrome to render a clickable <select> for
-// choosing a stored key / password item.
-const slug = (s: string) =>
-  s
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "") || "host";
-
 // ── New / edit host ────────────────────────────────────────────
 type AuthSeg = "key" | "password" | "ask" | "personal" | "systemAgent";
 
 /** Sentinel `groupId` meaning "create a new group (named `newGroupName`) on save".
- *  Group ids are `slug-timestamp`, so this can never collide with a real one. */
+ *  The core mints group ids as `slug-timestamp`, so this can never collide with
+ *  a real one. */
 const NEW_GROUP = "__new__";
 
 /** The colour a host with none of its own will show once saved under `groupId`.
@@ -738,11 +731,6 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
       ctx.toast(t("modals.key.enterName"), "warn");
       return;
     }
-    // The core silently overwrites a same-id key's private material — guard it.
-    if (keyItems.some((k) => k.itemId === name)) {
-      ctx.toast(t("modals.host.keyNameTaken"), "warn");
-      return;
-    }
     if (newKeyWillImport && !newKeyImport.trim()) {
       ctx.toast(t("modals.key.pasteToImport"), "warn");
       return;
@@ -759,7 +747,9 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
       setNewKeyFileName(null);
       ctx.toast(newKeyWillImport ? t("modals.key.imported") : t("modals.key.generated"), "ok");
     } catch (e) {
-      ctx.toast(apiErrorMessage(e), "err");
+      // Creating never replaces a key: the core refuses a name already taken.
+      if (isApiError(e) && e.kind === "alreadyExists") ctx.toast(t("modals.host.keyNameTaken"), "warn");
+      else ctx.toast(apiErrorMessage(e), "err");
     } finally {
       setNewKeyBusy(false);
     }
@@ -784,9 +774,11 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
       profileAuth = { type: "key", keyItemId: keyId };
     } else if (auth === "password") {
       if (newPw.trim()) {
-        // store the entered password as a new vault secret and reference it
-        const pwItemId = `${slug(label)}-pw-${Date.now()}`;
+        // store the entered password as a new vault secret (under an id the
+        // core mints) and reference it
+        let pwItemId: string;
         try {
+          pwItemId = await api.newItemId(vault, `${label.trim()} pw`);
           await api.savePassword(vault, pwItemId, newPw);
         } catch (e) {
           ctx.toast(apiErrorMessage(e), "err");
@@ -858,9 +850,9 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
           }
         : null;
 
-    const profileId = edit?.profileId || `${slug(label)}-${Date.now()}`;
     const profile: ConnectionProfile = {
-      profileId,
+      // Empty on create → the core mints the id and returns it from the save.
+      profileId: edit?.profileId ?? "",
       // Carry the immutable uid through edits; empty on create → core mints it.
       uid: edit?.uid ?? "",
       // Username template only applies to Personal auth (gateway login shaping).
@@ -882,7 +874,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
     };
 
     try {
-      await api.saveConnection(vault, profile);
+      const profileId = await api.saveConnection(vault, profile);
 
       // Inline personal binding: link the chosen identity to this host. The uid is
       // minted by the core on create, so re-read the saved profile to get it.
@@ -921,14 +913,13 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
       // a cancelled modal never leaves an orphan empty group behind.
       let targetGroupId = groupId;
       if (groupId === NEW_GROUP && newGroupName.trim()) {
-        const created: ServerGroup = {
-          groupId: `${slug(newGroupName)}-${Date.now()}`,
+        // An empty id: the core mints the new group's id and hands it back.
+        targetGroupId = await api.saveGroup(vault, {
+          groupId: "",
           label: newGroupName.trim(),
           memberIds: [profileId],
           parentId: null,
-        };
-        await api.saveGroup(vault, created);
-        targetGroupId = created.groupId;
+        });
       } else if (targetGroupId) {
         const g = groups.find((x) => x.groupId === targetGroupId);
         if (g && !g.memberIds.includes(profileId)) {
@@ -2043,15 +2034,17 @@ function NewKeyModal({ onClose }: { onClose: () => void }) {
       await useApp.getState().reloadVault();
       onClose();
     } catch (e) {
-      // Encrypted key: keep the modal open and hint about the passphrase
-      // (the messages are stable English strings from the core, see AgentError).
-      const msg = apiErrorMessage(e);
-      if (/passphrase is required|passphrase-protected/i.test(msg)) {
+      // Encrypted key: keep the modal open and hint about the passphrase. A
+      // name already taken is refused by the core (creating never replaces).
+      const kind = isApiError(e) ? e.kind : null;
+      if (kind === "passphraseRequired") {
         ctx.toast(t("modals.key.needPassphrase"), "warn");
-      } else if (/incorrect passphrase/i.test(msg)) {
+      } else if (kind === "wrongPassphrase") {
         ctx.toast(t("modals.key.wrongPassphrase"), "err");
+      } else if (kind === "alreadyExists") {
+        ctx.toast(t("modals.host.keyNameTaken"), "warn");
       } else {
-        ctx.toast(msg, "err");
+        ctx.toast(apiErrorMessage(e), "err");
       }
     } finally {
       setBusy(false);
