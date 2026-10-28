@@ -168,6 +168,12 @@ starts with `0.`:
 
 ### Fixed
 
+- Creating a key or a personal identity under a name that is already taken no
+  longer replaces what is there (#171). The app's New key dialog and its New
+  identity form used to overwrite a key's private material or an identity
+  silently; the app, `unissh keys generate|import` and `unissh identities add`
+  now say the name is taken and change nothing. The check happens as the item
+  is written, so a change synced from another device cannot slip in between.
 - The admin panel's sign-in says that the password is optional: it is the
   account's master password from the UniSSH app (or the one set when the
   instance was set up); an account without one signs in with it empty.
