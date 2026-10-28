@@ -66,6 +66,7 @@ import { indexHostGroups } from "@/support/hostGroups";
 import { AppearancePicker } from "@/components/AppearancePicker";
 import type { TagColor } from "@/components/appearance";
 import { effectiveHostColor, indexAppearance } from "@/support/hostAppearance";
+import { NEW_GROUP, groupChoice, hopCandidates, identityToLink } from "./hostSave";
 
 // ── Form atoms ─────────────────────────────────────────────────
 interface MSegOption<T extends string> {
@@ -345,11 +346,6 @@ function SwitchRow({
 // ── New / edit host ────────────────────────────────────────────
 type AuthSeg = "key" | "password" | "ask" | "personal" | "systemAgent";
 
-/** Sentinel `groupId` meaning "create a new group (named `newGroupName`) on save".
- *  The core mints group ids as `slug-timestamp`, so this can never collide with
- *  a real one. */
-const NEW_GROUP = "__new__";
-
 /** The colour a host with none of its own will show once saved under `groupId`.
  *  Save files it under that one group and drops it from every other, so the
  *  rendering rule runs over the groups as they will be then — not over the one
@@ -472,16 +468,9 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
   // B2.2 UI: a jump hop can either be an inline bastion (host/user/key above) or
   // a REFERENCE to another saved profile (by its immutable uid), resolved to that
   // profile's host/auth at connect. Profiles referenceable = saved hosts in this
-  // vault, minus the one being edited (no self-reference).
-  const refHosts = hosts.filter(
-    (h) =>
-      h.uid &&
-      h.profileId !== edit?.profileId &&
-      // A hop must present a usable credential; Personal/Ask profiles can't serve
-      // as a jump (the core errors on a non-credentialed referenced profile), so
-      // don't offer them — else an unusable bastion saves and fails only at connect.
-      (h.auth.type === "key" || h.auth.type === "vaultPassword"),
-  );
+  // vault, minus the one being edited, that log in with a key, a stored password
+  // or the system agent — the core's hop rule, which it also enforces on save.
+  const refHosts = hopCandidates(hosts, edit?.profileId);
   const [jMode, setJMode] = useState<"inline" | "ref">(jump0?.hopRef ? "ref" : "inline");
   const [jRef, setJRef] = useState(jump0?.hopRef?.profileUid ?? refHosts[0]?.uid ?? "");
   // The ref picker renders ONLY when there are referenceable hosts; the save path
@@ -766,6 +755,8 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
       return;
     }
     let profileAuth: ProfileAuth;
+    // A typed password: the core stores it as a vault secret with the host.
+    let typedPassword: string | null = null;
     if (auth === "key") {
       if (!keyId) {
         ctx.toast(t("modals.host.selectKey"), "warn");
@@ -774,17 +765,9 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
       profileAuth = { type: "key", keyItemId: keyId };
     } else if (auth === "password") {
       if (newPw.trim()) {
-        // store the entered password as a new vault secret (under an id the
-        // core mints) and reference it
-        let pwItemId: string;
-        try {
-          pwItemId = await api.newItemId(vault, `${label.trim()} pw`);
-          await api.savePassword(vault, pwItemId, newPw);
-        } catch (e) {
-          ctx.toast(apiErrorMessage(e), "err");
-          return;
-        }
-        profileAuth = { type: "vaultPassword", passwordItemId: pwItemId };
+        // The core mints the secret's id and puts it here.
+        typedPassword = newPw;
+        profileAuth = { type: "vaultPassword", passwordItemId: "" };
       } else if (pwId) {
         profileAuth = { type: "vaultPassword", passwordItemId: pwId };
       } else {
@@ -874,78 +857,29 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
     };
 
     try {
-      const profileId = await api.saveConnection(vault, profile);
-
-      // Inline personal binding: link the chosen identity to this host. The uid is
-      // minted by the core on create, so re-read the saved profile to get it.
-      if (auth === "personal" && bindVault && boundIdentity) {
-        try {
-          const uid =
-            edit?.uid ||
-            (await api.listConnections(vault)).find((c) => c.profileId === profileId)?.uid ||
-            "";
-          if (uid) {
-            const dest = await api.personalDestination(
-              profile.host,
-              profile.port,
-              profile.usernameTemplate,
-              profile.jumps,
-              profile.proxy,
-            );
-            const existing = await api.getBinding(bindVault, vault, uid).catch(() => null);
-            await api.setBinding(
-              bindVault,
-              {
-                teamVaultId: vault,
-                profileUid: uid,
-                identityItemId: boundIdentity,
-                destinationPin: dest,
-              },
-              existing !== null,
-            );
-          }
-        } catch (e) {
-          ctx.toast(apiErrorMessage(e), "err");
-        }
-      }
-
-      // Resolve the target group. A pending new group is created here (on save) so
-      // a cancelled modal never leaves an orphan empty group behind.
-      let targetGroupId = groupId;
-      if (groupId === NEW_GROUP && newGroupName.trim()) {
-        // An empty id: the core mints the new group's id and hands it back.
-        targetGroupId = await api.saveGroup(vault, {
-          groupId: "",
-          label: newGroupName.trim(),
-          memberIds: [profileId],
-          parentId: null,
-        });
-      } else if (targetGroupId) {
-        const g = groups.find((x) => x.groupId === targetGroupId);
-        if (g && !g.memberIds.includes(profileId)) {
-          await api.saveGroup(vault, { ...g, memberIds: [...g.memberIds, profileId] });
-        }
-      } else {
-        targetGroupId = ""; // "No group"
-      }
-
-      // Drop the host from every other group. On edit, so a move to another
-      // group (or to none) does not leave it in both. On create too: a group
-      // can still list the id of a deleted host, and a new host reusing that
-      // id would silently inherit that group's colour while this editor said
-      // otherwise.
-      for (const g of groups) {
-        if (g.groupId !== targetGroupId && g.memberIds.includes(profileId)) {
-          await api.saveGroup(vault, {
-            ...g,
-            memberIds: g.memberIds.filter((id) => id !== profileId),
-          });
-        }
-      }
-
+      // One call: the core checks the host's rules, stores a typed password
+      // with it, files it under one group (a pending new group is created
+      // here, on save, so a cancelled modal never leaves an empty one) and
+      // links or re-pins the personal identity.
+      const saved = await api.saveHost(
+        vault,
+        profile,
+        typedPassword,
+        groupChoice(groupId, newGroupName),
+        identityToLink(auth === "personal", bindVault, boundIdentity),
+      );
       await useApp.getState().reloadVault();
       onClose();
       ctx.toast(edit ? t("modals.host.updated") : t("modals.host.saved"), "ok");
+      // Saved, but not all of it: say what is missing rather than nothing.
+      for (const gap of saved.unfinished) {
+        ctx.toast(
+          gap.kind === "identityNotLinked"
+            ? t("modals.host.identityNotLinked", { msg: gap.message })
+            : t("modals.host.oldPasswordKept", { msg: gap.message }),
+          "warn",
+        );
+      }
     } catch (e) {
       ctx.toast(apiErrorMessage(e), "err");
     }

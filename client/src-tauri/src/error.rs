@@ -20,6 +20,9 @@ pub enum ApiError {
     PassphraseRequired,
     /// The passphrase given for an encrypted private key is wrong.
     WrongPassphrase,
+    /// A host save broke one of the host rules; `rule` is its camelCase code
+    /// (`HostRule::code`), `msg` the core's words for it. Nothing was saved.
+    InvalidHost { rule: String, msg: String },
     /// The vault is already a cloud vault (a local-only operation was asked of it).
     AlreadyCloud,
     /// This account can only view the vault (Viewer): the write was refused.
@@ -75,6 +78,10 @@ impl From<FfiError> for ApiError {
             FfiError::AlreadyExists => Self::AlreadyExists,
             FfiError::PassphraseRequired => Self::PassphraseRequired,
             FfiError::WrongPassphrase => Self::WrongPassphrase,
+            FfiError::InvalidHost { rule } => Self::InvalidHost {
+                rule: rule.code().to_owned(),
+                msg: rule.to_string(),
+            },
             FfiError::AlreadyCloud => Self::AlreadyCloud,
             FfiError::ReadOnlyVault => Self::ReadOnlyVault,
             FfiError::NoServer => Self::NoServer,
