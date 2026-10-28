@@ -351,7 +351,7 @@ fn live_e2e_claim_invite_join_and_two_device_sync() {
     let a_fingerprint = core_a.own_fingerprint().unwrap();
     assert_eq!(
         transport_b
-            .trust_vault(&core_b, &waiting.vault_id, Some(&a_fingerprint), false)
+            .trust_vault(&core_b, &waiting.vault_id, &a_fingerprint)
             .expect("B trusts A by the fingerprint A gave"),
         unissh_ffi::FfiTrustOutcome::Trusted,
         "B pins A as the shared vault's genesis owner"

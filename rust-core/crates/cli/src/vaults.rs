@@ -91,7 +91,8 @@ fn list(device: &Device, offline: bool, as_json: bool) -> Res<()> {
             Err(e) => {
                 eprintln!(
                     "unissh: could not ask the server for vaults shared with this account \
-                     ({e}); showing this machine's vaults only"
+                     ({}); showing this machine's vaults only",
+                    one_line(&e.to_string())
                 );
                 None
             }
@@ -215,9 +216,10 @@ fn claim_of(p: &PendingVault, field: impl Fn(&DirectoryEntry) -> Option<&str>) -
 }
 
 /// After `unissh sync`: says how many shared vaults wait, from the server's
-/// catalog minus this machine — one request, nothing inspected. Only a vault
-/// with an owner pinned here but still missing is inspected (that is rare),
-/// so that a server naming a DIFFERENT owner is said loudly. Best effort: a
+/// catalog minus this machine, each inspected as `vaults list` does — so a
+/// vault this account created is not counted, and a server naming a
+/// DIFFERENT owner for a pinned vault is said loudly. Only vaults that are
+/// not on this machine are read, which is usually none. Best effort: a
 /// failure is a warning, the sync itself already went through.
 pub fn name_pending(device: &Device) {
     if let Err(e) = report_pending(device) {
@@ -226,42 +228,39 @@ pub fn name_pending(device: &Device) {
 }
 
 fn report_pending(device: &Device) -> Res<()> {
-    let access = device.access()?;
-    let transport = HttpSyncTransport::new(device.link.base_url.clone(), access.clone());
-    let waiting = waiting_vaults(&device.core, &transport)?;
+    let waiting = pending(device)?;
     if waiting.malformed > 0 {
         eprintln!(
             "unissh: the server listed {} vault(s) under a malformed id; they were ignored",
             waiting.malformed
         );
     }
-    let mut untrusted = 0_usize;
-    for v in &waiting.vaults {
-        if !v.pinned {
-            untrusted = untrusted.saturating_add(1);
-            continue;
-        }
-        let id = one_line(&v.vault_id);
-        let found = inspect_pending(&device.core, &device.link.base_url, &access, &v.vault_id)?;
-        match found.as_ref().map(|p| &p.inspected) {
-            Some(Ok(info)) if info.trust == FfiVaultTrust::PinnedToAnotherOwner => {
-                eprintln!("unissh: {}", another_owner(&id, info));
-            }
-            Some(Ok(_)) => eprintln!(
-                "unissh: vault {id} is trusted but not fetched yet: `unissh vaults trust {id}` \
-                 fetches it"
-            ),
-            Some(Err(e)) => eprintln!(
-                "unissh: vault {id} is trusted here but cannot be verified: {}",
-                one_line(e)
-            ),
-            None => {}
+    let (mut untrusted, mut unverifiable) = (0_usize, 0_usize);
+    for p in &waiting.vaults {
+        let id = one_line(&p.vault_id);
+        match &p.inspected {
+            Ok(info) => match info.trust {
+                FfiVaultTrust::NotPinned => untrusted = untrusted.saturating_add(1),
+                FfiVaultTrust::Pinned => eprintln!(
+                    "unissh: vault {id} is trusted but not fetched yet: `unissh vaults trust \
+                     {id}` fetches it"
+                ),
+                FfiVaultTrust::PinnedToAnotherOwner => {
+                    eprintln!("unissh: {}", another_owner(&id, info));
+                }
+            },
+            Err(_) => unverifiable = unverifiable.saturating_add(1),
         }
     }
     if untrusted > 0 {
         eprintln!(
             "unissh: {untrusted} shared vault(s) wait for you to trust their owner — \
              `unissh vaults list`"
+        );
+    }
+    if unverifiable > 0 {
+        eprintln!(
+            "unissh: {unverifiable} shared vault(s) cannot be verified — `unissh vaults list`"
         );
     }
     Ok(())
@@ -322,9 +321,11 @@ fn confirm(
     given: Option<String>,
 ) -> Res<()> {
     let shown = describe(vault, info);
-    let (expected, confirmed_displayed) = if let Some(fingerprint) = given {
+    // The core pins only against a fingerprint given here: the one the owner
+    // gave, or the one shown and confirmed — never whatever it finds.
+    let expected = if let Some(fingerprint) = given {
         println!("{shown}");
-        (fingerprint, false)
+        fingerprint
     } else {
         let mut tty = Tty::open().map_err(|e| {
             Failure::msg(format!(
@@ -338,7 +339,7 @@ fn confirm(
             "Type or paste the fingerprint the owner gave you (press Enter if you have none): ",
         )?;
         match answer(&typed) {
-            Answer::Fingerprint(fingerprint) => (fingerprint, false),
+            Answer::Fingerprint(fingerprint) => fingerprint,
             Answer::Empty => {
                 tty.say(&displayed(info))?;
                 tty.say("\n")?;
@@ -346,7 +347,7 @@ fn confirm(
                 if answer(&typed) != Answer::Yes {
                     return Err(Failure::msg("not trusted; nothing changed"));
                 }
-                (info.fingerprint.clone(), true)
+                info.fingerprint.clone()
             }
             Answer::Yes | Answer::Other => {
                 return Err(Failure::msg(
@@ -355,19 +356,13 @@ fn confirm(
             }
         }
     };
-    let outcome = transport.trust_vault(
-        &device.core,
-        &vault.vault_id,
-        Some(expected.as_str()),
-        confirmed_displayed,
-    )?;
+    let outcome = transport.trust_vault(&device.core, &vault.vault_id, &expected)?;
     match outcome {
         FfiTrustOutcome::Trusted | FfiTrustOutcome::AlreadyTrusted => Ok(()),
         FfiTrustOutcome::FingerprintMismatch => Err(Failure::msg(
             "that is not the fingerprint of the key that created this vault. Nothing was \
              trusted: someone may be posing as the owner. Check with the owner again",
         )),
-        FfiTrustOutcome::NotConfirmed => Err(Failure::msg("not trusted; nothing changed")),
         FfiTrustOutcome::PinnedToAnotherOwner => Err(Failure::msg(another_owner(
             &one_line(&vault.vault_id),
             info,

@@ -22,7 +22,7 @@
 //! an earlier sync rejected advanced it, so an ordinary sync never sees them
 //! again.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use unissh_storage::{MembershipGrant, MembershipManifest};
 use unissh_sync::SyncObject;
@@ -62,9 +62,6 @@ pub enum FfiTrustOutcome {
     AlreadyTrusted,
     /// The fingerprint given is not the owner's. Nothing was pinned.
     FingerprintMismatch,
-    /// No fingerprint was given and the user did not confirm the one shown.
-    /// Nothing was pinned.
-    NotConfirmed,
     /// Another owner is pinned for this vault here, and the server now names
     /// a different one. Nothing was changed; the user must be told loudly.
     PinnedToAnotherOwner,
@@ -144,8 +141,14 @@ struct Membership {
     /// Distinct grants to THIS account by epoch, at most
     /// [`MAX_OWN_GRANTS_PER_EPOCH`] each; grants to others are not kept.
     grants: BTreeMap<u64, Vec<MembershipGrant>>,
-    /// An epoch the server served too many manifests or grants for.
-    crowded: Option<u64>,
+    /// An epoch the server served too many manifests for. Every manifest
+    /// epoch is on the chain (1 up to the highest served), so any of them
+    /// refuses the vault.
+    crowded_manifests: Option<u64>,
+    /// The epochs the server served too many grants to this account for.
+    /// Only the latest epoch's grants are read, so only a crowded latest
+    /// epoch refuses the vault: re-grants at an older epoch do not.
+    crowded_grants: BTreeSet<u64>,
 }
 
 impl Membership {
@@ -162,7 +165,7 @@ impl Membership {
                     let epoch = m.key_epoch;
                     let at = self.manifests.entry(epoch).or_default();
                     if !keep(at, m, MAX_MANIFESTS_PER_EPOCH) {
-                        self.crowded.get_or_insert(epoch);
+                        self.crowded_manifests.get_or_insert(epoch);
                     }
                 }
             } else if let SyncObject::MembershipGrant(g) = object {
@@ -170,7 +173,7 @@ impl Membership {
                     let epoch = g.key_epoch;
                     let at = self.grants.entry(epoch).or_default();
                     if !keep(at, g, MAX_OWN_GRANTS_PER_EPOCH) {
-                        self.crowded.get_or_insert(epoch);
+                        self.crowded_grants.insert(epoch);
                     }
                 }
             }
@@ -247,9 +250,9 @@ fn inspect(
     vault_id: &[u8],
     membership: &Membership,
 ) -> Result<Inspected, FfiError> {
-    if let Some(epoch) = membership.crowded {
+    if let Some(epoch) = membership.crowded_manifests {
         return Err(refused(&format!(
-            "the server serves too many membership objects for it at epoch {epoch}"
+            "the server serves too many manifests for it at epoch {epoch}"
         )));
     }
     let owner = genesis_author(vault_id, membership)?;
@@ -281,6 +284,12 @@ fn inspect(
     )
     .map_err(|e| refused(&format!("its membership chain does not verify ({e})")))?;
 
+    if membership.crowded_grants.contains(&members.epoch()) {
+        return Err(refused(&format!(
+            "the server serves too many grants to this account for it at epoch {}",
+            members.epoch()
+        )));
+    }
     let grants = membership
         .grants
         .get(&members.epoch())
@@ -368,32 +377,25 @@ impl Core {
     /// genesis owner in one step under the core's state lock, so what is
     /// pinned is exactly what was compared.
     ///
-    /// - `expected_fingerprint` — the owner's fingerprint as the user got it
-    ///   from them (spaces, `:`, `-` and case ignored). It is pinned only if it
-    ///   is the vault creator's. A caller whose user confirmed a fingerprint it
-    ///   DISPLAYED passes that displayed value here too, with
-    ///   `confirmed_displayed`, so a server that changes its answer in between
-    ///   is caught.
-    /// - `None` with `confirmed_displayed` — pins whatever the inspection
-    ///   finds. Weaker: prefer passing the value shown.
-    /// - `None` without it — [`FfiTrustOutcome::NotConfirmed`].
+    /// `expected_fingerprint` is always required: the owner's fingerprint as
+    /// the user got it from them, or the one the caller DISPLAYED and the user
+    /// confirmed (spaces, `:`, `-` and case ignored). The owner is pinned only
+    /// if it is the vault creator's, so a server that changes its answer
+    /// between the display and the pin is caught; nothing pins "whatever the
+    /// inspection finds".
     ///
     /// Refused (an error) for a vault this account created, a broken chain,
     /// no grant, or a value that is not a fingerprint. Requires unlock.
     pub fn trust_shared_vault_paged(
         &self,
         vault_id: &str,
-        expected_fingerprint: Option<&str>,
-        confirmed_displayed: bool,
+        expected_fingerprint: &str,
         next_page: impl FnMut(u64) -> Result<VaultPage, FfiError>,
     ) -> Result<FfiTrustOutcome, FfiError> {
         let vid = decode_vid(vault_id)?;
-        let expected = match expected_fingerprint {
-            Some(typed) => Some(normalize_fingerprint(typed).ok_or_else(|| {
-                FfiError::other("that is not a fingerprint: a fingerprint is 64 hex digits")
-            })?),
-            None => None,
-        };
+        let expected = normalize_fingerprint(expected_fingerprint).ok_or_else(|| {
+            FfiError::other("that is not a fingerprint: a fingerprint is 64 hex digits")
+        })?;
         let membership = self.membership_of(&vid, next_page)?;
         self.with_state(|state| {
             let info = match inspect(state, &vid, &membership)? {
@@ -411,13 +413,8 @@ impl Core {
                 FfiVaultTrust::Pinned => return Ok(FfiTrustOutcome::AlreadyTrusted),
                 FfiVaultTrust::NotPinned => {}
             }
-            match expected {
-                Some(fp) if fp != info.fingerprint => {
-                    return Ok(FfiTrustOutcome::FingerprintMismatch)
-                }
-                Some(_) => {}
-                None if confirmed_displayed => {}
-                None => return Ok(FfiTrustOutcome::NotConfirmed),
+            if expected != info.fingerprint {
+                return Ok(FfiTrustOutcome::FingerprintMismatch);
             }
             let owner = hex::decode(&info.owner_ed25519_hex).map_err(FfiError::other)?;
             pin_and_verify_vault_anchor(&state.storage, &vid, &owner).map_err(map_vault_err)?;
@@ -520,13 +517,7 @@ pub(crate) fn trust_objects(
     core: &Core,
     vault_id: &str,
     objects: Vec<Vec<u8>>,
-    expected_fingerprint: Option<&str>,
-    confirmed_displayed: bool,
+    expected_fingerprint: &str,
 ) -> Result<FfiTrustOutcome, FfiError> {
-    core.trust_shared_vault_paged(
-        vault_id,
-        expected_fingerprint,
-        confirmed_displayed,
-        one_page(objects),
-    )
+    core.trust_shared_vault_paged(vault_id, expected_fingerprint, one_page(objects))
 }

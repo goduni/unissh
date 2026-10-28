@@ -184,8 +184,7 @@ fn trust(member: &Core, team: &Team, fingerprint: &str) -> FfiTrustOutcome {
         .trust_shared_vault(
             team.vault_id.clone(),
             team.server.vault_objects(&team.vault_id),
-            Some(fingerprint.to_owned()),
-            false,
+            fingerprint.to_owned(),
         )
         .unwrap()
 }

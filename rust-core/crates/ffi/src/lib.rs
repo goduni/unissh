@@ -2276,24 +2276,17 @@ impl Core {
     /// **Trusts the owner of a vault shared with this account**: inspects
     /// `objects` (as [`Core::inspect_shared_vault`]), compares the
     /// fingerprint and pins the owner in one step (see
-    /// [`Core::trust_shared_vault_paged`] for the rules of
-    /// `expected_fingerprint` and `confirmed_displayed`). Pull the vault after
+    /// [`Core::trust_shared_vault_paged`]: `expected_fingerprint` is always
+    /// required, typed in or the one displayed). Pull the vault after
     /// [`FfiTrustOutcome::Trusted`] or [`FfiTrustOutcome::AlreadyTrusted`].
     /// Requires unlock.
     pub fn trust_shared_vault(
         &self,
         vault_id: String,
         objects: Vec<Vec<u8>>,
-        expected_fingerprint: Option<String>,
-        confirmed_displayed: bool,
+        expected_fingerprint: String,
     ) -> Result<FfiTrustOutcome, FfiError> {
-        shared_vault::trust_objects(
-            self,
-            &vault_id,
-            objects,
-            expected_fingerprint.as_deref(),
-            confirmed_displayed,
-        )
+        shared_vault::trust_objects(self, &vault_id, objects, &expected_fingerprint)
     }
 
     /// This account's own fingerprint (`member_fingerprint` of its Ed25519

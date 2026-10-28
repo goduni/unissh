@@ -160,9 +160,10 @@ impl HttpSyncTransport {
     /// memory whole.
     ///
     /// Unlike `delta_since`, a page that cannot be read — a transport error, a
-    /// non-2xx, bad JSON, or "more follows" without a usable cursor — is an
-    /// error: the targeted pull and the share-accept inspection must not take
-    /// a cut-short set for the whole vault.
+    /// non-2xx, bad JSON, an object that is not base64, or "more follows"
+    /// without a usable cursor — is an error: the targeted pull and the
+    /// share-accept inspection must not take a cut-short set for the whole
+    /// vault.
     pub fn vault_delta_page(&self, vault_id_hex: &str, cursor: u64) -> Result<VaultPage, FfiError> {
         let failed = |why: String| FfiError::Other {
             msg: format!("the server's objects for this vault could not be read: {why}"),
@@ -181,8 +182,9 @@ impl HttpSyncTransport {
             .map_err(|e| failed(format!("bad JSON: {e}")))?;
         let objects = items_of(&v)
             .filter_map(|item| item.get("object").and_then(Value::as_str))
-            .filter_map(|obj_b64| client::unb64(obj_b64).ok())
-            .collect();
+            .map(client::unb64)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| failed("an object on the page is not base64".to_owned()))?;
         let next = next_page(&v, cursor);
         let more = v.get("has_more").and_then(Value::as_bool).unwrap_or(false);
         if more && next.is_none() {
@@ -232,15 +234,11 @@ impl HttpSyncTransport {
         &self,
         core: &Core,
         vault_id_hex: &str,
-        expected_fingerprint: Option<&str>,
-        confirmed_displayed: bool,
+        expected_fingerprint: &str,
     ) -> Result<FfiTrustOutcome, FfiError> {
-        core.trust_shared_vault_paged(
-            vault_id_hex,
-            expected_fingerprint,
-            confirmed_displayed,
-            |cursor| self.vault_delta_page(vault_id_hex, cursor),
-        )
+        core.trust_shared_vault_paged(vault_id_hex, expected_fingerprint, |cursor| {
+            self.vault_delta_page(vault_id_hex, cursor)
+        })
     }
 }
 
@@ -468,6 +466,19 @@ mod tests {
             "the rejected request is retried with the fresh token, and so is the next one"
         );
         assert_eq!(*asked.lock().unwrap(), 1, "one rotation for the whole sync");
+    }
+
+    /// An object that does not decode fails the whole page instead of being
+    /// dropped: a vault page with a hole in it is not the vault.
+    #[test]
+    fn a_vault_page_with_an_object_that_is_not_base64_is_an_error() {
+        let (base, _) = serve(vec![(
+            "200 OK",
+            r#"{"items":[{"object":"AAAA"},{"object":"not base64!"}],"has_more":false}"#,
+        )]);
+        let transport = HttpSyncTransport::with_reauth(base, "token".to_owned(), None);
+
+        assert!(transport.vault_delta_page(&"ab".repeat(16), 0).is_err());
     }
 
     #[test]
