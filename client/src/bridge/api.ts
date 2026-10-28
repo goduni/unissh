@@ -287,7 +287,7 @@ export const saveHost = (
   invoke<HostSaved>("save_host", { vaultId, profile, newPassword, group, identity }).then((saved) => {
     vaultMutated(vaultId);
     // The identity's binding lives in its own vault, which changed too.
-    if (identity && identity.vaultId !== vaultId) vaultMutated(identity.vaultId);
+    if (saved.bindingVaultId && saved.bindingVaultId !== vaultId) vaultMutated(saved.bindingVaultId);
     return saved;
   });
 export const listConnections = (vaultId: string) =>

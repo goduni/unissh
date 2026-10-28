@@ -1148,7 +1148,7 @@ export const en = {
       "selectKey": "Select an SSH key",
       "enterOrSelectPassword": "Enter a password or pick a saved one",
       "identityNotLinked": "Host saved, but your identity is not linked to it: {{msg}}",
-      "oldPasswordKept": "Host saved, but the password it used before could not be removed: {{msg}}",
+      "identityPinKept": "Host saved, but your identity is still pinned to the address it was linked at, so connecting with it is refused as redirected: {{msg}}",
       "saved": "Host saved",
       "updated": "Host updated",
       "deleted": "Host deleted"

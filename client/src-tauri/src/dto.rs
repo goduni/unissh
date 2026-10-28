@@ -1414,12 +1414,10 @@ impl From<IdentityLink> for ffi::IdentityLink {
 pub enum HostSaveGap {
     /// The identity is not linked to the host (or not re-pinned).
     IdentityNotLinked { message: String },
-    /// The password a typed one replaced is still in the vault.
-    #[serde(rename_all = "camelCase")]
-    OldPasswordKept {
-        password_item_id: String,
-        message: String,
-    },
+    /// The identity is still pinned to an older address (the host had been
+    /// pointed elsewhere before this save): its connect is refused as
+    /// redirected until it is linked again.
+    IdentityPinKept { pinned: String, message: String },
 }
 
 /// A saved host (`Core::save_host`).
@@ -1431,7 +1429,8 @@ pub struct HostSaved {
     pub password_item_id: Option<String>,
     pub group_id: Option<String>,
     pub identity_linked: bool,
-    pub removed_password_item_id: Option<String>,
+    /// The vault the identity binding was written to, when the save wrote one.
+    pub binding_vault_id: Option<String>,
     pub unfinished: Vec<HostSaveGap>,
 }
 impl From<ffi::HostSaved> for HostSaved {
@@ -1442,7 +1441,7 @@ impl From<ffi::HostSaved> for HostSaved {
             password_item_id: s.password_item_id,
             group_id: s.group_id,
             identity_linked: s.identity_linked,
-            removed_password_item_id: s.removed_password_item_id,
+            binding_vault_id: s.binding_vault_id,
             unfinished: s
                 .unfinished
                 .into_iter()
@@ -1450,13 +1449,9 @@ impl From<ffi::HostSaved> for HostSaved {
                     ffi::HostSaveGap::IdentityNotLinked { message } => {
                         HostSaveGap::IdentityNotLinked { message }
                     }
-                    ffi::HostSaveGap::OldPasswordKept {
-                        password_item_id,
-                        message,
-                    } => HostSaveGap::OldPasswordKept {
-                        password_item_id,
-                        message,
-                    },
+                    ffi::HostSaveGap::IdentityPinKept { pinned, message } => {
+                        HostSaveGap::IdentityPinKept { pinned, message }
+                    }
                 })
                 .collect(),
         }

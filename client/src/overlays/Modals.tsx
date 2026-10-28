@@ -875,7 +875,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
         ctx.toast(
           gap.kind === "identityNotLinked"
             ? t("modals.host.identityNotLinked", { msg: gap.message })
-            : t("modals.host.oldPasswordKept", { msg: gap.message }),
+            : t("modals.host.identityPinKept", { msg: gap.message }),
           "warn",
         );
       }

@@ -116,20 +116,23 @@ export interface IdentityLink {
 /** What a host save could not finish after the host itself was stored. */
 export type HostSaveGap =
   | { kind: "identityNotLinked"; message: string }
-  | { kind: "oldPasswordKept"; passwordItemId: string; message: string };
+  /** Still pinned to an older address (the host had been pointed elsewhere
+   *  before this save): connecting with the identity is refused as redirected. */
+  | { kind: "identityPinKept"; pinned: string; message: string };
 
 /** The core's answer to `saveHost` (`Core::save_host`). */
 export interface HostSaved {
   profileId: string;
   uid: string;
-  /** The secret stored for a typed password. */
+  /** The secret a typed password went into: the host's own (a new version of
+   *  it, the old one kept in its history) or a new one. */
   passwordItemId: string | null;
   /** The group the host is now in, when the save placed it in one. */
   groupId: string | null;
   /** An identity is linked and pinned to where the host points now. */
   identityLinked: boolean;
-  /** The password a typed one replaced, removed as nothing else used it. */
-  removedPasswordItemId: string | null;
+  /** The vault the identity binding was written to (it changed too). */
+  bindingVaultId: string | null;
   /** Empty when everything was saved. */
   unfinished: HostSaveGap[];
 }
