@@ -936,22 +936,25 @@ fn span(seconds: u64) -> String {
     }
 }
 
-/// What is left of a grant, for a person: whole minutes rounded up, in its two
-/// largest units ("8 h left", "2 d 3 h left", "45 m left").
+/// What is left of a grant, for a person, as the desktop's `formatDuration`
+/// shows it: whole minutes rounded up, in days, hours and minutes, each part
+/// that is not zero ("8 h left", "2 d 3 h 15 m left", "45 m left").
 fn left(seconds: u64) -> String {
     if seconds == 0 {
         return "expired".to_owned();
     }
     let minutes = seconds.div_ceil(60);
-    let (days, hours, minutes) = (minutes / 1440, minutes / 60 % 24, minutes % 60);
-    let span = match (days, hours, minutes) {
-        (0, 0, m) => format!("{m} m"),
-        (0, h, 0) => format!("{h} h"),
-        (0, h, m) => format!("{h} h {m} m"),
-        (d, 0, _) => format!("{d} d"),
-        (d, h, _) => format!("{d} d {h} h"),
-    };
-    format!("{span} left")
+    let parts = [
+        (minutes / 1440, "d"),
+        (minutes / 60 % 24, "h"),
+        (minutes % 60, "m"),
+    ];
+    let span: Vec<String> = parts
+        .iter()
+        .filter(|(value, _)| *value > 0)
+        .map(|(value, unit)| format!("{value} {unit}"))
+        .collect();
+    format!("{} left", span.join(" "))
 }
 
 /// `30m`, `8h`, `7d` in seconds: a positive whole number and a unit, as the
@@ -1055,13 +1058,14 @@ mod tests {
         }
     }
 
-    /// `grants list` says what is left as a person would: rounded up to the
-    /// minute, in its two largest units.
+    /// `grants list` says what is left as the desktop does: rounded up to the
+    /// minute, in days, hours and minutes, without the parts that are zero.
     #[test]
     fn what_is_left_of_a_grant_reads_as_hours_and_minutes() {
         assert_eq!(left(28_793), "8 h left");
         assert_eq!(left(5_400), "1 h 30 m left");
-        assert_eq!(left(187_500), "2 d 4 h left");
+        assert_eq!(left(187_500), "2 d 4 h 5 m left");
+        assert_eq!(left(86_400), "1 d left");
         assert_eq!(left(30), "1 m left");
         assert_eq!(left(0), "expired");
     }

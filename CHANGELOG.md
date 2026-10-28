@@ -82,11 +82,11 @@ starts with `0.`:
   It prints a line per forward once it listens, fails as a whole if one cannot
   open, and closes them cleanly on Ctrl-C or SIGTERM.
 - `unissh run` runs one command on many hosts, as the app's Fleet does: by tag,
-  by group (with the groups listed as its members, not its subgroups, as in
-  the app) or by name, a bounded number at a time with
-  a per-host deadline, each output line led by the host's label (or `--json`),
-  a summary at the end and a non-zero exit when any host failed; `--dry-run`
-  shows the plan without connecting. `{{name}}` parameters in the command are
+  by group (with the hosts of groups listed as its members, but not of its
+  subgroups) or by name, a bounded number at a time with a per-host deadline,
+  each output line led by the host's label (or `--json`), a summary at the end
+  and a non-zero exit when any host failed; `--dry-run` shows the plan without
+  connecting. `{{name}}` parameters in the command are
   filled as the app's Fleet fills them (`--set name=value`, else asked on the
   terminal). `unissh snippets list` and `unissh snippets run` run saved
   snippets the same way.
@@ -112,10 +112,11 @@ starts with `0.`:
   will do, then take the master password typed on the terminal as the
   confirmation, and run only in a terminal's foreground. On Linux it pauses on
   a logind session lock, `LockedHint` or sleep, following the session
-  `$XDG_SESSION_ID` names (so a tmux pane follows the login it was started in)
-  and naming the session in a warning when it had to guess. An agent with a shell as you can
-  do whatever the vaults allow with a password file, and can catch a typed
-  password: the CLI's grants cannot constrain it. In the core, the MCP crate
+  `$XDG_SESSION_ID` names when it is your own (so a tmux pane follows the login
+  it was started in), and naming the session in a warning when it had to fall
+  back to your graphical session or follows another one. An agent with a shell
+  as you can do whatever the vaults allow with a password file, and can catch a
+  typed password: the CLI's grants cannot constrain it. In the core, the MCP crate
   gains a stdio transport (`serve_stdio`, rmcp `transport-io`), and the broker
   gains `pending_approvals`, `is_pending`, `approval_unavailable`,
   `set_manual_approval_available`, `made_recordings`, `PromptFactory::can_ask`,

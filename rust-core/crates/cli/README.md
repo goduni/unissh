@@ -88,8 +88,8 @@ A copy without a master password unlocks again with its kept Secret Key alone.
 with a tag (`--tag`, repeated for hosts with every one), the hosts of a group
 (`--group`, with the hosts of groups listed as its members, but not those of
 its subgroups: groups whose parent it is, as the app's Fleet leaves them out
-too), or hosts by name. Each host connects as
-`unissh ssh` would connect to it, up to `--parallel` (8) at a time, and the
+too), or hosts by name. Each host connects as `unissh ssh` would connect to
+it, up to `--parallel` (8) at a time, and the
 command then has `--timeout` (30) seconds to finish; 0 means no limit. Each
 line of output is led by the host's label (`web | ...`), stdout to stdout and
 stderr to stderr, as each host finishes, and a summary line ends the run.
@@ -125,8 +125,9 @@ file that exists is replaced only with `--force`. Symbolic links inside the tree
 are not followed, and they and anything else that is not a regular file or a
 directory (sockets, pipes, devices) are named as skipped; the app's SFTP pane
 copies links as links, the CLI does not copy them at all. A file that fails is
-named (a download by its remote path) and the copy goes on; the command then exits 1. Unlike `scp`, a download
-creates the destination's missing parent directories. A remote name this system
+named (a download by its remote path) and the copy goes on; the command then
+exits 1. Unlike `scp`, a download creates the destination's missing parent
+directories. A remote name this system
 cannot hold (on Windows, one with `\` or `:`) is skipped, and on macOS and
 Windows so is a name that differs from another in its directory only in case.
 A copy stopped with Ctrl-C can leave `.unissh-part` files behind.
@@ -327,8 +328,10 @@ unissh mcp --http [--port 8765]                      # loopback HTTP, in a termi
   asked about there, on `/dev/tty`: the exact command, working directory,
   environment and stdin in escaped string notation, the host, and the application
   asking. Only a typed `yes` allows it; anything else denies, and an unanswered
-  question expires after two minutes, as in the app (the prompt says by when, in UTC). Sign-in prompts of the hosts
-  an agent connects to are asked on the same terminal, one question at a time.
+  question expires after two minutes, as in the app. The prompt says by when, in
+  UTC, and how long that is ("answer by 14:32:05 UTC, within 2 min"). Sign-in
+  prompts of the hosts an agent connects to are asked on the same terminal, one
+  question at a time.
 - **Grants** mirror the desktop's access editor: hosts (named as for `unissh ssh`,
   across vaults), an expiry (`--for 30m|8h|7d`, default none), confirmation or
   `--trusted`, the longest a command may run (`--command-limit`, 1m–24h, default
@@ -361,12 +364,16 @@ unissh mcp --http [--port 8765]                      # loopback HTTP, in a termi
   not locked. Only logind is heard: a signal from any other process is ignored. A
   desktop that locks without telling logind does not pause it, and on macOS and
   Windows nothing is observed. Without logind it logs a warning at start. The
-  session it follows is the one `$XDG_SESSION_ID` names, else the one logind gives
-  for the process or, failing that, the user's graphical session; it then names that
-  session in a warning. Inside tmux, a pane keeps the `$XDG_SESSION_ID` of the
-  login the tmux server started in, so it follows that session, not the terminal
-  you attach from later: to follow another session, start `unissh mcp` with
-  `XDG_SESSION_ID` set to its id (see `loginctl`).
+  session it follows is the one `$XDG_SESSION_ID` names, when that is a session of
+  your own user that is not closing; else the one logind gives for the process;
+  failing that, the user's graphical session. A warning names the session it
+  follows when it is that graphical session (a guess), when `$XDG_SESSION_ID`
+  named none of yours, and when the named session is not your graphical session:
+  an ssh login, or a tmux server started from one, may never lock, and locking
+  the desktop does not lock it. Inside tmux, a pane keeps the `$XDG_SESSION_ID`
+  of the login the tmux server started in, so it follows that session, not the
+  terminal you attach from later: to follow another session, start `unissh mcp`
+  with `XDG_SESSION_ID` set to its id (see `loginctl`).
 - **Lifetime.** The vaults are unlocked for the life of the process (the interactive
   list's idle lock does not apply). It stops when the agent closes stdin, or on
   Ctrl-C, SIGTERM or SIGHUP; access is revoked before the transport stops, recorded

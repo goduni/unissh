@@ -117,6 +117,14 @@ fn clock_utc(at: SystemTime) -> String {
     )
 }
 
+/// How long is left to answer, coarsely: "2 min", or "45 s" under a minute.
+fn within(left: Duration) -> String {
+    match left.as_secs() {
+        s if s >= 60 => format!("{} min", s.div_ceil(60)),
+        s => format!("{s} s"),
+    }
+}
+
 /// How a question ended.
 #[derive(PartialEq, Eq)]
 enum Asked {
@@ -147,9 +155,11 @@ fn ask(
         tty.say(&question(request).replace('\n', "\r\n"))?;
         // A clock time, not a count that would go stale on screen; counted
         // from the deadline, since waiting for the terminal took some of it.
+        let left = deadline.saturating_duration_since(Instant::now());
         let prompt = format!(
-            "Allow it? Type yes to allow, anything else denies (answer by {}): ",
-            clock_utc(SystemTime::now() + deadline.saturating_duration_since(Instant::now()))
+            "Allow it? Type yes to allow, anything else denies (answer by {}, within {}): ",
+            clock_utc(SystemTime::now() + left),
+            within(left)
         );
         let outcome = match tty.line_until(&prompt, true, deadline, &gone) {
             Ok(Some(text)) => {
@@ -336,7 +346,7 @@ pub fn log_to_stderr(verbose: bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{allows, clock_utc, passes, question};
+    use super::{allows, clock_utc, passes, question, within};
     use std::time::Duration;
     use unissh_automation::{PendingApproval, TargetInfo};
     use zeroize::Zeroizing;
@@ -417,5 +427,7 @@ mod tests {
     fn the_approval_deadline_reads_as_a_clock_time() {
         let at = std::time::UNIX_EPOCH + Duration::from_secs(20_000 * 86_400 + 52_325);
         assert_eq!(clock_utc(at), "14:32:05 UTC");
+        assert_eq!(within(Duration::from_secs(120)), "2 min");
+        assert_eq!(within(Duration::from_secs(45)), "45 s");
     }
 }

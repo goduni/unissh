@@ -95,22 +95,30 @@ pub enum SessionSource<'a> {
 }
 
 impl SessionSource<'_> {
-    /// Whether the session is only a guess at this process's own: anything
-    /// but the session its environment names. A watcher says which session it
-    /// follows then, so that a wrong one can be noticed.
+    /// Whether the session is the imprecise guess: the user's display session,
+    /// taken because nothing named or found this process's own. A watcher says
+    /// which session it follows then, so that a wrong one can be noticed.
     pub const fn is_fallback(self) -> bool {
-        !matches!(self, Self::Environment(_))
+        matches!(self, Self::Lookup(SessionLookup::UserDisplay))
     }
 }
 
 /// The order a watcher looks its session up in: the session `$XDG_SESSION_ID`
-/// names (`xdg_session_id`; unset or empty is none), then [`SESSION_LOOKUPS`].
+/// names (`xdg_session_id`; the caller passes `None` for an unset or empty
+/// one), then [`SESSION_LOOKUPS`].
 pub fn session_sources(xdg_session_id: Option<&str>) -> impl Iterator<Item = SessionSource<'_>> {
     xdg_session_id
-        .filter(|id| !id.is_empty())
         .map(SessionSource::Environment)
         .into_iter()
         .chain(SESSION_LOOKUPS.into_iter().map(SessionSource::Lookup))
+}
+
+/// Whether the session `$XDG_SESSION_ID` names may be followed, from its
+/// `User` property's uid (`user`) and its `State`: only a session of this
+/// process's own user (`uid`) that is not closing. An inherited or planted id
+/// may name anyone's session, or one on its way out; that is a failed lookup.
+pub fn named_session_is_ours(user: u32, state: &str, uid: u32) -> bool {
+    user == uid && state != "closing"
 }
 
 /// The session id in a session object's path, as `loginctl` shows it: the
@@ -122,7 +130,7 @@ pub fn session_id(path: &str) -> String {
     while let Some((&first, tail)) = rest.split_first() {
         let escaped = tail
             .get(..2)
-            .filter(|_| first == b'_')
+            .filter(|hex| first == b'_' && hex.iter().all(u8::is_ascii_hexdigit))
             .and_then(|hex| std::str::from_utf8(hex).ok())
             .and_then(|hex| u8::from_str_radix(hex, 16).ok());
         match escaped {
@@ -259,9 +267,9 @@ impl Logind {
 #[cfg(test)]
 mod tests {
     use super::{
-        display_session, locked_after_wake, session_id, session_sources, Header, Heard, Logind,
-        SessionLookup, SessionSource, WakeCheck, MANAGER, MANAGER_PATH, PROPERTIES, SESSION,
-        SESSION_LOOKUPS,
+        display_session, locked_after_wake, named_session_is_ours, session_id, session_sources,
+        Header, Heard, Logind, SessionLookup, SessionSource, WakeCheck, MANAGER, MANAGER_PATH,
+        PROPERTIES, SESSION, SESSION_LOOKUPS,
     };
 
     const OWNER: &str = ":1.7";
@@ -423,8 +431,8 @@ mod tests {
         assert_eq!(display_session("2", "/"), None);
     }
 
-    /// The session `$XDG_SESSION_ID` names comes first and is the only one that
-    /// is not a fallback; unset or empty, the lookups alone are tried.
+    /// The session `$XDG_SESSION_ID` names comes first; of the rest, only the
+    /// user's display session is the imprecise fallback.
     #[test]
     fn the_environment_session_comes_first() {
         let lookups = SESSION_LOOKUPS.map(SessionSource::Lookup);
@@ -432,9 +440,21 @@ mod tests {
         with_env.extend(lookups);
         assert_eq!(session_sources(Some("4")).collect::<Vec<_>>(), with_env);
         assert_eq!(session_sources(None).collect::<Vec<_>>(), lookups);
-        assert_eq!(session_sources(Some("")).collect::<Vec<_>>(), lookups);
-        assert!(!SessionSource::Environment("4").is_fallback());
-        assert!(lookups.iter().all(|source| source.is_fallback()));
+        let fallbacks: Vec<_> = with_env.into_iter().filter(|s| s.is_fallback()).collect();
+        assert_eq!(
+            fallbacks,
+            [SessionSource::Lookup(SessionLookup::UserDisplay)]
+        );
+    }
+
+    /// The session `$XDG_SESSION_ID` names is followed only when it is the
+    /// user's own and not closing.
+    #[test]
+    fn a_named_session_is_followed_only_when_it_is_ours() {
+        assert!(named_session_is_ours(1000, "active", 1000));
+        assert!(named_session_is_ours(1000, "online", 1000));
+        assert!(!named_session_is_ours(0, "active", 1000));
+        assert!(!named_session_is_ours(1000, "closing", 1000));
     }
 
     /// A session path names its session as `loginctl` does.
@@ -443,6 +463,7 @@ mod tests {
         assert_eq!(session_id("/org/freedesktop/login1/session/_34"), "4");
         assert_eq!(session_id("/org/freedesktop/login1/session/c2"), "c2");
         assert_eq!(session_id("/org/freedesktop/login1/session/_312"), "12");
+        assert_eq!(session_id("/org/freedesktop/login1/session/_+1"), "_+1");
     }
 
     /// A wake resumes only on a lock screen known to be down: a failed or
