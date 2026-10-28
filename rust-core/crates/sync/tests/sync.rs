@@ -9,9 +9,9 @@ use unissh_crypto::KdfParams;
 use unissh_keychain::{create_account, UnlockedKeyset};
 use unissh_storage::{Storage, SyncTarget};
 use unissh_sync::{
-    apply_pulled_objects, forget_push_refusals, pull_cursor_key, reset_pull_cursor, sync_pull,
-    sync_push, sync_push_vault_data, InMemoryTransport, RejectReason, SyncContext, SyncError,
-    SyncObject, SyncTransport,
+    apply_pulled_objects, discard_unpushable, forget_push_refusals, pull_cursor_key,
+    reset_pull_cursor, sync_pull, sync_push, sync_push_as, sync_push_vault_data, InMemoryTransport,
+    RejectReason, SyncContext, SyncError, SyncObject, SyncTransport, UnpushableReason,
 };
 use unissh_vault::{sign_account_state, Vault};
 
@@ -949,5 +949,181 @@ fn failed_request_does_not_resend_what_was_already_delivered() {
     assert_eq!(
         server.item_ids(),
         vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]
+    );
+}
+
+/// A server whose write policy refuses the items with one id, as
+/// `POST /v1/sync/push` refuses a Viewer's item: the WHOLE request is refused
+/// with [`SyncError::Forbidden`], without saying which object it was.
+struct ForbiddingServer {
+    inner: InMemoryTransport,
+    refused_item: &'static [u8],
+    requests: usize,
+}
+
+impl ForbiddingServer {
+    fn new(refused_item: &'static [u8]) -> Self {
+        Self {
+            inner: InMemoryTransport::new(),
+            refused_item,
+            requests: 0,
+        }
+    }
+
+    /// Ids of the items the server holds, in the order it accepted them.
+    fn item_ids(&self) -> Vec<Vec<u8>> {
+        self.inner
+            .delta_since(0)
+            .into_iter()
+            .filter_map(|(_, o)| {
+                if let SyncObject::Item(i) = o {
+                    Some(i.item_id)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+}
+
+impl SyncTransport for ForbiddingServer {
+    fn push_objects(&mut self, objects: &[SyncObject]) -> Result<Vec<u64>, SyncError> {
+        self.requests += 1;
+        let refused = objects
+            .iter()
+            .any(|o| matches!(o, SyncObject::Item(i) if i.item_id == self.refused_item));
+        if refused {
+            return Err(SyncError::Forbidden);
+        }
+        self.inner.push_objects(objects)
+    }
+    fn delta_since(&self, cursor: u64) -> Vec<(u64, SyncObject)> {
+        self.inner.delta_since(cursor)
+    }
+    fn report_version(&self) -> u64 {
+        self.inner.report_version()
+    }
+}
+
+/// A bound cloud vault with the items `viewer-edit` and `fine`, both dirty.
+fn vault_with_a_refused_item(db_key: &[u8; 32]) -> (Storage, UnlockedKeyset) {
+    let (s, k) = account(db_key);
+    let v =
+        Vault::create_with_target(&s, &k, b"vault-1".to_vec(), b"name", SyncTarget::Cloud).unwrap();
+    v.put_item(b"viewer-edit", 1, b"edit").unwrap();
+    v.put_item(b"fine", 1, b"ok").unwrap();
+    s.bind_unbound_cloud_vaults(TENANT).unwrap();
+    (s, k)
+}
+
+#[test]
+fn item_the_server_refuses_as_not_permitted_no_longer_wedges_the_push() {
+    // #166: one refused item failed every push of the device, so nothing else
+    // it changed (nor its account state or audit) ever reached the server.
+    let (s, _k) = vault_with_a_refused_item(&[40_u8; 32]);
+    let mut server = ForbiddingServer::new(b"viewer-edit");
+
+    let report = sync_push(&mut server, &s, TENANT).unwrap();
+
+    assert_eq!(report.pushed, 2, "the vault record and the other item");
+    assert_eq!(server.item_ids(), vec![b"fine".to_vec()]);
+    assert_eq!(report.unpushable.len(), 1, "{:?}", report.unpushable);
+    let left_out = &report.unpushable[0];
+    assert_eq!(
+        (left_out.item_id.as_slice(), left_out.reason),
+        (b"viewer-edit".as_slice(), UnpushableReason::ServerRefused),
+        "the refused item is named, with the reason"
+    );
+}
+
+#[test]
+fn item_refused_as_not_permitted_is_not_sent_again_until_the_refusal_is_forgotten() {
+    let (s, _k) = vault_with_a_refused_item(&[41_u8; 32]);
+    let mut server = ForbiddingServer::new(b"viewer-edit");
+    let first = sync_push(&mut server, &s, TENANT).unwrap();
+    let requests = server.requests;
+
+    let again = sync_push(&mut server, &s, TENANT).unwrap();
+    assert_eq!(server.requests, requests, "no request was sent");
+    assert_eq!(again.unpushable, first.unpushable, "still reported");
+
+    // The account's role was raised; the user asks for a retry.
+    server.refused_item = b"none";
+    forget_push_refusals(&s, TENANT).unwrap();
+    let retry = sync_push(&mut server, &s, TENANT).unwrap();
+    assert_eq!(retry.pushed, 1, "the item went up");
+    assert!(retry.unpushable.is_empty(), "{:?}", retry.unpushable);
+}
+
+#[test]
+fn item_its_author_may_not_write_is_left_out_without_a_request() {
+    // The check every other member makes on pull: in a vault pinned to another
+    // owner, where no membership this device holds lets the account write, the
+    // account's edit would be rejected — so it is not sent at all. Another
+    // vault's edit goes up as usual.
+    let (s, k) = account(&[42_u8; 32]);
+    let theirs =
+        Vault::create_with_target(&s, &k, b"vault-1".to_vec(), b"name", SyncTarget::Cloud).unwrap();
+    theirs.put_item(b"viewer-edit", 1, b"edit").unwrap();
+    let mine =
+        Vault::create_with_target(&s, &k, b"vault-2".to_vec(), b"name", SyncTarget::Cloud).unwrap();
+    mine.put_item(b"fine", 1, b"ok").unwrap();
+    s.bind_unbound_cloud_vaults(TENANT).unwrap();
+    s.set_vault_trust_anchor(b"vault-1", &[9_u8; 32]).unwrap();
+    let mut server = ForbiddingServer::new(b"none");
+    let ctx = SyncContext {
+        genesis_owner: genesis(&k),
+        tenant: TENANT.to_vec(),
+    };
+
+    let report = sync_push_as(&mut server, &s, &ctx).unwrap();
+
+    assert_eq!(server.item_ids(), vec![b"fine".to_vec()]);
+    assert_eq!(report.unpushable.len(), 1, "{:?}", report.unpushable);
+    let left_out = &report.unpushable[0];
+    assert_eq!(
+        (left_out.item_id.as_slice(), left_out.reason),
+        (b"viewer-edit".as_slice(), UnpushableReason::NotAuthorized),
+        "the left-out item is named, with the reason"
+    );
+}
+
+#[test]
+fn discard_restores_the_server_copy_and_keeps_other_dirty_items() {
+    let (s, k) = vault_with_a_refused_item(&[43_u8; 32]);
+    let own = genesis(&k);
+    let ctx = SyncContext {
+        genesis_owner: own.clone(),
+        tenant: TENANT.to_vec(),
+    };
+    // Both items reach the server at version 1.
+    let mut server = ForbiddingServer::new(b"none");
+    sync_push(&mut server, &s, TENANT).unwrap();
+    // Then the server stops permitting edits of one of them; another edit
+    // waits for the next sync.
+    let vault = Vault::open(&s, &k, b"vault-1").unwrap();
+    vault.put_item(b"viewer-edit", 1, b"edit 2").unwrap();
+    server.refused_item = b"viewer-edit";
+    sync_push(&mut server, &s, TENANT).unwrap();
+    vault.put_item(b"fine", 1, b"ok 2").unwrap();
+
+    let dropped = discard_unpushable(&s, b"vault-1", &own).unwrap();
+    assert_eq!(dropped.len(), 1, "{dropped:?}");
+    assert_eq!(dropped[0].item_id, b"viewer-edit".to_vec());
+    // The targeted pull of the vault brings the server's copy back.
+    apply_pulled_objects(&s, &ctx, server.inner.delta_since(0)).unwrap();
+
+    let restored = s.get_item(b"vault-1", b"viewer-edit").unwrap().unwrap();
+    assert_eq!(restored.version, 1, "the server's copy");
+    let dirty: Vec<(Vec<u8>, u64)> = s
+        .list_dirty_bound_item_versions(TENANT)
+        .unwrap()
+        .into_iter()
+        .map(|h| (h.item_id, h.version))
+        .collect();
+    assert_eq!(
+        dirty,
+        vec![(b"fine".to_vec(), 2)],
+        "the other unsent edit is kept"
     );
 }

@@ -1004,16 +1004,16 @@ impl Storage {
         Ok(rows)
     }
 
-    /// The dirty items of vaults bound to `tenant`, by id and version only (in
-    /// `vault_id`, `item_id` order). The content is not read: a push skips the
-    /// items it will not send without loading them, and fetches the rest one by
-    /// one with [`Self::get_item`].
+    /// The dirty items of vaults bound to `tenant`, by id, version and
+    /// authorship only (in `vault_id`, `item_id` order). The content is not
+    /// read: a push skips the items it will not send without loading them, and
+    /// fetches the rest one by one with [`Self::get_item`].
     pub fn list_dirty_bound_item_versions(
         &self,
         tenant: &[u8],
     ) -> Result<Vec<ItemVersion>, StorageError> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT i.vault_id, i.item_id, i.version
+            "SELECT i.vault_id, i.item_id, i.version, i.item_type, i.author_pubkey, i.key_epoch
              FROM items i JOIN vaults v ON i.vault_id = v.vault_id
              WHERE v.sync_tenant = ?1 AND v.sync_target = ?2 AND i.dirty = 1 ORDER BY i.vault_id, i.item_id",
         )?;
@@ -1023,6 +1023,9 @@ impl Storage {
                     vault_id: row.get(0)?,
                     item_id: row.get(1)?,
                     version: get_u64(row, 2)?,
+                    item_type: row.get::<_, u32>(3)?,
+                    author_pubkey: row.get(4)?,
+                    key_epoch: get_u64(row, 5)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1073,6 +1076,44 @@ impl Storage {
             params![vault_id],
         )?;
         Ok(())
+    }
+
+    /// **Drops a local edit that never reached the server**, so that the
+    /// server's copy of the item can be pulled again: deletes the item row and
+    /// its version history. The one item delete that ignores the version's
+    /// monotonicity — [`Self::put_item`] refuses a lower version, so a local
+    /// edit the server will never take would otherwise outrank the server's
+    /// copy forever.
+    ///
+    /// Scoped to exactly that edit: the row goes only while it is still dirty
+    /// (not pushed), still at `version` and still authored by `author_pubkey`.
+    /// A row that was pushed, edited again or replaced by a pull since the
+    /// caller looked is left alone. Which edits may be dropped (the caller's
+    /// own, ones no push can deliver) is the caller's decision. Returns
+    /// whether the row was deleted.
+    pub fn discard_unpushed_item(
+        &self,
+        vault_id: &[u8],
+        item_id: &[u8],
+        version: u64,
+        author_pubkey: &[u8],
+    ) -> Result<bool, StorageError> {
+        let version = checked_version(version)?;
+        self.transaction(|| {
+            let n = self.conn.execute(
+                "DELETE FROM items
+                 WHERE vault_id = ?1 AND item_id = ?2 AND dirty = 1 AND version = ?3
+                   AND author_pubkey = ?4",
+                params![vault_id, item_id, version, author_pubkey],
+            )?;
+            if n > 0 {
+                self.conn.execute(
+                    "DELETE FROM item_history WHERE vault_id = ?1 AND item_id = ?2",
+                    params![vault_id, item_id],
+                )?;
+            }
+            Ok::<bool, StorageError>(n > 0)
+        })
     }
 
     /// Clears the dirty flag of ONE item (see [`Self::clear_vault_dirty`]).
@@ -1876,6 +1917,37 @@ mod purge_tests {
         s.mark_item_dirty(&local, b"item").unwrap();
         assert!(s.list_dirty_bound_vaults(b"").unwrap().is_empty());
         assert!(s.list_dirty_bound_item_versions(b"").unwrap().is_empty());
+    }
+
+    /// The delete that bypasses the version's monotonicity takes exactly the
+    /// unpushed edit it names: a pushed row, another version or another
+    /// author's row stays.
+    #[test]
+    fn discard_unpushed_item_drops_only_the_named_dirty_edit() {
+        let s = st();
+        let vid = b"vault-d".to_vec();
+        let me = vec![0_u8; 32];
+        s.put_vault(&vrec(&vid)).unwrap();
+        let mut edit = irec(&vid, b"edit");
+        edit.version = 5;
+        s.put_item(&edit).unwrap();
+        s.mark_item_dirty(&vid, b"edit").unwrap();
+        s.put_item(&irec(&vid, b"pushed")).unwrap(); // dirty = 0: on the server
+        let mut theirs = irec(&vid, b"theirs");
+        theirs.author_pubkey = vec![1_u8; 32];
+        s.put_item(&theirs).unwrap();
+        s.mark_item_dirty(&vid, b"theirs").unwrap();
+
+        assert!(!s.discard_unpushed_item(&vid, b"edit", 4, &me).unwrap());
+        assert!(!s.discard_unpushed_item(&vid, b"pushed", 1, &me).unwrap());
+        assert!(!s.discard_unpushed_item(&vid, b"theirs", 1, &me).unwrap());
+        assert!(s.discard_unpushed_item(&vid, b"edit", 5, &me).unwrap());
+
+        assert!(s.get_item(&vid, b"edit").unwrap().is_none());
+        // Gone for good: an older version of the item may now be stored again.
+        s.put_item(&irec(&vid, b"edit")).unwrap();
+        assert!(s.get_item(&vid, b"pushed").unwrap().is_some());
+        assert!(s.get_item(&vid, b"theirs").unwrap().is_some());
     }
 
     #[test]

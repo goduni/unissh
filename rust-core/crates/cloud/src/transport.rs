@@ -12,7 +12,7 @@ use std::sync::{Mutex, PoisonError};
 use reqwest::blocking::{RequestBuilder, Response};
 use reqwest::StatusCode;
 use serde_json::{json, Value};
-use unissh_ffi::{FfiError, FfiSyncTransport, SyncDeltaItem};
+use unissh_ffi::{Core, FfiError, FfiSyncReport, FfiSyncTransport, SyncDeltaItem};
 
 use crate::client::{self, Reauth};
 
@@ -175,6 +175,58 @@ impl HttpSyncTransport {
             .collect();
         (objects, next_page(&v, cursor))
     }
+
+    /// **Pulls ONE vault** (hex id) into `core`, page by page
+    /// ([`Self::vault_delta_page`] → `Core::apply_pulled_vault`, born-bound to
+    /// `space`), without moving the pull cursor; the report is the sum over the
+    /// pages. What the app's per-vault "Pull" (`server_pull_vault`) runs.
+    pub fn pull_vault(
+        &self,
+        core: &Core,
+        space: &str,
+        vault_id_hex: &str,
+    ) -> Result<FfiSyncReport, FfiError> {
+        let mut total = FfiSyncReport {
+            applied: 0,
+            skipped_stale: 0,
+            conflicts: 0,
+            rejected: 0,
+            pushed: 0,
+            too_large: Vec::new(),
+            unpushable: Vec::new(),
+        };
+        let mut cursor = 0_u64;
+        loop {
+            let (objects, next) = self.vault_delta_page(vault_id_hex, cursor);
+            if !objects.is_empty() {
+                let page = core.apply_pulled_vault(space.to_owned(), objects)?;
+                total.applied = total.applied.saturating_add(page.applied);
+                total.skipped_stale = total.skipped_stale.saturating_add(page.skipped_stale);
+                total.conflicts = total.conflicts.saturating_add(page.conflicts);
+                total.rejected = total.rejected.saturating_add(page.rejected);
+            }
+            match next {
+                Some(next) => cursor = next,
+                None => return Ok(total),
+            }
+        }
+    }
+
+    /// **Drops this account's edits in a vault that no push can deliver and
+    /// brings back the server's copies** (#166): `Core::discard_unpushable_changes`,
+    /// then [`Self::pull_vault`]. The pull runs even when nothing was dropped,
+    /// so a run whose pull failed is repaired by running it again. Returns how
+    /// many edits were dropped and what the pull applied.
+    pub fn discard_unpushable_and_pull(
+        &self,
+        core: &Core,
+        space: &str,
+        vault_id_hex: &str,
+    ) -> Result<(u32, FfiSyncReport), FfiError> {
+        let dropped = core.discard_unpushable_changes(vault_id_hex.to_owned())?;
+        let pulled = self.pull_vault(core, space, vault_id_hex)?;
+        Ok((dropped, pulled))
+    }
 }
 
 impl FfiSyncTransport for HttpSyncTransport {
@@ -210,6 +262,14 @@ impl FfiSyncTransport for HttpSyncTransport {
         // core splits the request on it and singles out an item that cannot fit.
         if status == StatusCode::PAYLOAD_TOO_LARGE {
             return Err(FfiError::PayloadTooLarge {
+                msg: push_error_message(status, &bytes),
+            });
+        }
+        // 403 is the server's write policy refusing an object in the request
+        // (a Viewer's item, say) — the whole request, without naming it. The
+        // core splits the request on it and leaves the refused item out.
+        if status == StatusCode::FORBIDDEN {
+            return Err(FfiError::UploadForbidden {
                 msg: push_error_message(status, &bytes),
             });
         }
@@ -365,7 +425,7 @@ mod tests {
     use std::sync::Arc;
 
     use serde_json::json;
-    use unissh_ffi::FfiSyncTransport;
+    use unissh_ffi::{FfiError, FfiSyncTransport};
 
     use super::{next_page, HttpSyncTransport};
     use crate::client::Reauth;
@@ -401,6 +461,28 @@ mod tests {
             "the rejected request is retried with the fresh token, and so is the next one"
         );
         assert_eq!(*asked.lock().unwrap(), 1, "one rotation for the whole sync");
+    }
+
+    /// The core singles out the item a 403 was for only when it can tell the
+    /// refusal apart from any other failed push (#166).
+    #[test]
+    fn a_push_refused_as_not_permitted_comes_back_as_upload_forbidden() {
+        let (base, _seen) = serve(vec![(
+            "403 Forbidden",
+            r#"{"error":{"code":"forbidden","message":"viewer cannot write objects"}}"#,
+        )]);
+        let transport = HttpSyncTransport::new(base, "token".to_owned());
+
+        let err = transport.push_objects(vec![vec![1, 2, 3]]).unwrap_err();
+
+        assert!(
+            matches!(
+                &err,
+                FfiError::UploadForbidden { msg }
+                    if msg == "sync push rejected (forbidden): viewer cannot write objects"
+            ),
+            "{err:?}"
+        );
     }
 
     #[test]

@@ -46,6 +46,15 @@ pub enum SyncError {
     #[error("the server refused the push as too large")]
     PayloadTooLarge,
 
+    /// The server refused a push request as not permitted (HTTP 403: its write
+    /// policy refused an object in it — a Viewer's item, an author who is not
+    /// a member at the object's epoch). The whole request is refused, so
+    /// [`crate::sync_push`] answers it by halving the request until the
+    /// refused object is alone, and surfaces it only for an object that
+    /// cannot be left out.
+    #[error("the server refused the push as not permitted")]
+    Forbidden,
+
     /// A vault-layer error (verify/authority).
     #[error(transparent)]
     Vault(#[from] VaultError),
