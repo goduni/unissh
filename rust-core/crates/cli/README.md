@@ -86,8 +86,10 @@ A copy without a master password unlocks again with its kept Secret Key alone.
 
 `unissh run` runs one command on many hosts, as the app's Fleet does: the hosts
 with a tag (`--tag`, repeated for hosts with every one), the hosts of a group
-(`--group`, nested groups included), or hosts by name. Each host connects as
-`unissh ssh` would connect to it, up to `--parallel` (8) at a time, and the
+(`--group`, with the hosts of groups listed as its members, but not those of
+its subgroups: groups whose parent it is, as the app's Fleet leaves them out
+too), or hosts by name. Each host connects as `unissh ssh` would connect to
+it, up to `--parallel` (8) at a time, and the
 command then has `--timeout` (30) seconds to finish; 0 means no limit. Each
 line of output is led by the host's label (`web | ...`), stdout to stdout and
 stderr to stderr, as each host finishes, and a summary line ends the run.
@@ -111,8 +113,9 @@ A password prompt reads a key at a time with the terminal's signals off: Ctrl-C
 cancels it and puts the terminal back. `unissh ssh host -- cmd | head` ends when
 the reader does, with status 141 as `ssh` would. `unissh cp` downloads into a
 temporary file beside the destination and renames it into place when the copy is
-complete, so a failed copy leaves an existing file as it was. An upload, as with
-`scp`, writes the remote file in place.
+complete, so a failed copy leaves an existing file as it was. A downloaded file
+is owner-only (0600) on Unix, whatever its mode on the host: `chmod` it if others
+need it, or to run it. An upload, as with `scp`, writes the remote file in place.
 
 `unissh cp -r` copies a directory: into the destination when that is an
 existing directory, else as the destination. Each file goes as a single-file
@@ -122,8 +125,9 @@ file that exists is replaced only with `--force`. Symbolic links inside the tree
 are not followed, and they and anything else that is not a regular file or a
 directory (sockets, pipes, devices) are named as skipped; the app's SFTP pane
 copies links as links, the CLI does not copy them at all. A file that fails is
-named and the copy goes on; the command then exits 1. Unlike `scp`, a download
-creates the destination's missing parent directories. A remote name this system
+named (a download by its remote path) and the copy goes on; the command then
+exits 1. Unlike `scp`, a download creates the destination's missing parent
+directories. A remote name this system
 cannot hold (on Windows, one with `\` or `:`) is skipped, and on macOS and
 Windows so is a name that differs from another in its directory only in case.
 A copy stopped with Ctrl-C can leave `.unissh-part` files behind.
@@ -257,7 +261,8 @@ terminal (a password twice), read from stdin with `--stdin`, or from an owner-on
 file with `--from-file`. `secrets show` prints only what an item is; with
 `--reveal` it prints the password, the note or the private key, and nothing else.
 A private key is printed only after you confirm the app's export warning on the
-terminal. `--yes` skips the question, and without a terminal it is required.
+terminal; answering no prints "Not shown." and exits 0. `--yes` skips the
+question, and without a terminal it is required.
 `keys public` prints a public key freely. `keys import` asks for a passphrase on
 the terminal when the key has one.
 
@@ -356,8 +361,10 @@ unissh mcp --http [--port 8765]                      # loopback HTTP, in a termi
   asked about there, on `/dev/tty`: the exact command, working directory,
   environment and stdin in escaped string notation, the host, and the application
   asking. Only a typed `yes` allows it; anything else denies, and an unanswered
-  question expires after two minutes, as in the app. Sign-in prompts of the hosts
-  an agent connects to are asked on the same terminal, one question at a time.
+  question expires after two minutes, as in the app. The prompt says by when, in
+  UTC, and how long that is ("answer by 14:32:05 UTC, within 2 min"). Sign-in
+  prompts of the hosts an agent connects to are asked on the same terminal, one
+  question at a time.
 - **Grants** mirror the desktop's access editor: hosts (named as for `unissh ssh`,
   across vaults), an expiry (`--for 30m|8h|7d`, default none), confirmation or
   `--trusted`, the longest a command may run (`--command-limit`, 1m–24h, default
@@ -389,7 +396,17 @@ unissh mcp --http [--port 8765]                      # loopback HTTP, in a termi
   cancelled, and the saved grants resume on unlock, or on a wake while the session is
   not locked. Only logind is heard: a signal from any other process is ignored. A
   desktop that locks without telling logind does not pause it, and on macOS and
-  Windows nothing is observed. Without logind it logs a warning at start.
+  Windows nothing is observed. Without logind it logs a warning at start. The
+  session it follows is the one `$XDG_SESSION_ID` names, when that is a session of
+  your own user that is not closing; else the one logind gives for the process;
+  failing that, the user's graphical session. A warning names the session it
+  follows when it is that graphical session (a guess), when `$XDG_SESSION_ID`
+  named none of yours, and when the named session is not your graphical session:
+  an ssh login, or a tmux server started from one, may never lock, and locking
+  the desktop does not lock it. Inside tmux, a pane keeps the `$XDG_SESSION_ID`
+  of the login the tmux server started in, so it follows that session, not the
+  terminal you attach from later: to follow another session, start `unissh mcp`
+  with `XDG_SESSION_ID` set to its id (see `loginctl`).
 - **Lifetime.** The vaults are unlocked for the life of the process (the interactive
   list's idle lock does not apply). It stops when the agent closes stdin, or on
   Ctrl-C, SIGTERM or SIGHUP; access is revoked before the transport stops, recorded

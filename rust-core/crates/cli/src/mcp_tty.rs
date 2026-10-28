@@ -10,7 +10,7 @@
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use unissh_automation::{core::PromptFactory, visible, Broker, Cancel, PendingApproval};
 use unissh_ffi::{AuthPromptRequest, AuthPrompter};
@@ -103,6 +103,28 @@ pub fn approve_until_stopped(broker: &Arc<Broker>, terminal: &Terminal, stop: &A
     }
 }
 
+/// `at` as a time of day in UTC, `14:32:05 UTC`: the CLI keeps no time zone
+/// data (recordings are listed in UTC too).
+fn clock_utc(at: SystemTime) -> String {
+    let seconds = at
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs() % 86_400);
+    format!(
+        "{:02}:{:02}:{:02} UTC",
+        seconds / 3600,
+        seconds / 60 % 60,
+        seconds % 60
+    )
+}
+
+/// How long is left to answer, coarsely: "2 min", or "45 s" under a minute.
+fn within(left: Duration) -> String {
+    match left.as_secs() {
+        s if s >= 60 => format!("{} min", s.div_ceil(60)),
+        s => format!("{s} s"),
+    }
+}
+
 /// How a question ended.
 #[derive(PartialEq, Eq)]
 enum Asked {
@@ -131,10 +153,13 @@ fn ask(
     let mut decided = false;
     let asked = Tty::open().and_then(|mut tty| {
         tty.say(&question(request).replace('\n', "\r\n"))?;
-        // Counted from the deadline: waiting for the terminal took some of it.
+        // A clock time, not a count that would go stale on screen; counted
+        // from the deadline, since waiting for the terminal took some of it.
+        let left = deadline.saturating_duration_since(Instant::now());
         let prompt = format!(
-            "Allow it? Type yes to allow, anything else denies ({} s left): ",
-            deadline.saturating_duration_since(Instant::now()).as_secs()
+            "Allow it? Type yes to allow, anything else denies (answer by {}, within {}): ",
+            clock_utc(SystemTime::now() + left),
+            within(left)
         );
         let outcome = match tty.line_until(&prompt, true, deadline, &gone) {
             Ok(Some(text)) => {
@@ -321,7 +346,7 @@ pub fn log_to_stderr(verbose: bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{allows, passes, question};
+    use super::{allows, clock_utc, passes, question, within};
     use std::time::Duration;
     use unissh_automation::{PendingApproval, TargetInfo};
     use zeroize::Zeroizing;
@@ -394,5 +419,15 @@ mod tests {
         assert!(!at("rmcp::service", log::Level::Warn));
         assert!(at("unissh_automation", log::Level::Info));
         assert!(!at("unissh_automation", log::Level::Debug));
+    }
+
+    /// The approval prompt names the time the question expires, not a count
+    /// that goes stale on screen.
+    #[test]
+    fn the_approval_deadline_reads_as_a_clock_time() {
+        let at = std::time::UNIX_EPOCH + Duration::from_secs(20_000 * 86_400 + 52_325);
+        assert_eq!(clock_utc(at), "14:32:05 UTC");
+        assert_eq!(within(Duration::from_secs(120)), "2 min");
+        assert_eq!(within(Duration::from_secs(45)), "45 s");
     }
 }
