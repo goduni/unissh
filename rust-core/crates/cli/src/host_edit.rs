@@ -17,8 +17,8 @@ use zeroize::Zeroizing;
 
 use crate::device::Device;
 use crate::edit::{
-    self, clearable, columns, commit, list, mint_id, print_json, stored, take, SecretFrom, Shape,
-    Switch, VaultArg,
+    self, clearable, columns, commit, list, print_json, stored, take, SecretFrom, Shape, Switch,
+    VaultArg,
 };
 use crate::failure::{Failure, Res};
 use crate::hosts::{self, find_named, Group, Host};
@@ -310,7 +310,8 @@ pub fn hosts(device: &Device, offline: bool, action: HostsAction) -> Res<()> {
             }
             let label = label.trim().to_owned();
             let profile = ConnectionProfile {
-                profile_id: mint_id(&label, "host"),
+                // The core mints the id when it saves the new host.
+                profile_id: String::new(),
                 uid: String::new(),
                 label: label.clone(),
                 host: at.host,
@@ -488,14 +489,18 @@ fn save(
         }
         None => None,
     };
-    if let Err(e) = stored(
+    // A new host has no id until the core mints one as it saves it.
+    match stored(
         vault_name,
         core.save_connection(vault_id.to_owned(), profile.clone()),
     ) {
-        return Err(match new_password {
-            Some(id) => unstore_password(core, vault_id, &id, e),
-            None => e,
-        });
+        Ok(id) => profile.profile_id = id,
+        Err(e) => {
+            return Err(match new_password {
+                Some(id) => unstore_password(core, vault_id, &id, e),
+                None => e,
+            })
+        }
     }
 
     let mut missing = Vec::new();
@@ -638,7 +643,7 @@ fn login(
                 password_item_id: secrets::find_in::<Password>(core, vault_id, item)?,
             },
             None => {
-                let id = mint_id(&format!("{} pw", profile.label), "host-pw");
+                let id = core.new_item_id(vault_id.to_owned(), format!("{} pw", profile.label))?;
                 let password = f.new_password.read(
                     "the host's password",
                     "Password for the host: ",
@@ -1245,7 +1250,8 @@ pub fn groups(device: &Device, offline: bool, action: GroupsAction) -> Res<()> {
                 Some(_) | None => None,
             };
             let mut group = ServerGroup {
-                group_id: mint_id(&label, "group"),
+                // The core mints the id when it saves the new group.
+                group_id: String::new(),
                 label: label.clone(),
                 member_ids: Vec::new(),
                 parent_id,
