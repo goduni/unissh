@@ -18,12 +18,13 @@ use zeroize::Zeroizing;
 
 use crate::device::Device;
 use crate::edit::{
-    self, clearable, columns, commit, list, print_json, stored, take, SecretFrom, Shape, Switch,
-    VaultArg,
+    self, clearable, columns, commit, list, print_json, stored, syncs, take, SecretFrom, Shape,
+    Switch, VaultArg,
 };
 use crate::failure::{Failure, Res};
 use crate::hosts::{self, find_named, Group, Host};
 use crate::secrets::{self, IdentityEntry, Key, Password};
+use crate::server;
 use crate::snippet_edit;
 use crate::tty::{confirm, one_line};
 
@@ -440,9 +441,9 @@ struct Pending {
 ///
 /// Everything that is looked up or asked comes first, and the core writes
 /// the password, the host and its group together, so a mistake stores
-/// nothing. Once the host is saved, a link that fails (or an old password
-/// that cannot be removed) does not undo it: the command says what is
-/// missing, still syncs, and fails.
+/// nothing. Once the host is saved, a link that fails (or an identity pin
+/// the save had to keep) does not undo it: the command says what is missing,
+/// still syncs, and fails.
 fn save(
     device: &Device,
     offline: bool,
@@ -479,13 +480,14 @@ fn save(
     }
     let saved = stored(vault_name, result)?;
 
-    let pushed = commit(device, vault_id, offline, done);
-    if let Some(old) = &saved.removed_password_item_id {
-        eprintln!(
-            "unissh: removed the password {label} logged in with before (\"{}\"): nothing else uses it",
-            one_line(old)
-        );
-    }
+    // The identity's binding lives in its own vault, which changed too.
+    let binding_syncs = saved
+        .binding_vault_id
+        .as_deref()
+        .map(|binding_vault| syncs(core, binding_vault))
+        .transpose()?;
+    let cloud = syncs(core, vault_id)? || binding_syncs == Some(true);
+    let pushed = server::push_after_write(device, cloud, offline, done);
     if !saved.unfinished.is_empty() {
         for gap in &saved.unfinished {
             eprintln!("unissh: saved host {label}, but {}", missing(gap, &label));
@@ -518,14 +520,12 @@ fn missing(gap: &HostSaveGap, label: &str) -> String {
              `unissh hosts edit \"{label}\" --identity <name>`",
             one_line(message)
         ),
-        HostSaveGap::OldPasswordKept {
-            password_item_id,
-            message,
-        } => format!(
-            "the password it logged in with before could not be removed ({}): \
-             delete it with `unissh secrets rm \"{}\"`",
-            one_line(message),
-            one_line(password_item_id)
+        HostSaveGap::IdentityPinKept { pinned, .. } => format!(
+            "your identity is still pinned to {}, where the host pointed when it was \
+             linked: it was pointed elsewhere before this save, so connecting with your \
+             identity is refused as redirected. If the new address is right, link it again \
+             with `unissh hosts edit \"{label}\" --identity <name>`",
+            one_line(pinned)
         ),
     }
 }
@@ -536,12 +536,18 @@ fn refusal(rule: HostRule) -> String {
     let hint = match rule {
         HostRule::UserRequired => ": user@host, or --user",
         HostRule::HopOtherVault => " (or give the jump host as user@host)",
-        HostRule::HopNoCredential => " (or give the jump host as user@host with --jump-key)",
+        HostRule::HopNotFound => {
+            " (remove the jump hosts with --no-jump, or name a saved host that works with --jump <host>)"
+        }
+        HostRule::HopNoCredential => {
+            " (remove the jump hosts with --no-jump, name a saved host that logs in with a key, \
+             a stored password or the ssh-agent with --jump <host>, or give the jump host as \
+             user@host with --jump-key)"
+        }
         HostRule::IdentityNeedsPersonalLogin => " (--identity goes with --auth personal)",
         HostRule::LabelRequired
         | HostRule::AddressRequired
         | HostRule::HopAddressRequired
-        | HostRule::HopNotFound
         | HostRule::HopSelf
         | HostRule::NewPasswordNeedsPasswordLogin
         | HostRule::NewPasswordEmpty
@@ -1383,15 +1389,17 @@ mod tests {
         assert!(!nests_in_itself(&tree, "c", "a"));
     }
 
-    /// A host rule the core refuses names the flag that fixes it.
+    /// A jump host the core refuses (gone, or with nothing to log in with)
+    /// says how to save the host anyway: without jump hosts, or through a
+    /// saved host that works.
     #[test]
-    fn a_refused_rule_names_the_flag_that_fixes_it() {
-        assert!(
-            refusal(HostRule::UserRequired).ends_with("user@host, or --user"),
-            "{}",
-            refusal(HostRule::UserRequired)
-        );
-        assert_eq!(refusal(HostRule::HopSelf), HostRule::HopSelf.to_string());
+    fn a_refused_jump_host_names_the_flags_that_fix_it() {
+        for rule in [HostRule::HopNotFound, HostRule::HopNoCredential] {
+            let said = refusal(rule);
+            assert!(said.starts_with(&rule.to_string()), "{said}");
+            assert!(said.contains("--no-jump"), "{said}");
+            assert!(said.contains("--jump <host>"), "{said}");
+        }
     }
 
     /// A colour or icon is one the app offers, in any case; empty clears it.
