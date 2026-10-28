@@ -1,8 +1,8 @@
 //! Which logind messages a lock watcher may act on: the one rule shared by the
 //! desktop's watcher (`client/src-tauri/src/system_lock/linux.rs`) and the
 //! CLI's (`rust-core/crates/cli/src/system_lock.rs`). Each drives its own bus
-//! connections (zbus 6: on its own runtime there, on Tokio here); this
-//! decides, without the bus.
+//! connections (the desktop on zbus 5's blocking API, the CLI on zbus 6 over
+//! Tokio); this decides, without the bus.
 //!
 //! A match rule is no filter: any local process may unicast a signal to our
 //! unique name, with any member, path and interface it likes, and the bus
@@ -17,8 +17,8 @@
 //! separate problem: not what we act on, but whether we get to ask anything at
 //! all. zbus reads a connection's socket in one task, which hands a method
 //! reply to its caller and then broadcasts every message to the connection's
-//! open streams. A plain `MessageStream` holds 64 messages and never drops
-//! one: once it is full the reader waits for it to drain, and
+//! open streams. A plain stream (zbus 6's `MessageStream`, and zbus 5's
+//! `MessageIterator` built on it) holds 64 messages and never drops one: once it is full the reader waits for it to drain, and
 //! a reply queued on the socket behind the flood never reaches its caller, so
 //! a watcher that asks the bus something while not reading its own stream (at
 //! start, or on wake) waits for ever. Hence two connections per watcher:
