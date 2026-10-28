@@ -220,11 +220,10 @@ bQ+jhbv16Otv7qiw==
         core.save_note("v".into(), "web-7-2".into(), "n".into())
             .unwrap();
         core.delete_item("v".into(), "web-7-2".into()).unwrap();
-        let minted = {
-            let guard = core.locked_state();
-            let state = guard.as_ref().unwrap();
-            mint_item_id_at(&state.storage, "v", "Web", "host", 7).unwrap()
-        };
+        let guard = core.locked_state();
+        let minted = mint_item_id_at(&guard.as_ref().unwrap().storage, "v", "Web", "host", 7);
+        drop(guard);
+        let minted = minted.unwrap();
         assert_eq!(minted, "web-7-3");
     }
 
