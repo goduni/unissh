@@ -685,6 +685,14 @@ export interface SyncReport {
   unpushable: UnpushableItem[];
 }
 
+/** What discarding a vault's unsendable edits did. */
+export interface DiscardReport {
+  /** This account's edits that were dropped (the server's copy is back). */
+  dropped: number;
+  /** Other members' edits held here that are no longer sent (kept as they are). */
+  released: number;
+}
+
 /** An edit no sync can push (see {@link SyncReport.unpushable}). */
 export interface UnpushableItem {
   vaultId: string;
@@ -692,7 +700,8 @@ export interface UnpushableItem {
   itemId: string;
   /** The core's item type ({@link ItemType}), to name the item by kind. */
   itemType: number;
-  /** This account made the edit, so "Discard unsent changes" can drop it. */
+  /** This account made the edit, so "Discard unsent changes" can drop it (another
+   *  member's is only no longer sent). */
   mine: boolean;
   /** `notAuthorized`: this account may not change the vault (only view it).
    *  `serverRefused`: the server refused the edit. */

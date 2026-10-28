@@ -49,7 +49,7 @@ import { guard } from "@/store/action";
 import * as api from "@/bridge/api";
 import { isOwnedCloud, serverShortLabel, vaultServer } from "@/bridge/vaults";
 import { planMoveToServer } from "@/bridge/moveToServer";
-import { syncLeftBehind, tooLargeSummary, unpushableSummary } from "@/bridge/syncReport";
+import { syncLeftBehind, tooLargeSummary, unpushableNotice, unpushableSummary } from "@/bridge/syncReport";
 import { mcpStatus } from "@/bridge/mcp";
 import {
   apiErrorMessage,
@@ -5035,13 +5035,25 @@ function SettingsCloud() {
 
   // Recovery (#166): edits made here that no sync can push — a Viewer's edit from
   // before the core refused them — stay dirty and, at a higher version, keep the
-  // server's copy out. Drop this account's ones and pull each vault back from the
-  // server that reported it. Destructive, so it is confirmed first.
-  const discardable = (syncStatus.lastReport?.unpushable ?? []).filter((u) => u.mine);
+  // server's copy out. Each vault is handed to the server that reported it: the
+  // core sends its edits once more, drops this account's ones still refused,
+  // stops sending other members' ones and puts the server's copy back.
+  // Destructive, so it is confirmed first.
+  const discardable = syncStatus.lastReport?.unpushable ?? [];
+  // Only the active server's items need its session here; another server's are
+  // handed to that server with its own.
+  const needsActiveSession = discardable.some((u) => !u.serverId || u.serverId === s.serverId);
   const doDiscardUnpushable = () => {
+    const mine = unpushableSummary(discardable.filter((u) => u.mine));
+    const theirs = unpushableSummary(discardable.filter((u) => !u.mine));
     ctx.confirm({
       title: t("serverCloud.discardUnpushableTitle"),
-      body: t("serverCloud.discardUnpushableBody", { items: unpushableSummary(discardable) }),
+      body: [
+        mine && t("serverCloud.discardUnpushableBody", { items: mine }),
+        theirs && t("serverCloud.discardUnpushableBodyTheirs", { items: theirs }),
+      ]
+        .filter(Boolean)
+        .join(" "),
       danger: true,
       confirmLabel: t("serverCloud.discardUnpushable"),
       icon: "trash",
@@ -5050,14 +5062,25 @@ function SettingsCloud() {
           const vaultsOf = new Map<string, string | undefined>();
           for (const u of discardable) vaultsOf.set(u.vaultId, u.serverId ?? s.serverId ?? undefined);
           let dropped = 0;
-          for (const [vaultId, serverId] of vaultsOf) {
-            dropped += await api.serverDiscardUnpushable(vaultId, serverId);
+          let released = 0;
+          try {
+            for (const [vaultId, serverId] of vaultsOf) {
+              const r = await api.serverDiscardUnpushable(vaultId, serverId);
+              dropped += r.dropped;
+              released += r.released;
+            }
+          } finally {
+            // A vault discarded before a later one failed has changed all the same.
+            await useApp.getState().reloadVaults();
           }
-          await useApp.getState().reloadVaults();
           await syncNow().catch(() => {
             /* the badge reports it; the discard itself went through */
           });
-          toast(t("serverCloud.discardUnpushableDone", { count: dropped }), "ok");
+          const done = [
+            dropped > 0 && t("serverCloud.discardUnpushableDone", { count: dropped }),
+            released > 0 && t("serverCloud.discardUnpushableReleased", { count: released }),
+          ].filter(Boolean);
+          toast(done.length ? done.join("; ") : t("serverCloud.discardUnpushableNone"), "ok");
         });
       },
     });
@@ -5213,7 +5236,7 @@ function SettingsCloud() {
             variant="ghost"
             icon="trash"
             onClick={doDiscardUnpushable}
-            disabled={syncStatus.syncing || !s.hasSession}
+            disabled={syncStatus.syncing || (needsActiveSession && !s.hasSession)}
             title={t("serverCloud.discardUnpushableHint")}
           >
             {t("serverCloud.discardUnpushable")}
@@ -5259,7 +5282,7 @@ function SettingsCloud() {
       )}
       {!!syncStatus.lastReport?.unpushable.length && (
         <div role="status" style={{ fontSize: TEXT.small, color: p.amber, marginTop: rem(6), lineHeight: 1.5 }}>
-          {t("serverCloud.syncUnpushable", { items: unpushableSummary(syncStatus.lastReport.unpushable) })}
+          {unpushableNotice(syncStatus.lastReport.unpushable)}
         </div>
       )}
 
