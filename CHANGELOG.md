@@ -34,6 +34,9 @@ starts with `0.`:
 
 ### Added
 
+- In the app's host editor, a saved host that logs in through the system SSH
+  agent (a hardware key, for example) can now be picked as a jump host, as
+  `unissh hosts add|edit --jump` already allowed.
 - Hosts and groups take a colour tag and an icon (#134), set under Appearance
   in the host editor and in Host groups. The colour shows beside the host in the
   hosts list, on its folder in the sidebar, on the terminal tab (a line along the
@@ -175,12 +178,19 @@ starts with `0.`:
   is a new item and gets `slug(label)-<millis>`. New create-only functions
   `create_ssh_key`, `create_imported_ssh_key` and `create_identity` fail with
   `AlreadyExists` instead of replacing; `generate_ssh_key`, `import_ssh_key`
-  and `save_identity` still create or replace. `new_item_id` mints an id for
-  an item whose save takes one from the caller (for now, a new host's saved
-  password). New `FfiError` variants `PassphraseRequired` and
+  and `save_identity` still create or replace. New `FfiError` variants `PassphraseRequired` and
   `WrongPassphrase` for an encrypted key imported without or with a wrong
   passphrase; `FfiError::AlreadyExists` now also covers a taken item id, and
   its text is "already exists" (was "instance already exists").
+- The app's host editor and `unissh hosts add|edit` now save a host through
+  one path in the core, with the same rules (#167): a label, an address, a
+  user unless the host logs in with a personal identity, and a jump host that
+  is another saved host of the same vault logging in with a key, a saved
+  password or the system SSH agent. A password typed for a host is stored
+  together with it, so a host that cannot be saved leaves no stray password,
+  and the password it replaces is removed when nothing else uses it. A host
+  saved without its identity link now says so. Bindings: new
+  `Core::save_host` and `FfiError::InvalidHost`; `new_item_id` is gone.
 
 ### Fixed
 
