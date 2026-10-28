@@ -197,10 +197,14 @@ starts with `0.`:
   user unless the host logs in with a personal identity, and a jump host that
   is another saved host of the same vault logging in with a key, a saved
   password or the system SSH agent. A password typed for a host is stored
-  together with it, so a host that cannot be saved leaves no stray password,
-  and the password it replaces is removed when nothing else uses it. A host
-  saved without its identity link now says so. Bindings: new
-  `Core::save_host` and `FfiError::InvalidHost`; `new_item_id` is gone.
+  together with it, so a host that cannot be saved leaves no stray password.
+  A new password never deletes the old one: when nothing else uses the host's
+  saved password, the new one becomes its next version (the old one stays in
+  its history); when something else shares it, the host gets a password of its
+  own and the shared one is left alone. A host saved without its identity link
+  now says so. Bindings: new `Core::save_host` (its result names the vault an
+  identity link was written to, so a client syncs it) and
+  `FfiError::InvalidHost`; `new_item_id` is gone.
 
 ### Fixed
 
@@ -269,6 +273,16 @@ starts with `0.`:
 
 ### Security
 
+- A connection refuses a jump host that is a saved host of another vault. A
+  synced host of a team vault could name a host of a member's personal vault
+  as its jump host, and connecting would then log in to it with the member's
+  own key or password. Such a host is now refused, in the app and the CLI
+  alike, and saving one was already refused.
+- Saving a host that logs in with a personal identity moves the identity's
+  pin only from where the host pointed before the save. When the host had
+  already been pointed elsewhere (a synced change by someone else), the pin
+  stays, connecting is still refused as redirected, and the save says so,
+  instead of the member's next save silently accepting the new address.
 - A server link may use plain `http://` only to a loopback host, and the check
   now reads the host the way the HTTP stack connects to it. It used to compare
   the start of the text, so links such as `http://localhost.attacker.example`
