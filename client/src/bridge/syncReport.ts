@@ -1,6 +1,6 @@
 import { tDyn } from "@/i18n";
 import { fmtSize } from "@/i18n/format";
-import { ItemType, type TooLargeItem } from "./types";
+import { ItemType, type SyncReport, type TooLargeItem, type UnpushableItem } from "./types";
 
 /** How many refused items a message names before it counts the rest. */
 const NAMED = 3;
@@ -40,4 +40,34 @@ export function tooLargeSummary(items: TooLargeItem[], lang?: string): string {
     .join(", ");
   const rest = items.length - NAMED;
   return rest > 0 ? t("tooLargeMore", { items: named, count: rest }) : named;
+}
+
+/** The edits no sync can push ({@link SyncReport.unpushable}), as one line for a
+ *  message: each by kind and id with its vault, the first few named and the rest
+ *  counted. Empty when there are none. */
+export function unpushableSummary(items: UnpushableItem[], lang?: string): string {
+  if (items.length === 0) return "";
+  const t = (key: string, opts: Record<string, unknown> = {}) => tDyn(`serverCloud.${key}`, { ...opts, lng: lang });
+  const named = items
+    .slice(0, NAMED)
+    .map((it) =>
+      t("unpushableItem", {
+        kind: t(`itemKind.${KIND_KEY[it.itemType] ?? "other"}`),
+        item: it.itemId,
+        vault: it.vaultName || it.vaultId,
+      }),
+    )
+    .join(", ");
+  const rest = items.length - NAMED;
+  return rest > 0 ? t("tooLargeMore", { items: named, count: rest }) : named;
+}
+
+/** What the last sync left behind, as one warning line: items too large for the
+ *  server first, then edits it will not take. Null when it left nothing. */
+export function syncLeftBehind(report: SyncReport | null | undefined, lang?: string): string | null {
+  const tooLarge = tooLargeSummary(report?.tooLarge ?? [], lang);
+  if (tooLarge) return tDyn("serverCloud.syncTooLarge", { items: tooLarge, lng: lang });
+  const unsent = unpushableSummary(report?.unpushable ?? [], lang);
+  if (unsent) return tDyn("serverCloud.syncUnpushable", { items: unsent, lng: lang });
+  return null;
 }

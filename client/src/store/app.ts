@@ -1523,7 +1523,15 @@ export const useApp = create<AppStore>((set, get) => ({
       const ids: (string | undefined)[] = targets.length
         ? targets.map((sv) => sv.serverId as string)
         : [undefined];
-      const agg: SyncReport = { applied: 0, skippedStale: 0, conflicts: 0, rejected: 0, pushed: 0, tooLarge: [] };
+      const agg: SyncReport = {
+        applied: 0,
+        skippedStale: 0,
+        conflicts: 0,
+        rejected: 0,
+        pushed: 0,
+        tooLarge: [],
+        unpushable: [],
+      };
       // Isolate per-server failures: one unreachable/erroring server must not abort
       // syncing the others (each cloud vault is bound 1:1 to its own server).
       const errors: string[] = [];
@@ -1531,6 +1539,9 @@ export const useApp = create<AppStore>((set, get) => ({
         try {
           const r = await api.serverSyncNow(id, opts?.retryRefused);
           agg.tooLarge.push(...r.tooLarge);
+          // Tagged with the server it came from: discarding pulls the vault back
+          // from that server, and only from that one.
+          agg.unpushable.push(...r.unpushable.map((u) => ({ ...u, serverId: id })));
           agg.applied += r.applied;
           agg.skippedStale += r.skippedStale;
           agg.conflicts += r.conflicts;

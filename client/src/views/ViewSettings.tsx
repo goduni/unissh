@@ -49,7 +49,7 @@ import { guard } from "@/store/action";
 import * as api from "@/bridge/api";
 import { isOwnedCloud, serverShortLabel, vaultServer } from "@/bridge/vaults";
 import { planMoveToServer } from "@/bridge/moveToServer";
-import { tooLargeSummary } from "@/bridge/syncReport";
+import { syncLeftBehind, tooLargeSummary, unpushableSummary } from "@/bridge/syncReport";
 import { mcpStatus } from "@/bridge/mcp";
 import {
   apiErrorMessage,
@@ -4896,6 +4896,7 @@ function SettingsCloud() {
   const reloadServerStatus = useApp((s) => s.reloadServerStatus);
   const syncNow = useApp((s) => s.syncNow);
   const repull = useApp((s) => s.repull);
+  const ctx = useCtx();
 
   const [editingProfile, setEditingProfile] = useState(false);
   const [pairing, setPairing] = useState(false);
@@ -4981,9 +4982,9 @@ function SettingsCloud() {
     await guard(async () => {
       await syncNow({ retryRefused: true });
       const r = useApp.getState().syncStatus.lastReport;
-      const notUploaded = tooLargeSummary(r?.tooLarge ?? []);
-      if (notUploaded) {
-        toast(t("serverCloud.syncTooLarge", { items: notUploaded }), "warn");
+      const leftBehind = syncLeftBehind(r);
+      if (leftBehind) {
+        toast(leftBehind, "warn");
       } else if (r) {
         toast(
           t("serverCloud.syncDone", {
@@ -5029,6 +5030,36 @@ function SettingsCloud() {
         n > 0 ? t("serverCloud.restoreDone", { count: n }) : t("serverCloud.restoreNone"),
         n > 0 ? "ok" : "warn",
       );
+    });
+  };
+
+  // Recovery (#166): edits made here that no sync can push — a Viewer's edit from
+  // before the core refused them — stay dirty and, at a higher version, keep the
+  // server's copy out. Drop this account's ones and pull each vault back from the
+  // server that reported it. Destructive, so it is confirmed first.
+  const discardable = (syncStatus.lastReport?.unpushable ?? []).filter((u) => u.mine);
+  const doDiscardUnpushable = () => {
+    ctx.confirm({
+      title: t("serverCloud.discardUnpushableTitle"),
+      body: t("serverCloud.discardUnpushableBody", { items: unpushableSummary(discardable) }),
+      danger: true,
+      confirmLabel: t("serverCloud.discardUnpushable"),
+      icon: "trash",
+      onConfirm: async () => {
+        await guard(async () => {
+          const vaultsOf = new Map<string, string | undefined>();
+          for (const u of discardable) vaultsOf.set(u.vaultId, u.serverId ?? s.serverId ?? undefined);
+          let dropped = 0;
+          for (const [vaultId, serverId] of vaultsOf) {
+            dropped += await api.serverDiscardUnpushable(vaultId, serverId);
+          }
+          await useApp.getState().reloadVaults();
+          await syncNow().catch(() => {
+            /* the badge reports it; the discard itself went through */
+          });
+          toast(t("serverCloud.discardUnpushableDone", { count: dropped }), "ok");
+        });
+      },
     });
   };
 
@@ -5177,6 +5208,17 @@ function SettingsCloud() {
         >
           {t("serverCloud.pullFromServer")}
         </Btn>
+        {discardable.length > 0 && (
+          <Btn
+            variant="ghost"
+            icon="trash"
+            onClick={doDiscardUnpushable}
+            disabled={syncStatus.syncing || !s.hasSession}
+            title={t("serverCloud.discardUnpushableHint")}
+          >
+            {t("serverCloud.discardUnpushable")}
+          </Btn>
+        )}
         <Btn
           variant="ghost"
           icon="clock"
@@ -5213,6 +5255,11 @@ function SettingsCloud() {
       {!!syncStatus.lastReport?.tooLarge.length && (
         <div role="status" style={{ fontSize: TEXT.small, color: p.amber, marginTop: rem(6), lineHeight: 1.5 }}>
           {t("serverCloud.syncTooLarge", { items: tooLargeSummary(syncStatus.lastReport.tooLarge) })}
+        </div>
+      )}
+      {!!syncStatus.lastReport?.unpushable.length && (
+        <div role="status" style={{ fontSize: TEXT.small, color: p.amber, marginTop: rem(6), lineHeight: 1.5 }}>
+          {t("serverCloud.syncUnpushable", { items: unpushableSummary(syncStatus.lastReport.unpushable) })}
         </div>
       )}
 

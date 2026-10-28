@@ -944,6 +944,11 @@ export const serverListVaults = (serverId?: string) =>
 /** Pull ONE vault (hex id) from a server onto this device (targeted; no cursor bump). */
 export const serverPullVault = (vaultId: string, serverId?: string) =>
   invoke<SyncReport>("server_pull_vault", { vaultId, serverId: serverId ?? null });
+/** Drop this account's edits in ONE vault (hex id) that no sync can push, then pull
+ *  the vault so the server's copy comes back. Other unsent edits stay. Returns how
+ *  many edits were dropped. */
+export const serverDiscardUnpushable = (vaultId: string, serverId?: string) =>
+  invoke<number>("server_discard_unpushable", { vaultId, serverId: serverId ?? null });
 /** Bind an already-cloud vault (hex id) to a server, then sync it up (Push). */
 export const serverBindAndPushVault = (vaultId: string, serverId?: string) =>
   invoke<SyncReport>("server_bind_and_push_vault", { vaultId, serverId: serverId ?? null });

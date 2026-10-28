@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { tooLargeSummary } from "./syncReport";
-import { ItemType, type TooLargeItem } from "./types";
+import { syncLeftBehind, tooLargeSummary } from "./syncReport";
+import { ItemType, type SyncReport, type TooLargeItem } from "./types";
 
 const item = (itemId: string, over: Partial<TooLargeItem> = {}): TooLargeItem => ({
   vaultId: "ab12",
@@ -29,5 +29,25 @@ describe("tooLargeSummary", () => {
 
   it("is empty when nothing was refused", () => {
     expect(tooLargeSummary([])).toBe("");
+  });
+});
+
+describe("syncLeftBehind", () => {
+  it("names the edits the server will not take and the way to restore its copy", () => {
+    const report: SyncReport = {
+      applied: 0,
+      skippedStale: 0,
+      conflicts: 0,
+      rejected: 0,
+      pushed: 3,
+      tooLarge: [],
+      unpushable: [
+        { vaultId: "ab12", vaultName: "Ops", itemId: "web", itemType: ItemType.Connection, mine: true, reason: "notAuthorized" },
+      ],
+    };
+    expect(syncLeftBehind(report, "en")).toBe(
+      "Not uploaded — the server won't take these changes made on this device: host “web” (Ops). " +
+        "Everything else is synced. Use “Discard unsent changes” to restore the server's copy.",
+    );
   });
 });

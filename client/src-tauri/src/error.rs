@@ -86,6 +86,12 @@ impl From<FfiError> for ApiError {
                 code: "payload_too_large".into(),
                 message: msg,
             },
+            // Likewise only for an object a push cannot continue without; an
+            // item the server does not permit comes back in the sync report.
+            FfiError::UploadForbidden { msg } => Self::Server {
+                code: "forbidden".into(),
+                message: msg,
+            },
             FfiError::RotationInProgress { candidate_id } => {
                 Self::RotationInProgress { candidate_id }
             }

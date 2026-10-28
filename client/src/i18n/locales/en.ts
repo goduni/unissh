@@ -2291,6 +2291,13 @@ export const en = {
     "syncTooLarge": "Not uploaded — too large for this server: {{items}}. Everything else is synced. Raise limits.max_object_bytes on the server — or, if a reverse proxy in front of it refused the upload, the proxy's body limit (client_max_body_size in nginx) — then press “Sync now”.",
     "tooLargeItem": "{{kind}} “{{item}}” ({{vault}}, {{size}})",
     "tooLargeMore": "{{items}} and {{count}} more",
+    "syncUnpushable": "Not uploaded — the server won't take these changes made on this device: {{items}}. Everything else is synced. Use “Discard unsent changes” to restore the server's copy.",
+    "unpushableItem": "{{kind}} “{{item}}” ({{vault}})",
+    "discardUnpushable": "Discard unsent changes",
+    "discardUnpushableHint": "Delete the changes made on this device that the server won't take — for example, edits made while you could only view the vault — and restore the server's copy. Other changes are kept.",
+    "discardUnpushableTitle": "Discard unsent changes?",
+    "discardUnpushableBody": "These changes made on this device can't be sent: {{items}}. They will be deleted here, and the server's copy of each item restored. An item the server never had is removed. Other changes are kept.",
+    "discardUnpushableDone": "Discarded {{count}} unsent change(s); the server's copy is back",
     "itemKind": {
       "sshKey": "key",
       "certificate": "certificate",
