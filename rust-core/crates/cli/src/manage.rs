@@ -6,14 +6,13 @@ use std::time::SystemTime;
 
 use unissh_cloud::client::http;
 use unissh_cloud::identity;
-use unissh_ffi::Core;
+use unissh_ffi::{grouped_fingerprint, Core};
 
 use crate::device::{open_core, Credentials, Device, NOT_SIGNED_IN};
 use crate::failure::{Failure, Res};
 use crate::home::{Home, Link, Origin};
 use crate::server;
 use crate::tty::{confirm, one_line};
-use crate::vaults::grouped;
 
 /// `unissh status`: what this machine is signed in to, and this account's
 /// fingerprint (what teammates compare before trusting a vault it shares).
@@ -48,7 +47,7 @@ pub fn status(home: &Home) -> Res<()> {
     };
     let fingerprint = core.own_fingerprint().map_or_else(
         |_| "unknown (the keyset cannot be read)".to_owned(),
-        |f| grouped(&f),
+        grouped_fingerprint,
     );
     let synced = home.last_sync().map_or_else(|| "never".to_owned(), ago);
     println!("Server:          {}", link.base_url);

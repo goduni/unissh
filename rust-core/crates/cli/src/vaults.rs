@@ -4,23 +4,32 @@
 //! Sync verifies a teammate's vault against its owner's key, and this machine
 //! learns that key only from the user: the server is never trusted to say who
 //! owns a vault. Until then the vault waits on the server. `unissh vaults
-//! trust` shows the owner's fingerprint, as the vault's signed membership
-//! proves it, next to the name the server's directory claims for that key;
-//! the user compares the fingerprint with the one the owner reads out from
-//! their own device (`unissh status`, or the app) over a channel they trust,
-//! types or pastes it, and only then is the owner pinned and the vault pulled.
+//! trust` asks for the owner's fingerprint as the owner gave it (they read it
+//! from their own device: `unissh status`, or the app), and the core pins the
+//! owner only if it is the fingerprint of the key that created the vault.
+//! Without one, the fingerprint is shown and an explicit `yes` after
+//! comparing it is needed — weaker, and said so. Then the vault is pulled.
 
 use clap::Subcommand;
 use serde_json::{json, Value};
 use unissh_cloud::dto::DirectoryEntry;
-use unissh_cloud::shared::{pending_shared_vaults, PendingVault};
+use unissh_cloud::shared::{
+    inspect_pending, pending_shared_vaults, waiting_vaults, PendingList, PendingVault,
+};
 use unissh_cloud::transport::HttpSyncTransport;
-use unissh_ffi::{FfiMemberRole, FfiSyncTarget, FfiVaultTrust, SharedVaultInfo};
+use unissh_ffi::{
+    grouped_fingerprint, normalize_fingerprint, FfiMemberRole, FfiSyncTarget, FfiTrustOutcome,
+    FfiVaultTrust, SharedVaultInfo,
+};
 
 use crate::device::Device;
 use crate::failure::{Failure, Res};
 use crate::server;
 use crate::tty::{one_line, Tty};
+
+/// How many characters of the owner's handle or name the server claims are
+/// shown: enough to recognise someone, not a page of text.
+const CLAIM_CHARS: usize = 64;
 
 /// `unissh vaults`.
 #[derive(Subcommand)]
@@ -33,8 +42,8 @@ pub enum VaultsAction {
         json: bool,
     },
     /// Trust the owner of a vault a teammate shared, then fetch the vault.
-    /// Compare the fingerprint shown with the one the owner reads out from
-    /// their own device (`unissh status` there) before you accept it.
+    /// Ask the owner for their fingerprint (`unissh status` on their device,
+    /// or the app) over a channel you trust, and give it when asked.
     Trust {
         /// The vault's id, or the start of it.
         vault: String,
@@ -60,8 +69,8 @@ pub fn run(device: &Device, offline: bool, action: VaultsAction) -> Res<()> {
     }
 }
 
-/// The vaults waiting for trust, read from the server.
-fn pending(device: &Device) -> Res<Vec<PendingVault>> {
+/// The vaults waiting for trust, each inspected, read from the server.
+fn pending(device: &Device) -> Res<PendingList> {
     let access = device.access()?;
     Ok(pending_shared_vaults(
         &device.core,
@@ -70,14 +79,31 @@ fn pending(device: &Device) -> Res<Vec<PendingVault>> {
     )?)
 }
 
-/// `unissh vaults list`.
+/// `unissh vaults list`. The server is asked only for the vaults that wait;
+/// when it cannot be reached, this machine's vaults are still listed.
 fn list(device: &Device, offline: bool, as_json: bool) -> Res<()> {
     let here = device.core.list_vaults()?;
     let waiting = if offline {
-        Vec::new()
+        None
     } else {
-        pending(device)?
+        match pending(device) {
+            Ok(waiting) => Some(waiting),
+            Err(e) => {
+                eprintln!(
+                    "unissh: could not ask the server for vaults shared with this account \
+                     ({e}); showing this machine's vaults only"
+                );
+                None
+            }
+        }
     };
+    let waiting = waiting.unwrap_or_default();
+    if waiting.malformed > 0 {
+        eprintln!(
+            "unissh: the server listed {} vault(s) under a malformed id; they were ignored",
+            waiting.malformed
+        );
+    }
     if as_json {
         let mut rows: Vec<Value> = here
             .iter()
@@ -91,7 +117,7 @@ fn list(device: &Device, offline: bool, as_json: bool) -> Res<()> {
                 })
             })
             .collect();
-        rows.extend(waiting.iter().map(pending_json));
+        rows.extend(waiting.vaults.iter().map(pending_json));
         let text = serde_json::to_string_pretty(&rows).map_err(|e| Failure::msg(e.to_string()))?;
         println!("{text}");
         return Ok(());
@@ -102,238 +128,360 @@ fn list(device: &Device, offline: bool, as_json: bool) -> Res<()> {
             (FfiSyncTarget::Cloud, true) => "synced",
             (FfiSyncTarget::Cloud, false) => "cloud, not on a server",
         };
-        println!("{}  {}  ({place})", v.vault_id, one_line(&v.name));
+        println!(
+            "{}  {}  ({place})",
+            one_line(&v.vault_id),
+            one_line(&v.name)
+        );
     }
-    if here.is_empty() && waiting.is_empty() {
+    if here.is_empty() && waiting.vaults.is_empty() {
         eprintln!("unissh: no vaults to show");
     }
-    if !waiting.is_empty() {
+    if !waiting.vaults.is_empty() {
         println!();
-        println!("Shared with this account, waiting for you to trust the owner:");
-        for p in &waiting {
-            match &p.inspected {
-                Ok(info) => println!(
-                    "{}  {}, {}\n    owner fingerprint {}",
-                    p.vault_id,
-                    claimed(p.claimed_owner.as_ref()),
-                    role(info.my_role),
-                    grouped(&info.fingerprint)
-                ),
-                Err(e) => println!("{}  cannot be verified: {e}", p.vault_id),
-            }
+        println!("Shared with this account, not on this machine yet:");
+        for p in &waiting.vaults {
+            println!("{}", pending_line(p));
         }
-        println!("Trust one with `unissh vaults trust <id>` after comparing the fingerprint with its owner.");
+        println!(
+            "Trust one with `unissh vaults trust <id>`, with the fingerprint its owner gives you."
+        );
     }
     Ok(())
+}
+
+/// One waiting vault, for `vaults list`.
+fn pending_line(p: &PendingVault) -> String {
+    let id = one_line(&p.vault_id);
+    match &p.inspected {
+        Ok(info) => match info.trust {
+            FfiVaultTrust::NotPinned => format!(
+                "{id}  {}, {}; waits for you to trust its owner",
+                claimed(p.claimed_owner.as_ref()),
+                role(info.my_role)
+            ),
+            FfiVaultTrust::Pinned => {
+                format!("{id}  trusted, not fetched yet: `unissh vaults trust {id}` fetches it")
+            }
+            FfiVaultTrust::PinnedToAnotherOwner => format!("{id}  {}", another_owner(&id, info)),
+        },
+        Err(e) => format!("{id}  cannot be verified: {}", one_line(e)),
+    }
+}
+
+/// The loud warning for a vault the server now says someone else created.
+fn another_owner(id: &str, info: &SharedVaultInfo) -> String {
+    format!(
+        "WARNING: the server now names a DIFFERENT owner for vault {id} than the one you \
+         trusted on this machine (it presents fingerprint {}). The vault is not fetched and \
+         nothing changed. Check with the vault's owner over a channel you trust before doing \
+         anything else: the server, or someone who controls it, may be posing as them",
+        grouped_fingerprint(info.fingerprint.clone())
+    )
 }
 
 fn pending_json(p: &PendingVault) -> Value {
     match &p.inspected {
         Ok(info) => json!({
             "vault_id": p.vault_id,
-            "status": "waiting_for_trust",
+            "status": status(info.trust),
             "owner_ed25519": info.owner_ed25519_hex,
             "owner_fingerprint": info.fingerprint,
-            "owner_claimed_handle": p.claimed_owner.as_ref().and_then(|d| d.handle.clone()),
-            "owner_claimed_name": p.claimed_owner.as_ref().and_then(|d| d.display_name.clone()),
+            "owner_claimed_handle": claim_of(p, |d| d.handle.as_deref()),
+            "owner_claimed_name": claim_of(p, |d| d.display_name.as_deref()),
             "role": role(info.my_role),
             "pinned_to_another_owner": info.trust == FfiVaultTrust::PinnedToAnotherOwner,
         }),
         Err(e) => json!({
             "vault_id": p.vault_id,
             "status": "unverifiable",
-            "error": e.to_string(),
+            "error": e,
         }),
     }
 }
 
-/// After `unissh sync`: names each vault that waits for trust, so the user
-/// knows which one, whose, and what to do. Best effort: a failure is a
-/// warning, the sync itself already went through.
+/// A waiting vault's `status` in `vaults list --json`.
+const fn status(trust: FfiVaultTrust) -> &'static str {
+    match trust {
+        FfiVaultTrust::NotPinned => "waiting_for_trust",
+        FfiVaultTrust::Pinned => "trusted_not_fetched",
+        FfiVaultTrust::PinnedToAnotherOwner => "owner_changed",
+    }
+}
+
+/// One field of the owner's directory entry, as [`capped`] shows it.
+fn claim_of(p: &PendingVault, field: impl Fn(&DirectoryEntry) -> Option<&str>) -> Option<String> {
+    p.claimed_owner.as_ref().and_then(field).map(capped)
+}
+
+/// After `unissh sync`: says how many shared vaults wait, from the server's
+/// catalog minus this machine — one request, nothing inspected. Only a vault
+/// with an owner pinned here but still missing is inspected (that is rare),
+/// so that a server naming a DIFFERENT owner is said loudly. Best effort: a
+/// failure is a warning, the sync itself already went through.
 pub fn name_pending(device: &Device) {
-    let waiting = match pending(device) {
-        Ok(waiting) => waiting,
-        Err(e) => {
-            eprintln!("unissh: could not check for vaults shared with this account: {e}");
-            return;
+    if let Err(e) = report_pending(device) {
+        eprintln!("unissh: could not check for vaults shared with this account: {e}");
+    }
+}
+
+fn report_pending(device: &Device) -> Res<()> {
+    let access = device.access()?;
+    let transport = HttpSyncTransport::new(device.link.base_url.clone(), access.clone());
+    let waiting = waiting_vaults(&device.core, &transport)?;
+    if waiting.malformed > 0 {
+        eprintln!(
+            "unissh: the server listed {} vault(s) under a malformed id; they were ignored",
+            waiting.malformed
+        );
+    }
+    let mut untrusted = 0_usize;
+    for v in &waiting.vaults {
+        if !v.pinned {
+            untrusted = untrusted.saturating_add(1);
+            continue;
         }
-    };
-    for p in &waiting {
-        match &p.inspected {
-            Ok(info) => eprintln!(
-                "unissh: vault {} is shared with this account by {}; it is not fetched until \
-                 you trust its owner. Owner fingerprint: {}. Compare it with the owner's, then \
-                 `unissh vaults trust {}`",
-                p.vault_id,
-                claimed(p.claimed_owner.as_ref()),
-                grouped(&info.fingerprint),
-                p.vault_id
+        let id = one_line(&v.vault_id);
+        let found = inspect_pending(&device.core, &device.link.base_url, &access, &v.vault_id)?;
+        match found.as_ref().map(|p| &p.inspected) {
+            Some(Ok(info)) if info.trust == FfiVaultTrust::PinnedToAnotherOwner => {
+                eprintln!("unissh: {}", another_owner(&id, info));
+            }
+            Some(Ok(_)) => eprintln!(
+                "unissh: vault {id} is trusted but not fetched yet: `unissh vaults trust {id}` \
+                 fetches it"
             ),
-            Err(e) => eprintln!(
-                "unissh: vault {} is shared with this account but cannot be verified: {e}",
-                p.vault_id
+            Some(Err(e)) => eprintln!(
+                "unissh: vault {id} is trusted here but cannot be verified: {}",
+                one_line(e)
             ),
+            None => {}
         }
     }
+    if untrusted > 0 {
+        eprintln!(
+            "unissh: {untrusted} shared vault(s) wait for you to trust their owner — \
+             `unissh vaults list`"
+        );
+    }
+    Ok(())
 }
 
 /// `unissh vaults trust`.
 fn trust(device: &Device, spec: &str, given: Option<&str>) -> Res<()> {
+    // Checked before anything is fetched: `--fingerprint yes` is not a fingerprint.
+    let given = given.map(fingerprint_arg).transpose()?;
     // One sync at a time: the pull below writes the vault in.
     let _one_at_a_time = device.home.sync_lock()?;
-    let waiting = pending(device)?;
-    let vault = pick(&waiting, spec)?;
+    let access = device.access()?;
+    let transport = HttpSyncTransport::new(device.link.base_url.clone(), access.clone());
+    let waiting = waiting_vaults(&device.core, &transport)?;
+    let ids: Vec<String> = waiting.vaults.into_iter().map(|v| v.vault_id).collect();
+    let id = pick(&ids, spec)?.to_owned();
+    let Some(vault) = inspect_pending(&device.core, &device.link.base_url, &access, &id)? else {
+        return Err(Failure::msg(format!(
+            "vault {id} was created by this account: it needs no trust, and a sync brings it"
+        )));
+    };
     let info = vault
         .inspected
         .as_ref()
-        .map_err(|e| Failure::msg(format!("vault {}: {e}", vault.vault_id)))?;
-    if info.trust == FfiVaultTrust::PinnedToAnotherOwner {
-        return Err(Failure::msg(format!(
-            "this machine already trusts another owner for vault {}, and the server now \
-             presents a different one (fingerprint {}). Nothing changed: talk to the vault's \
-             owner before going further",
-            vault.vault_id,
-            grouped(&info.fingerprint)
-        )));
+        .map_err(|e| Failure::msg(format!("vault {id}: {}", one_line(e))))?;
+    match info.trust {
+        FfiVaultTrust::PinnedToAnotherOwner => return Err(Failure::msg(another_owner(&id, info))),
+        // Trusted earlier, the pull did not finish: straight to the pull.
+        FfiVaultTrust::Pinned => {}
+        FfiVaultTrust::NotPinned => confirm(device, &transport, &vault, info, given)?,
     }
-    let shown = describe(vault, info);
-    let reply = match given {
-        Some(typed) => {
-            println!("{shown}");
-            answer(typed, &info.fingerprint)
-        }
-        None => {
-            let mut tty = Tty::open().map_err(|e| {
-                Failure::msg(format!(
-                    "cannot ask on the terminal ({e}); pass --fingerprint with the fingerprint \
-                     the owner gave you"
-                ))
-            })?;
-            tty.say(&shown)?;
-            tty.say("\n")?;
-            let typed = tty.line(
-                "Paste the fingerprint the owner gave you, or type yes if you compared it \
-                 digit by digit [no]: ",
-            )?;
-            answer(&typed, &info.fingerprint)
-        }
-    };
-    match reply {
-        Answer::Matches | Answer::Confirmed => {}
-        Answer::Mismatch => {
-            return Err(Failure::msg(
-                "that is not the fingerprint this vault's owner signed it with. Nothing was \
-                 trusted: someone may be posing as the owner. Check with the owner again",
-            ))
-        }
-        Answer::Declined => return Err(Failure::msg("not trusted; nothing changed")),
-    }
-    device
-        .core
-        .pin_vault_genesis_owner(vault.vault_id.clone(), info.owner_ed25519_hex.clone())?;
-    let access = device.access()?;
     let space = server::space_of(device, &access);
-    let transport = HttpSyncTransport::new(device.link.base_url.clone(), access);
-    let report = transport.pull_vault(&device.core, &space, &vault.vault_id)?;
-    println!(
-        "Trusted. Vault {} fetched: {} received.",
-        vault.vault_id, report.applied
-    );
+    let report = transport.pull_vault(&device.core, &space, &id)?;
+    let fetched = device
+        .core
+        .list_vaults()?
+        .iter()
+        .any(|v| v.vault_id.eq_ignore_ascii_case(&id));
+    if fetched {
+        println!("Trusted. Vault {id} fetched: {} received.", report.applied);
+    } else {
+        println!(
+            "Trusted, not fetched yet: run `unissh vaults trust {id}` again ({} received).",
+            report.applied
+        );
+    }
     server::warn_about(&report);
     Ok(())
 }
 
-/// What the user is shown before deciding.
+/// Asks for the owner's fingerprint (or takes `given`) and has the core pin
+/// the owner if it is the creator's.
+fn confirm(
+    device: &Device,
+    transport: &HttpSyncTransport,
+    vault: &PendingVault,
+    info: &SharedVaultInfo,
+    given: Option<String>,
+) -> Res<()> {
+    let shown = describe(vault, info);
+    let (expected, confirmed_displayed) = if let Some(fingerprint) = given {
+        println!("{shown}");
+        (fingerprint, false)
+    } else {
+        let mut tty = Tty::open().map_err(|e| {
+            Failure::msg(format!(
+                "cannot ask on the terminal ({e}); pass --fingerprint with the fingerprint \
+                 the owner gave you"
+            ))
+        })?;
+        tty.say(&shown)?;
+        tty.say("\n")?;
+        let typed = tty.line(
+            "Type or paste the fingerprint the owner gave you (press Enter if you have none): ",
+        )?;
+        match answer(&typed) {
+            Answer::Fingerprint(fingerprint) => (fingerprint, false),
+            Answer::Empty => {
+                tty.say(&displayed(info))?;
+                tty.say("\n")?;
+                let typed = tty.line("Type yes if it is exactly theirs, digit by digit [no]: ")?;
+                if answer(&typed) != Answer::Yes {
+                    return Err(Failure::msg("not trusted; nothing changed"));
+                }
+                (info.fingerprint.clone(), true)
+            }
+            Answer::Yes | Answer::Other => {
+                return Err(Failure::msg(
+                    "that is not a fingerprint (64 hex digits); nothing was trusted",
+                ))
+            }
+        }
+    };
+    let outcome = transport.trust_vault(
+        &device.core,
+        &vault.vault_id,
+        Some(expected.as_str()),
+        confirmed_displayed,
+    )?;
+    match outcome {
+        FfiTrustOutcome::Trusted | FfiTrustOutcome::AlreadyTrusted => Ok(()),
+        FfiTrustOutcome::FingerprintMismatch => Err(Failure::msg(
+            "that is not the fingerprint of the key that created this vault. Nothing was \
+             trusted: someone may be posing as the owner. Check with the owner again",
+        )),
+        FfiTrustOutcome::NotConfirmed => Err(Failure::msg("not trusted; nothing changed")),
+        FfiTrustOutcome::PinnedToAnotherOwner => Err(Failure::msg(another_owner(
+            &one_line(&vault.vault_id),
+            info,
+        ))),
+    }
+}
+
+/// What the user is shown before being asked for the owner's fingerprint.
+/// The fingerprint itself is not in it: the user gives theirs first.
 fn describe(vault: &PendingVault, info: &SharedVaultInfo) -> String {
     format!(
         "Vault {} is shared with this account ({}).\n\
          Owner, as the server names them: {}.\n\
-         Owner fingerprint, as the vault's signatures prove it:\n    {}\n\
-         Ask the owner for their fingerprint (`unissh status`, or the app, on their device) \
-         over a channel you trust, and compare.",
-        vault.vault_id,
+         Ask the owner for their fingerprint over a channel you trust (they find it with \
+         `unissh status`, or in the app, on their own device).",
+        one_line(&vault.vault_id),
         role(info.my_role),
         claimed(vault.claimed_owner.as_ref()),
-        grouped(&info.fingerprint)
     )
 }
 
-/// The vault `spec` names among `waiting`: its id or the start of it.
-fn pick<'a>(waiting: &'a [PendingVault], spec: &str) -> Res<&'a PendingVault> {
+/// The fingerprint shown when the user has none from the owner, and why
+/// confirming it is the weaker check.
+fn displayed(info: &SharedVaultInfo) -> String {
+    format!(
+        "The key that created this vault has the fingerprint\n    {}\n\
+         Whether it is your teammate's is what you are checking. Confirming a fingerprint \
+         shown here is weaker than typing the one they gave you: compare it with theirs, \
+         digit by digit, over a channel you trust.",
+        grouped_fingerprint(info.fingerprint.clone())
+    )
+}
+
+/// The vault `spec` names among the waiting `ids`: its id or the start of it.
+fn pick<'a>(ids: &'a [String], spec: &str) -> Res<&'a str> {
     let spec = spec.trim().to_ascii_lowercase();
     if spec.is_empty() {
         return Err(Failure::msg("name the vault by its id"));
     }
-    let found: Vec<&PendingVault> = waiting
+    let found: Vec<&str> = ids
         .iter()
-        .filter(|p| p.vault_id.to_ascii_lowercase().starts_with(&spec))
+        .map(String::as_str)
+        .filter(|id| id.starts_with(&spec))
         .collect();
     match found.as_slice() {
-        [one] => Ok(*one),
+        [one] => Ok(one),
         [] => Err(Failure::msg(format!(
-            "no vault shared with this account waits for trust under \"{spec}\" \
-             (`unissh vaults list` shows them)"
+            "no vault shared with this account waits under \"{}\" (`unissh vaults list` \
+             shows them)",
+            one_line(&spec)
         ))),
         many => Err(Failure::msg(format!(
-            "\"{spec}\" names several vaults: {}",
-            many.iter()
-                .map(|p| p.vault_id.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
+            "\"{}\" names several vaults: {}",
+            one_line(&spec),
+            many.join(", ")
         ))),
     }
 }
 
-/// What the user answered when asked to confirm a fingerprint.
+/// What the user typed when asked for the owner's fingerprint.
 #[derive(Debug, PartialEq, Eq)]
 enum Answer {
-    /// They typed or pasted the fingerprint, and it is the owner's.
-    Matches,
-    /// They typed `yes`: they compared the fingerprint shown.
-    Confirmed,
-    /// They typed or pasted a fingerprint that is not the owner's.
-    Mismatch,
-    /// Anything else, an empty line included: no.
-    Declined,
+    /// A whole fingerprint (normalised: spaces, `:`, `-` and case dropped).
+    Fingerprint(String),
+    /// Exactly `yes` (any case): only taken after the fingerprint was shown.
+    Yes,
+    /// Nothing: the user has no fingerprint from the owner.
+    Empty,
+    /// Anything else, a part of a fingerprint or `y` included.
+    Other,
 }
 
-/// Reads an answer: a fingerprint (spaces, colons and dashes ignored, any
-/// case), `y`/`yes`, or anything else for no. A fingerprint must be the whole
-/// of it: a prefix does not match.
-fn answer(typed: &str, fingerprint: &str) -> Answer {
-    let word = typed.trim().to_ascii_lowercase();
-    if matches!(word.as_str(), "y" | "yes") {
-        return Answer::Confirmed;
-    }
-    let digits: String = word
-        .chars()
-        .filter(|c| !c.is_whitespace() && !matches!(*c, ':' | '-'))
-        .collect();
-    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Answer::Declined;
-    }
-    if digits == fingerprint.to_ascii_lowercase() {
-        Answer::Matches
+/// Reads an answer. Whether a fingerprint is the owner's is the core's call
+/// ([`unissh_ffi::Core::trust_shared_vault_paged`]); here it is only told
+/// apart from the rest.
+fn answer(typed: &str) -> Answer {
+    let word = typed.trim();
+    if word.is_empty() {
+        Answer::Empty
+    } else if word.eq_ignore_ascii_case("yes") {
+        Answer::Yes
     } else {
-        Answer::Mismatch
+        normalize_fingerprint(word).map_or(Answer::Other, Answer::Fingerprint)
     }
 }
 
-/// A fingerprint in groups of four, easier to read out and compare.
-pub fn grouped(fingerprint: &str) -> String {
-    let chars: Vec<char> = fingerprint.chars().collect();
-    chars
-        .chunks(4)
-        .map(|group| group.iter().collect::<String>())
-        .collect::<Vec<_>>()
-        .join(" ")
+/// `--fingerprint`: only an actual fingerprint, never `yes` — a flag cannot
+/// have compared anything the user was shown.
+fn fingerprint_arg(given: &str) -> Res<String> {
+    match answer(given) {
+        Answer::Fingerprint(fingerprint) => Ok(fingerprint),
+        Answer::Yes | Answer::Empty | Answer::Other => Err(Failure::msg(
+            "--fingerprint takes the owner's fingerprint itself (64 hex digits), as they gave \
+             it to you",
+        )),
+    }
+}
+
+/// `text` from the server, on one line and at most [`CLAIM_CHARS`] long.
+fn capped(text: &str) -> String {
+    let clean = one_line(text);
+    if clean.chars().count() <= CLAIM_CHARS {
+        return clean;
+    }
+    let mut short: String = clean.chars().take(CLAIM_CHARS).collect();
+    short.push('…');
+    short
 }
 
 /// Who the server claims owns a key: handle and name as its directory lists
 /// them, worded as a claim.
 fn claimed(entry: Option<&DirectoryEntry>) -> String {
-    let handle = entry.and_then(|d| d.handle.as_deref()).map(one_line);
-    let name = entry.and_then(|d| d.display_name.as_deref()).map(one_line);
+    let handle = entry.and_then(|d| d.handle.as_deref()).map(capped);
+    let name = entry.and_then(|d| d.display_name.as_deref()).map(capped);
     match (handle, name) {
         (Some(h), Some(n)) => format!("{h} ({n}, unverified)"),
         (Some(one), None) | (None, Some(one)) => format!("{one} (unverified)"),
@@ -358,36 +506,65 @@ const fn kind(target: FfiSyncTarget) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{answer, claimed, grouped, Answer};
+    use super::{answer, claimed, fingerprint_arg, pick, Answer, CLAIM_CHARS};
     use unissh_cloud::dto::DirectoryEntry;
+    use unissh_ffi::grouped_fingerprint;
 
     const FP: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-    /// The user trusts only by typing the owner's whole fingerprint (in any
-    /// grouping or case) or an explicit yes; a wrong or partial fingerprint is
-    /// a mismatch, and anything else — Enter included — is no.
+    /// A whole fingerprint in any grouping or case is told apart from `yes`,
+    /// an empty line, and the rest — a part of one and `y` included.
     #[test]
-    fn only_the_whole_fingerprint_or_an_explicit_yes_trusts() {
-        assert_eq!(answer(&grouped(FP).to_uppercase(), FP), Answer::Matches);
-        assert_eq!(answer("01:23:45-67 89ab", FP), Answer::Mismatch, "a prefix");
-        assert_eq!(answer("yes", FP), Answer::Confirmed);
-        for no in ["", "no", "ok", "trust me"] {
-            assert_eq!(answer(no, FP), Answer::Declined, "{no:?}");
+    fn an_answer_is_a_whole_fingerprint_yes_nothing_or_no() {
+        assert_eq!(
+            answer(&grouped_fingerprint(FP.to_owned()).to_uppercase()),
+            Answer::Fingerprint(FP.to_owned())
+        );
+        assert_eq!(answer(" YES "), Answer::Yes);
+        assert_eq!(answer("  "), Answer::Empty);
+        for other in ["y", "01:23:45-67 89ab", "no", "trust me"] {
+            assert_eq!(answer(other), Answer::Other, "{other:?}");
         }
     }
 
-    /// The owner the server names is always worded as its unverified claim.
+    /// `--fingerprint` takes a fingerprint only: `yes` on the command line
+    /// compared nothing.
     #[test]
-    fn the_owner_the_server_names_reads_as_an_unverified_claim() {
+    fn the_fingerprint_flag_refuses_yes() {
+        assert_eq!(fingerprint_arg(FP).unwrap(), FP);
+        assert!(fingerprint_arg("yes").is_err());
+    }
+
+    /// A vault is named by its id or a unique start of it, in any case;
+    /// an empty, unknown or ambiguous name picks none.
+    #[test]
+    fn a_vault_is_picked_by_a_unique_start_of_its_id() {
+        let ids = [
+            "aa110000000000000000000000000000".to_owned(),
+            "aa220000000000000000000000000000".to_owned(),
+        ];
+        assert_eq!(pick(&ids, " AA1 ").unwrap(), ids[0]);
+        assert!(pick(&ids, "aa").is_err(), "ambiguous");
+        assert!(pick(&ids, "bb").is_err(), "unknown");
+        assert!(pick(&ids, "").is_err(), "empty");
+    }
+
+    /// The owner the server names is always worded as its unverified claim,
+    /// cut to a readable length.
+    #[test]
+    fn the_owner_the_server_names_reads_as_a_short_unverified_claim() {
         let entry = DirectoryEntry {
             account_id: "id".to_owned(),
             handle: Some("alice".to_owned()),
-            display_name: Some("Alice".to_owned()),
+            display_name: Some("A".repeat(500)),
             ed25519_pub_hex: String::new(),
             x25519_pub_hex: String::new(),
             status: "active".to_owned(),
         };
-        assert_eq!(claimed(Some(&entry)), "alice (Alice, unverified)");
+        let shown = claimed(Some(&entry));
+        assert!(shown.starts_with("alice ("), "{shown}");
+        assert!(shown.ends_with("…, unverified)"), "{shown}");
+        assert!(shown.chars().count() < CLAIM_CHARS + 30, "{shown}");
         assert_eq!(claimed(None), "an owner the server does not name");
     }
 }
