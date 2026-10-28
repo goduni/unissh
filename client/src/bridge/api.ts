@@ -199,6 +199,10 @@ export const keyUsage = (vaultId: string, itemId: string) =>
 /** Guided rotation: the core's plan for rotating `keyId`, frozen until `keyRotationClose`. */
 export const keyRotationPlan = (vaultId: string, keyId: string) =>
   invoke<KeyRotationPlan>("key_rotation_plan", { vaultId, keyId });
+/** Whether `keyId` already holds the candidate of this device's rotation of it
+ *  (an interrupted finish — nothing to run, only the finish). */
+export const keyRotationCommitted = (vaultId: string, keyId: string) =>
+  invoke<boolean>("key_rotation_committed", { vaultId, keyId });
 /** Ready a fresh run of the plan towards `candidateId`; null when the key item
  *  already holds the candidate (an interrupted finish — nothing to run). */
 export const keyRotationStart = (handle: string, candidateId: string, resumed: boolean) =>

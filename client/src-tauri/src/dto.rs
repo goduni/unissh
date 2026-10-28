@@ -1209,9 +1209,12 @@ pub struct KeyRotationPlan {
     pub skipped: Vec<RotationSkip>,
     /// One login is reached over more than one route.
     pub shared_endpoint: bool,
+    /// Targets reached over a machine whose host key is not pinned yet: the
+    /// rotation refuses to start until each was connected to once.
+    pub unpinned: Vec<String>,
 }
 impl KeyRotationPlan {
-    pub fn new(handle: String, plan: &rotation::RotationPlan) -> Self {
+    pub fn new(handle: String, plan: &rotation::RotationPlan, unpinned: Vec<String>) -> Self {
         let targets = plan
             .targets
             .iter()
@@ -1254,6 +1257,7 @@ impl KeyRotationPlan {
             dependents,
             skipped,
             shared_endpoint: plan.has_shared_endpoint(),
+            unpinned,
         }
     }
 }
@@ -1271,6 +1275,9 @@ pub struct KeyRotationRun {
     pub settled: bool,
     /// Targets finishing would lock out (the candidate was not proven there).
     pub unproven: Vec<String>,
+    /// Targets finishing would cut off: proven, but reached through a hop in
+    /// `unproven`.
+    pub cut_off: Vec<String>,
     /// Targets where the candidate works but the old key was not seen refused.
     pub old_not_refused: Vec<String>,
 }
@@ -1286,6 +1293,7 @@ impl KeyRotationRun {
             cancelled: run.cancelled(),
             settled: run.settled(),
             unproven: outlook.unproven,
+            cut_off: outlook.cut_off,
             old_not_refused: outlook.old_not_refused,
         }
     }

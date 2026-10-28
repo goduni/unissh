@@ -107,8 +107,8 @@ export function KeyRotationModal({
         setPlan(pl);
         if (!resumeCandidate) return;
         // Not known: `start` asks again and reports the error.
-        const ready = await api.keyRotationStart(pl.handle, resumeCandidate, true).catch(() => undefined);
-        if (alive) setCommitted(ready === null);
+        const done = await api.keyRotationCommitted(vault, keyItemId).catch(() => false);
+        if (alive) setCommitted(done);
       })
       .catch((e) => {
         if (!alive) return;
@@ -217,6 +217,11 @@ export function KeyRotationModal({
   // key until they get it. Separately, machines where it was proven but the old
   // key was not seen refused: they keep working and may still accept the old key.
   const notSwitched = run ? targetsOf(run.unproven) : [];
+  // Proven, but behind a hop in `notSwitched`: cut off with it after finish.
+  const cutOff = run ? targetsOf(run.cutOff) : [];
+  // Machines whose host key is not pinned yet: the core refuses to start, and
+  // a connect to the host (for a hop: the host it is a hop of) pins them.
+  const unpinned = plan ? [...new Set(targetsOf(plan.unpinned).map((tg) => tg.viaLabel ?? tg.label))] : [];
   const stillOld = run ? targetsOf(run.oldNotRefused) : [];
   // Hosts that reach the key only through target `id` as a hop: they follow it.
   const dependentsOf = (id: string) =>
@@ -227,7 +232,7 @@ export function KeyRotationModal({
       vault,
       keyId: keyItemId,
       candidateId,
-      lockedOut: [...new Set(notSwitched.flatMap((tg) => [tg.label, ...dependentsOf(tg.id)]))],
+      lockedOut: [...new Set([...notSwitched, ...cutOff].flatMap((tg) => [tg.label, ...dependentsOf(tg.id)]))],
       // Only ever true without a run, so `lockedOut` is empty with it: the key
       // item already holds the candidate and finishing changes no key.
       committed: committed === true,
@@ -281,7 +286,7 @@ export function KeyRotationModal({
                 <Btn
                   icon="refresh"
                   onClick={start}
-                  disabled={starting || committed === null || plan === null}
+                  disabled={starting || committed === null || plan === null || unpinned.length > 0}
                   style={mobileBtn}
                 >
                   {t(resumeCandidate ? "keyRotation.continue" : "keyRotation.start")}
@@ -320,6 +325,13 @@ export function KeyRotationModal({
             <p role="note" style={{ ...note, color: p.amber, display: "flex", gap: rem(6) }}>
               <Icon name="alert" size={14} color={p.amber} style={{ marginTop: rem(2) }} />
               {t("keyRotation.certNote")}
+            </p>
+          )}
+
+          {unpinned.length > 0 && (
+            <p role="note" style={{ ...note, color: p.amber, display: "flex", gap: rem(6) }}>
+              <Icon name="alert" size={14} color={p.amber} style={{ marginTop: rem(2), flexShrink: 0 }} />
+              {t("keyRotation.unpinnedNote", { hosts: unpinned.join(", ") })}
             </p>
           )}
 

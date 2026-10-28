@@ -680,6 +680,9 @@ export interface KeyRotationPlan {
   skipped: { profileId: string; label: string; reason: RotationSkipReason }[];
   /** One login is reached over more than one route. */
   sharedEndpoint: boolean;
+  /** Targets reached over a machine whose host key is not pinned yet: the
+   *  rotation does not start until each was connected to once. */
+  unpinned: string[];
 }
 
 export interface KeyRotationRun {
@@ -691,6 +694,8 @@ export interface KeyRotationRun {
   settled: boolean;
   /** Finishing locks these out: the candidate was not proven there. */
   unproven: string[];
+  /** Finishing cuts these off too: proven, but reached through a hop in `unproven`. */
+  cutOff: string[];
   /** The candidate works here, but the old key was not seen refused. */
   oldNotRefused: string[];
 }

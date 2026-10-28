@@ -854,9 +854,14 @@ pub async fn key_rotation_plan(
     state: State<'_, AppState>,
 ) -> ApiResult<dto::KeyRotationPlan> {
     let core = state.core.clone();
-    let plan = blocking(move || core.plan_key_rotation(vault_id, key_id)).await?;
+    let (plan, unpinned) = blocking(move || {
+        let plan = core.plan_key_rotation(vault_id, key_id)?;
+        let unpinned = core.key_rotation_unpinned(&plan)?;
+        Ok((plan, unpinned))
+    })
+    .await?;
     let handle = new_id();
-    let out = dto::KeyRotationPlan::new(handle.clone(), &plan);
+    let out = dto::KeyRotationPlan::new(handle.clone(), &plan, unpinned);
     state.key_rotations.insert(
         handle,
         KeyRotationSlot {
@@ -868,9 +873,12 @@ pub async fn key_rotation_plan(
 }
 
 /// Guided rotation: readies a fresh run of plan `handle` towards candidate
-/// `candidate_id` and returns it, every machine waiting for its first step.
+/// `candidate_id` — the candidate this device recorded for the key, else
+/// `NotFound` — and returns it, every machine waiting for its first step.
 /// `None` when the key item already holds the candidate's key (an interrupted
-/// finish): there is nothing to run then, only the finish.
+/// finish): there is nothing to run then, only the finish. Refused while a
+/// machine's host key is not pinned yet, and while an earlier run of this plan
+/// still has steps in flight.
 #[tauri::command]
 pub async fn key_rotation_start(
     handle: String,
@@ -878,35 +886,65 @@ pub async fn key_rotation_start(
     resumed: bool,
     state: State<'_, AppState>,
 ) -> ApiResult<Option<dto::KeyRotationRun>> {
-    let plan = state
+    let slot = state
         .key_rotations
         .get(&handle)
-        .map(|slot| slot.plan.clone())
+        .map(|slot| slot.value().clone())
         .ok_or_else(|| ApiError::not_found("key rotation"))?;
+    if slot
+        .driver
+        .as_ref()
+        .is_some_and(|d| !d.snapshot().settled())
+    {
+        return Err(ApiError::other(
+            "the previous rotation run is still going: stop it and let it settle first",
+        ));
+    }
+    let plan = slot.plan;
     let core = state.core.clone();
-    let (vault, key, candidate) = (
+    let (vault, key, check) = (
         plan.vault_id.clone(),
         plan.key_item_id.clone(),
-        candidate_id.clone(),
+        plan.clone(),
     );
-    let keys = blocking(move || core.key_rotation_keys(vault, key, candidate)).await?;
+    let (keys, unpinned) = blocking(move || {
+        let keys = core.key_rotation_keys(vault, key)?;
+        let unpinned = core.key_rotation_unpinned(&check)?;
+        Ok((keys, unpinned))
+    })
+    .await?;
+    if keys.candidate_id != candidate_id {
+        return Err(ApiError::not_found("key rotation candidate"));
+    }
     if keys.committed() {
         return Ok(None);
     }
-    let driver = RotationDriver::new(
-        (*plan).clone(),
-        keys,
-        candidate_id,
-        resumed,
-        &RunScope::full(),
-    );
+    if !unpinned.is_empty() {
+        return Err(ApiError::other(
+            "connect to each machine once first, so that its host key is pinned",
+        ));
+    }
+    let driver = RotationDriver::new((*plan).clone(), keys, resumed, &RunScope::full());
     let run = dto::KeyRotationRun::new(&plan, &driver.snapshot());
-    let mut slot = state
+    state
         .key_rotations
         .get_mut(&handle)
-        .ok_or_else(|| ApiError::not_found("key rotation"))?;
-    slot.driver = Some(Arc::new(driver));
+        .ok_or_else(|| ApiError::not_found("key rotation"))?
+        .driver = Some(Arc::new(driver));
     Ok(Some(run))
+}
+
+/// Guided rotation: whether key `key_id` already holds the candidate of the
+/// rotation this device recorded for it (an interrupted finish: only the
+/// finish is left). `NotFound` for no such rotation.
+#[tauri::command]
+pub async fn key_rotation_committed(
+    vault_id: String,
+    key_id: String,
+    state: State<'_, AppState>,
+) -> ApiResult<bool> {
+    let core = state.core.clone();
+    blocking(move || core.key_rotation_committed(vault_id, key_id)).await
 }
 
 fn rotation_driver(state: &AppState, handle: &str) -> ApiResult<Arc<RotationDriver>> {
