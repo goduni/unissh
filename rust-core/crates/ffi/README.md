@@ -38,10 +38,6 @@ create_ssh_key(vault_id, item_id) -> public    // create-only: AlreadyExists whe
 import_ssh_key(vault_id, item_id, openssh_private, passphrase?) -> public   // Ed25519/ECDSA/RSA (creates or replaces);
                                                                            // PassphraseRequired / WrongPassphrase for an encrypted key
 create_imported_ssh_key(vault_id, item_id, openssh_private, passphrase?) -> public   // create-only twin
-new_item_id(vault_id, label) -> id             // `slug(label)-<millis>`, stepped past ids the vault already has;
-                                               // for an item whose save takes the caller's id (save_password for a
-                                               // new host's password). Minted and written in two calls, so not
-                                               // reserved: interim, until save_host creates that password itself
 save_identity(vault_id, identity)              // personal identity: creates or replaces (the edit path)
 create_identity(vault_id, identity)            // create-only: AlreadyExists when a live item holds identity_id
 import_ssh_certificate(vault_id, key_item_id, cert_openssh)    // cert-auth (CA)
@@ -141,6 +137,18 @@ save_connection(vault_id, profile) -> profile_id / list_connections(vault_id)
 //   An empty profile_id (and group_id / snippet_id in save_group / save_snippet) is a new item:
 //   the core mints `slug(label)-<millis>` (collision-checked in the vault, tombstones included)
 //   and returns it. Clients do not mint ids.
+save_host(vault_id, HostSave{profile, new_password?, group, identity?}) -> HostSaved   // Rust-only
+//   The one host-save path of the app's host editor and `unissh hosts add|edit`: checks the
+//   HostRule set (label, address, user unless personal; a hop by address has one; a referenced
+//   hop is another host of the same vault, found by uid, logging in with Key / VaultPassword /
+//   SystemAgent; a typed password goes with VaultPassword; the group or identity exists) →
+//   FfiError::InvalidHost{rule}, nothing written. Then, under one state lock: the typed password
+//   (id minted), the host and its one group (HostGroup Unchanged|Ungrouped|Existing|New) in one
+//   storage transaction; the identity binding pinned to where the host points (given, or the one
+//   already linked re-pinned); the password a typed one replaced removed if nothing else uses it.
+//   A link or removal that fails leaves the host saved: HostSaved.unfinished lists it.
+//   Referenced hops are stored in the placeholder shape; the username template is kept for a
+//   personal login only.
 get_connection(vault_id, profile_id) / delete_connection(vault_id, profile_id)
 import_ssh_config(vault_id, config_text) -> [created_profile_ids]        // pasted text; Include is reported, not followed
 import_ssh_config_at_path(vault_id, path, only?) -> [{alias, origin_file}] // a FILE: Include followed as ssh follows it,
