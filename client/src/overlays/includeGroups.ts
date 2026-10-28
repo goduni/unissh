@@ -174,9 +174,11 @@ export function planIncludeGroups(input: IncludeGroupPlanInput): IncludeGroupPla
  *  unchanged are not written: each write is a vault item, a sync object, and a
  *  line in the audit log.
  *
- *  @param newGroupId ids for the groups being created; the caller owns the
- *                    scheme (the store's is `group-<timestamp>`), and it is
- *                    passed in so this stays pure and testable. */
+ *  @param newGroupId a key for each group being created, unique within the
+ *                    plan. It is not the group's id: the core mints that, so
+ *                    the caller saves these groups with an empty id. Nothing
+ *                    in the plan refers to a new group by this key (a new
+ *                    group's parent is the target, which already exists). */
 export function planIncludeGroupWrites(
   existing: ServerGroup[],
   plan: IncludeGroupPlan,
