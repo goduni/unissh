@@ -300,7 +300,7 @@ mod linux {
             .await?
             .body()
             .deserialize()?;
-        Ok(bool::try_from(value)?)
+        bool::try_from(value)
     }
 
     /// [`take_sleep_inhibitor`], or `None` and a warning.
