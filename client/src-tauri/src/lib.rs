@@ -347,6 +347,7 @@ pub fn run() {
             commands::unlock,
             commands::lock,
             commands::is_unlocked,
+            commands::own_fingerprint,
             commands::set_keepalive_secs,
             commands::change_password,
             commands::account_id,
@@ -566,6 +567,8 @@ pub fn run() {
             cloud::commands::server_restore_deleted_vaults,
             cloud::commands::server_list_vaults,
             cloud::commands::server_pull_vault,
+            cloud::commands::server_pending_shared_vaults,
+            cloud::commands::server_trust_shared_vault,
             cloud::commands::server_bind_and_push_vault,
             cloud::commands::server_move_vault_to_server,
             // cloud membership / sharing
