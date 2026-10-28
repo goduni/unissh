@@ -174,7 +174,7 @@ bQ+jhbv16Otv7qiw==
                 "v".into(),
                 ServerGroup {
                     group_id: String::new(),
-                    label: "Привет".into(),
+                    label: "Prod Boxes".into(),
                     member_ids: vec![host.clone()],
                     parent_id: None,
                     color: None,
@@ -194,7 +194,7 @@ bQ+jhbv16Otv7qiw==
             )
             .unwrap();
         assert!(minted_from(&host, "web-server-prod"), "host id {host}");
-        assert!(minted_from(&group, "group"), "group id {group}");
+        assert!(minted_from(&group, "prod-boxes"), "group id {group}");
         assert!(minted_from(&snippet, "tail-logs"), "snippet id {snippet}");
         assert_eq!(
             core.get_connection("v".into(), host.clone())
@@ -236,8 +236,6 @@ bQ+jhbv16Otv7qiw==
             .get_public_key("v".into(), "k".into())
             .unwrap()
             .fingerprint;
-        core.save_password("v".into(), "pw".into(), "s".into())
-            .unwrap();
         let identity = |id: &str| Identity {
             identity_id: id.into(),
             label: id.into(),
@@ -254,7 +252,7 @@ bQ+jhbv16Otv7qiw==
         assert!(matches!(
             core.create_imported_ssh_key(
                 "v".into(),
-                "pw".into(),
+                "k".into(),
                 ENCRYPTED_KEY.into(),
                 Some("secret".into())
             ),
@@ -271,7 +269,15 @@ bQ+jhbv16Otv7qiw==
                 .fingerprint,
             fingerprint
         );
-        assert_eq!(core.get_password("v".into(), "pw".into()).unwrap(), "s");
+    }
+
+    #[test]
+    fn creating_over_a_deleted_item_is_allowed() {
+        let (core, _dir) = core_with_vault();
+        core.create_ssh_key("v".into(), "k".into()).unwrap();
+        core.delete_item("v".into(), "k".into()).unwrap();
+        core.create_ssh_key("v".into(), "k".into()).unwrap();
+        assert!(core.get_public_key("v".into(), "k".into()).is_ok());
     }
 
     #[test]

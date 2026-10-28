@@ -3544,6 +3544,10 @@ impl Core {
     /// for a new host): `slug(label)-<millis>`, stepped past any id the vault
     /// already has. Hosts, groups and snippets need no call: saved with an
     /// empty id, they get one the same way.
+    ///
+    /// Interim: the id is minted here and written by a later call
+    /// (`save_password`), outside this lock, so it is not reserved in between.
+    /// It goes once saving a host creates the host's password item itself.
     pub fn new_item_id(&self, vault_id: String, label: String) -> Result<String, FfiError> {
         self.with_state(|state| mint_item_id(&state.storage, &vault_id, &label, "item"))
     }

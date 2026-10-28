@@ -38,7 +38,12 @@ create_ssh_key(vault_id, item_id) -> public    // create-only: AlreadyExists whe
 import_ssh_key(vault_id, item_id, openssh_private, passphrase?) -> public   // Ed25519/ECDSA/RSA (creates or replaces);
                                                                            // PassphraseRequired / WrongPassphrase for an encrypted key
 create_imported_ssh_key(vault_id, item_id, openssh_private, passphrase?) -> public   // create-only twin
-new_item_id(vault_id, label) -> id             // `slug(label)-<millis>`, stepped past ids the vault already has
+new_item_id(vault_id, label) -> id             // `slug(label)-<millis>`, stepped past ids the vault already has;
+                                               // for an item whose save takes the caller's id (save_password for a
+                                               // new host's password). Minted and written in two calls, so not
+                                               // reserved: interim, until save_host creates that password itself
+save_identity(vault_id, identity)              // personal identity: creates or replaces (the edit path)
+create_identity(vault_id, identity)            // create-only: AlreadyExists when a live item holds identity_id
 import_ssh_certificate(vault_id, key_item_id, cert_openssh)    // cert-auth (CA)
 get_public_key(vault_id, item_id) -> {openssh, fingerprint}    // re-read the public key
 rename_item(vault_id, item_id, new_item_id) / delete_item(vault_id, item_id)
