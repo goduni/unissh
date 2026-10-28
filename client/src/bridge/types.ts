@@ -506,6 +506,8 @@ export type ApiErrorKind =
   | "invalidCredentials"
   | "notFound"
   | "alreadyExists"
+  | "passphraseRequired"
+  | "wrongPassphrase"
   | "alreadyCloud"
   | "readOnlyVault"
   | "noServer"
@@ -583,6 +585,10 @@ export function apiErrorMessage(e: unknown): string {
         return i18n.t("error.notFound");
       case "alreadyExists":
         return i18n.t("error.alreadyExists");
+      case "passphraseRequired":
+        return i18n.t("error.passphraseRequired");
+      case "wrongPassphrase":
+        return i18n.t("error.wrongPassphrase");
       case "alreadyCloud":
         return i18n.t("error.alreadyCloud");
       case "readOnlyVault":

@@ -152,9 +152,14 @@ export const vaultImportBackup = (
 
 // ── items / keys / certs ───────────────────────────────────────
 export const listItems = (vaultId: string) => invoke<ItemInfo[]>("list_items", { vaultId });
-export const generateSshKey = (vaultId: string, itemId: string) =>
-  afterMut(vaultId, invoke<string>("generate_ssh_key", { vaultId, itemId }));
-export const importSshKey = (
+/** Generates a NEW key; an id already taken is an `alreadyExists` error (the
+ *  core never replaces a key's material from here). */
+export const createSshKey = (vaultId: string, itemId: string) =>
+  afterMut(vaultId, invoke<string>("create_ssh_key", { vaultId, itemId }));
+/** Imports a private key as a NEW key (create-only, like `createSshKey`). An
+ *  encrypted key without its passphrase fails with `passphraseRequired`, a
+ *  wrong one with `wrongPassphrase`. */
+export const createImportedSshKey = (
   vaultId: string,
   itemId: string,
   opensshPrivate: string,
@@ -162,7 +167,7 @@ export const importSshKey = (
 ) =>
   afterMut(
     vaultId,
-    invoke<string>("import_ssh_key", {
+    invoke<string>("create_imported_ssh_key", {
       vaultId,
       itemId,
       opensshPrivate,
@@ -202,6 +207,12 @@ export const listItemVersions = (vaultId: string, itemId: string) =>
   invoke<number[]>("list_item_versions", { vaultId, itemId });
 
 // ── passwords ──────────────────────────────────────────────────
+/** A fresh item id for a new item labelled `label`, minted by the core — for
+ *  `savePassword`, which still takes the caller's id (a new host's password).
+ *  The id is minted in this call and written in the next, so it is not
+ *  reserved in between; interim, until saving a host creates its password. */
+export const newItemId = (vaultId: string, label: string) =>
+  invoke<string>("new_item_id", { vaultId, label });
 export const savePassword = (vaultId: string, itemId: string, password: string) =>
   afterMut(vaultId, invoke<void>("save_password", { vaultId, itemId, password }));
 export const getPassword = (vaultId: string, itemId: string) =>
@@ -227,8 +238,10 @@ export const importKnownHosts = (text: string) =>
   invoke<KnownHostsImport>("import_known_hosts", { text });
 
 // ── connection profiles (hosts) ────────────────────────────────
+/** Saves a host. An empty `profileId` is a new host: the core mints its id.
+ *  Resolves to the host's id. */
 export const saveConnection = (vaultId: string, profile: ConnectionProfile) =>
-  afterMut(vaultId, invoke<void>("save_connection", { vaultId, profile }));
+  afterMut(vaultId, invoke<string>("save_connection", { vaultId, profile }));
 export const listConnections = (vaultId: string) =>
   invoke<ConnectionProfile[]>("list_connections", { vaultId });
 export const getConnection = (vaultId: string, profileId: string) =>
@@ -237,8 +250,12 @@ export const deleteConnection = (vaultId: string, profileId: string) =>
   afterMut(vaultId, invoke<void>("delete_connection", { vaultId, profileId }));
 
 // ── identities (personal SSH creds) ────────────────────────────
+/** Saves an identity over the one at its id (the edit form). */
 export const saveIdentity = (vaultId: string, identity: Identity) =>
   afterMut(vaultId, invoke<void>("save_identity", { vaultId, identity }));
+/** Saves a NEW identity; an id already taken is an `alreadyExists` error. */
+export const createIdentity = (vaultId: string, identity: Identity) =>
+  afterMut(vaultId, invoke<void>("create_identity", { vaultId, identity }));
 export const listIdentities = (vaultId: string) =>
   invoke<Identity[]>("list_identities", { vaultId });
 export const getIdentity = (vaultId: string, identityId: string) =>
@@ -443,15 +460,19 @@ export interface Snippet {
   tags: string[];
 }
 
+/** Saves a snippet. An empty `snippetId` is a new one: the core mints its id.
+ *  Resolves to the snippet's id. */
 export const saveSnippet = (vaultId: string, snippet: Snippet) =>
-  afterMut(vaultId, invoke<void>("save_snippet", { vaultId, snippet }));
+  afterMut(vaultId, invoke<string>("save_snippet", { vaultId, snippet }));
 export const listSnippets = (vaultId: string) =>
   invoke<Snippet[]>("list_snippets", { vaultId });
 export const deleteSnippet = (vaultId: string, snippetId: string) =>
   afterMut(vaultId, invoke<void>("delete_snippet", { vaultId, snippetId }));
 
+/** Saves a group. An empty `groupId` is a new one: the core mints its id.
+ *  Resolves to the group's id. */
 export const saveGroup = (vaultId: string, group: ServerGroup) =>
-  afterMut(vaultId, invoke<void>("save_group", { vaultId, group }));
+  afterMut(vaultId, invoke<string>("save_group", { vaultId, group }));
 export const listGroups = (vaultId: string) => invoke<ServerGroup[]>("list_groups", { vaultId });
 export const getGroup = (vaultId: string, groupId: string) =>
   invoke<ServerGroup>("get_group", { vaultId, groupId });

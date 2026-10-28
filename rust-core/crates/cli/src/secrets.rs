@@ -155,20 +155,18 @@ fn find_one<S: Sort>(core: &Core, vault: &VaultArg, query: &str) -> Res<Entry<S>
     find::<S>(core, vault.scope(core)?.as_deref(), query)
 }
 
-/// Refuses `name` when anything already has that id in the vault: the core
-/// would overwrite a key's private material in place.
-fn refuse_taken(core: &Core, vault_id: &str, vault_name: &str, name: &str) -> Res<()> {
-    if core
-        .list_items(vault_id.to_owned())?
-        .iter()
-        .any(|i| i.item_id == name)
-    {
-        return Err(Failure::msg(format!(
+/// What a create-only write of `name` to vault `vault_name` came to: the
+/// core refuses an id something already has (checked as it writes, so no
+/// other device's change slips in between), said here in the user's words.
+fn created<T>(vault_name: &str, name: &str, result: Result<T, FfiError>) -> Res<T> {
+    match result {
+        Err(FfiError::AlreadyExists) => Err(Failure::msg(format!(
             "\"{name}\" already exists in vault \"{}\"",
             one_line(vault_name)
-        )));
+        ))),
+        Ok(done) => Ok(done),
+        Err(e) => stored(vault_name, Err(e)),
     }
-    Ok(())
 }
 
 /// A name for a new item: not empty, one line.
@@ -666,10 +664,10 @@ pub fn keys(device: &Device, offline: bool, action: KeysAction) -> Res<()> {
         KeysAction::Generate { name, vault } => {
             let name = new_name(&name)?;
             let target = vault.pick(core, None)?;
-            refuse_taken(core, &target.vault_id, &target.name, &name)?;
-            let public = stored(
+            let public = created(
                 &target.name,
-                core.generate_ssh_key(target.vault_id.clone(), name.clone()),
+                &name,
+                core.create_ssh_key(target.vault_id.clone(), name.clone()),
             )?;
             println!("{}", public.trim_end());
             commit(
@@ -682,7 +680,6 @@ pub fn keys(device: &Device, offline: bool, action: KeysAction) -> Res<()> {
         KeysAction::Import { name, file, vault } => {
             let name = new_name(&name)?;
             let target = vault.pick(core, None)?;
-            refuse_taken(core, &target.vault_id, &target.name, &name)?;
             let private = read_input(&file, true)?;
             let public = import(core, &target, &name, &private)?;
             println!("{}", public.trim_end());
@@ -762,29 +759,20 @@ fn read_input(file: &Path, private: bool) -> Res<Zeroizing<String>> {
     text.ok_or_else(|| Failure::msg(format!("{} does not exist", file.display())))
 }
 
-/// Imports `private` as key `name` into `target`, asking for its passphrase
-/// when the core says it needs one — the app's flow, with the terminal as
-/// its dialog.
+/// Imports `private` as the new key `name` into `target`, asking for its
+/// passphrase when the core says it needs one — the app's flow, with the
+/// terminal as its dialog.
 fn import(core: &Core, target: &VaultInfo, name: &str, private: &str) -> Res<String> {
     let attempt = |passphrase: Option<String>| {
-        stored(
-            &target.name,
-            core.import_ssh_key(
-                target.vault_id.clone(),
-                name.to_owned(),
-                private.to_owned(),
-                passphrase,
-            ),
+        core.create_imported_ssh_key(
+            target.vault_id.clone(),
+            name.to_owned(),
+            private.to_owned(),
+            passphrase,
         )
     };
-    match core.import_ssh_key(
-        target.vault_id.clone(),
-        name.to_owned(),
-        private.to_owned(),
-        None,
-    ) {
-        Ok(public) => Ok(public),
-        Err(e) if needs_passphrase(&e) => {
+    let result = match attempt(None) {
+        Err(FfiError::PassphraseRequired) => {
             let passphrase = ask_secret(
                 &format!("Passphrase for {}: ", one_line(name)),
                 "the key's passphrase",
@@ -792,15 +780,10 @@ fn import(core: &Core, target: &VaultInfo, name: &str, private: &str) -> Res<Str
             )?;
             attempt(Some((*passphrase).clone()))
         }
-        Err(e) => stored(&target.name, Err(e)),
-    }
-}
-
-/// Whether the core refused a key for want of its passphrase (its messages
-/// are stable English, which is what the app matches as well).
-fn needs_passphrase(e: &FfiError) -> bool {
-    let text = e.to_string().to_lowercase();
-    text.contains("passphrase is required") || text.contains("passphrase-protected")
+        Ok(public) => Ok(public),
+        Err(e) => Err(e),
+    };
+    created(&target.name, name, result)
 }
 
 /// `unissh keys rotate`: the app's "Replace key", not its guided rotation.
@@ -1156,7 +1139,6 @@ pub fn identities(device: &Device, offline: bool, action: IdentitiesAction) -> R
             let user = required_user(&user)?;
             let personal = core.get_personal_vault().ok().flatten();
             let target = vault.pick(core, personal.as_deref())?;
-            refuse_taken(core, &target.vault_id, &target.name, &name)?;
             let mut identity = Identity {
                 identity_id: name.clone(),
                 label: name.clone(),
@@ -1165,9 +1147,10 @@ pub fn identities(device: &Device, offline: bool, action: IdentitiesAction) -> R
                 password_item_id: None,
             };
             credential.apply(core, &target.vault_id, &mut identity)?;
-            stored(
+            created(
                 &target.name,
-                core.save_identity(target.vault_id.clone(), identity),
+                &name,
+                core.create_identity(target.vault_id.clone(), identity),
             )?;
             commit(
                 device,
@@ -1228,22 +1211,7 @@ pub fn find_identity(core: &Core, query: &str) -> Res<IdentityEntry> {
 
 #[cfg(test)]
 mod tests {
-    use super::{needs_passphrase, used_by};
-    use unissh_ffi::FfiError;
-
-    /// The core's wording for a key that needs its passphrase is what makes
-    /// the import ask for one; any other failure is reported as it is.
-    #[test]
-    fn only_a_missing_passphrase_makes_the_import_ask_for_one() {
-        let other = |msg: &str| FfiError::Other {
-            msg: msg.to_owned(),
-        };
-        assert!(needs_passphrase(&other(
-            "a passphrase is required to decrypt"
-        )));
-        assert!(needs_passphrase(&other("key is passphrase-protected")));
-        assert!(!needs_passphrase(&other("incorrect passphrase")));
-    }
+    use super::used_by;
 
     /// The delete warning names hosts and identities apart, each pluralised.
     #[test]

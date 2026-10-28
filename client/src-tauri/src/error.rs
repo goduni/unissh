@@ -13,8 +13,13 @@ pub enum ApiError {
     InvalidCredentials,
     /// Object not found.
     NotFound,
-    /// Instance / vault / item id collision.
+    /// Instance / vault / item id collision (incl. a create-only write over a
+    /// live item).
     AlreadyExists,
+    /// The private key is encrypted and no passphrase was given: ask, retry.
+    PassphraseRequired,
+    /// The passphrase given for an encrypted private key is wrong.
+    WrongPassphrase,
     /// The vault is already a cloud vault (a local-only operation was asked of it).
     AlreadyCloud,
     /// This account can only view the vault (Viewer): the write was refused.
@@ -68,6 +73,8 @@ impl From<FfiError> for ApiError {
             FfiError::InvalidCredentials => Self::InvalidCredentials,
             FfiError::NotFound => Self::NotFound,
             FfiError::AlreadyExists => Self::AlreadyExists,
+            FfiError::PassphraseRequired => Self::PassphraseRequired,
+            FfiError::WrongPassphrase => Self::WrongPassphrase,
             FfiError::AlreadyCloud => Self::AlreadyCloud,
             FfiError::ReadOnlyVault => Self::ReadOnlyVault,
             FfiError::NoServer => Self::NoServer,
