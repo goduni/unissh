@@ -893,7 +893,7 @@ fn grant_table(rows: &[Value]) -> String {
         let expiry = row
             .get("remaining_seconds")
             .and_then(Value::as_u64)
-            .map_or_else(|| "no expiry".to_owned(), |s| format!("{} left", span(s)));
+            .map_or_else(|| "no expiry".to_owned(), left);
         let ceiling = row
             .get("max_timeout_ms")
             .and_then(Value::as_u64)
@@ -934,6 +934,24 @@ fn span(seconds: u64) -> String {
         s if s % 60 == 0 => format!("{}m", s / 60),
         s => format!("{s}s"),
     }
+}
+
+/// What is left of a grant, for a person: whole minutes rounded up, in its two
+/// largest units ("8 h left", "2 d 3 h left", "45 m left").
+fn left(seconds: u64) -> String {
+    if seconds == 0 {
+        return "expired".to_owned();
+    }
+    let minutes = seconds.div_ceil(60);
+    let (days, hours, minutes) = (minutes / 1440, minutes / 60 % 24, minutes % 60);
+    let span = match (days, hours, minutes) {
+        (0, 0, m) => format!("{m} m"),
+        (0, h, 0) => format!("{h} h"),
+        (0, h, m) => format!("{h} h {m} m"),
+        (d, 0, _) => format!("{d} d"),
+        (d, h, _) => format!("{d} d {h} h"),
+    };
+    format!("{span} left")
 }
 
 /// `30m`, `8h`, `7d` in seconds: a positive whole number and a unit, as the
@@ -1004,7 +1022,7 @@ fn broker_failure(error: ToolError) -> Failure {
 #[cfg(test)]
 mod tests {
     use super::{
-        command_ceiling_ms, duration_seconds, find_integration, grant_rows, grant_summary,
+        command_ceiling_ms, duration_seconds, find_integration, grant_rows, grant_summary, left,
         GrantArgs, LimitArgs,
     };
     use crate::failure::Res;
@@ -1035,6 +1053,17 @@ mod tests {
         for bad in ["", "m", "0m", "5", "1w", "1.5h", "-1h", "h1"] {
             assert!(duration_seconds(bad).is_err(), "{bad:?} is refused");
         }
+    }
+
+    /// `grants list` says what is left as a person would: rounded up to the
+    /// minute, in its two largest units.
+    #[test]
+    fn what_is_left_of_a_grant_reads_as_hours_and_minutes() {
+        assert_eq!(left(28_793), "8 h left");
+        assert_eq!(left(5_400), "1 h 30 m left");
+        assert_eq!(left(187_500), "2 d 4 h left");
+        assert_eq!(left(30), "1 m left");
+        assert_eq!(left(0), "expired");
     }
 
     /// The command ceiling is the desktop's range: whole minutes, 1m to 24h.

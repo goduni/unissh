@@ -158,7 +158,7 @@ pub fn answers(
                 format!("it takes: {}", takes.join(", "))
             };
             return Err(Failure::msg(format!(
-                "the snippet has no parameter \"{}\" ({takes})",
+                "the command has no parameter \"{}\" ({takes})",
                 one_line(name)
             )));
         }
@@ -173,7 +173,7 @@ pub fn answers(
             (None, Some(default)) => default.clone(),
             (None, None) => {
                 return Err(Failure::msg(format!(
-                    "the snippet needs a value for {{{{{0}}}}}: pass --set {0}=VALUE",
+                    "the command needs a value for {{{{{0}}}}}: pass --set {0}=VALUE",
                     param.name
                 )))
             }
@@ -249,7 +249,10 @@ mod tests {
         let Err(err) = answers(&[param("service", None)], &[], &[], &mut no_terminal) else {
             panic!("a parameter with no value and no default must not run");
         };
-        assert!(err.message.contains("--set service="), "{err}");
+        assert_eq!(
+            err.message,
+            "the command needs a value for {{service}}: pass --set service=VALUE"
+        );
     }
 
     #[test]
