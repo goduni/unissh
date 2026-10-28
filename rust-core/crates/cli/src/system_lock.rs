@@ -405,7 +405,7 @@ mod linux {
             .await?
             .body()
             .deserialize()?;
-        let user: OwnedValue = session_property(calls, &path, "User").await?;
+        let user: OwnedVariant = session_property(calls, &path, "User").await?;
         let (user, _) = <(u32, OwnedObjectPath)>::try_from(user)?;
         let state = String::try_from(session_property(calls, &path, "State").await?)?;
         if named_session_is_ours(user, &state, own_uid()) {
@@ -422,7 +422,7 @@ mod linux {
         calls: &Connection,
         path: &OwnedObjectPath,
         name: &str,
-    ) -> zbus::Result<OwnedValue> {
+    ) -> zbus::Result<OwnedVariant> {
         calls
             .call_method(
                 Some(LOGIND),
