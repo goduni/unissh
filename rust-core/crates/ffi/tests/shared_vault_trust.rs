@@ -9,10 +9,15 @@
 
 use std::sync::{Arc, Mutex};
 
+use unissh_crypto::KdfParams;
 use unissh_ffi::{
-    Core, FfiError, FfiMemberRole, FfiSyncMode, FfiSyncTransport, FfiVaultTrust, SyncDeltaItem,
+    grouped_fingerprint, Core, FfiError, FfiMemberRole, FfiSyncMode, FfiSyncTransport,
+    FfiTrustOutcome, FfiVaultTrust, SharedVaultInfo, SyncDeltaItem,
 };
+use unissh_keychain::UnlockedKeyset;
+use unissh_storage::{MemberRole, MembershipManifest};
 use unissh_sync::{InMemoryTransport, SyncObject, SyncTransport};
+use unissh_vault::{build_manifest, Member};
 
 /// base64 `tenant_id` the cloud vaults bind to.
 const TENANT: &str = "dGVuYW50LXRlc3Q="; // base64("tenant-test")
@@ -117,6 +122,74 @@ fn share_with(owner: &Core, member: &Core) -> Team {
     }
 }
 
+/// A keyset of an account the server could slip in as a vault's owner.
+fn impostor() -> UnlockedKeyset {
+    let params = KdfParams {
+        mem_kib: 19 * 1024,
+        iterations: 2,
+        parallelism: 1,
+        salt: vec![1_u8; 16],
+    };
+    unissh_keychain::create_account(Some(b"pw"), params)
+        .unwrap()
+        .2
+}
+
+/// A manifest `signer` signs for the team's vault at `epoch`, naming itself
+/// an Admin and `member` an Editor: a valid signature, no authority.
+fn forged(signer: &UnlockedKeyset, team: &Team, member: &Core, epoch: u64) -> MembershipManifest {
+    build_manifest(
+        signer,
+        &hex::decode(&team.vault_id).unwrap(),
+        epoch,
+        &[
+            Member {
+                ed25519_pub: signer.signing.verifying.to_bytes().to_vec(),
+                role: MemberRole::Admin,
+            },
+            Member {
+                ed25519_pub: hex::decode(member_keys(member).0).unwrap(),
+                role: MemberRole::Editor,
+            },
+        ],
+    )
+    .unwrap()
+}
+
+/// The team's vault objects with `extra` manifests added after them.
+fn served_with(team: &Team, extra: Vec<MembershipManifest>) -> Vec<Vec<u8>> {
+    let mut objects = team.server.vault_objects(&team.vault_id);
+    objects.extend(
+        extra
+            .into_iter()
+            .map(|m| SyncObject::MembershipManifest(m).to_bytes().unwrap()),
+    );
+    objects
+}
+
+/// What `member` sees of the team's vault as the server serves it.
+fn inspected(member: &Core, team: &Team) -> SharedVaultInfo {
+    member
+        .inspect_shared_vault(
+            team.vault_id.clone(),
+            team.server.vault_objects(&team.vault_id),
+        )
+        .unwrap()
+        .unwrap()
+}
+
+/// `member` trusts the team's vault owner by `fingerprint`.
+fn trust(member: &Core, team: &Team, fingerprint: &str) -> FfiTrustOutcome {
+    member
+        .trust_shared_vault(
+            team.vault_id.clone(),
+            team.server.vault_objects(&team.vault_id),
+            Some(fingerprint.to_owned()),
+            false,
+        )
+        .unwrap()
+}
+
 /// The member is shown the vault's creator — the author of its verified
 /// genesis — with the fingerprint to compare, and its own role; nothing is
 /// pinned or written by looking.
@@ -126,12 +199,7 @@ fn inspection_names_the_owner_a_granted_member_confirms() {
     let (owner, member) = (account(dir_a.path()), account(dir_b.path()));
     let team = share_with(&owner, &member);
 
-    let info = member
-        .inspect_shared_vault(
-            team.vault_id.clone(),
-            team.server.vault_objects(&team.vault_id),
-        )
-        .unwrap();
+    let info = inspected(&member, &team);
 
     assert_eq!(info.owner_ed25519_hex, team.owner_ed);
     assert_eq!(
@@ -155,45 +223,109 @@ fn inspection_names_the_owner_a_granted_member_confirms() {
 /// is offering a second owner: the vault is not offered for trust at all.
 #[test]
 fn inspection_refuses_a_vault_the_server_gives_a_second_creator() {
-    use unissh_crypto::KdfParams;
-    use unissh_storage::MemberRole;
-    use unissh_vault::{build_manifest, Member};
-
     let (dir_a, dir_b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let (owner, member) = (account(dir_a.path()), account(dir_b.path()));
     let team = share_with(&owner, &member);
-    let params = KdfParams {
-        mem_kib: 19 * 1024,
-        iterations: 2,
-        parallelism: 1,
-        salt: vec![1_u8; 16],
-    };
-    let (_sk, _enc, impostor) = unissh_keychain::create_account(Some(b"pw"), params).unwrap();
-    let impostor_ed = impostor.signing.verifying.to_bytes().to_vec();
-    let forged = build_manifest(
-        &impostor,
-        &hex::decode(&team.vault_id).unwrap(),
-        1,
-        &[
-            Member {
-                ed25519_pub: impostor_ed,
-                role: MemberRole::Admin,
-            },
-            Member {
-                ed25519_pub: hex::decode(member_keys(&member).0).unwrap(),
-                role: MemberRole::Editor,
-            },
-        ],
-    )
-    .unwrap();
-    let mut objects = team.server.vault_objects(&team.vault_id);
-    objects.push(SyncObject::MembershipManifest(forged).to_bytes().unwrap());
+    let objects = served_with(&team, vec![forged(&impostor(), &team, &member, 1)]);
 
     let err = member
         .inspect_shared_vault(team.vault_id, objects)
         .unwrap_err();
 
     assert!(err.to_string().contains("two different creators"), "{err}");
+}
+
+/// A second genesis whose signature does not verify stands for no creator:
+/// it neither refuses the vault nor changes whose it is.
+#[test]
+fn inspection_ignores_a_second_genesis_that_does_not_verify() {
+    let (dir_a, dir_b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (owner, member) = (account(dir_a.path()), account(dir_b.path()));
+    let team = share_with(&owner, &member);
+    let mut bogus = forged(&impostor(), &team, &member, 1);
+    bogus.signature[0] ^= 0xff;
+    let objects = served_with(&team, vec![bogus]);
+
+    let info = member
+        .inspect_shared_vault(team.vault_id.clone(), objects)
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(info.owner_ed25519_hex, team.owner_ed);
+}
+
+/// A later epoch signed by a key with no authority breaks the chain: the
+/// vault is refused, not offered at the epoch before.
+#[test]
+fn inspection_refuses_a_chain_that_breaks_at_a_later_epoch() {
+    let (dir_a, dir_b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (owner, member) = (account(dir_a.path()), account(dir_b.path()));
+    let team = share_with(&owner, &member);
+    let next = inspected(&member, &team).epoch + 1;
+    let objects = served_with(&team, vec![forged(&impostor(), &team, &member, next)]);
+
+    let err = member
+        .inspect_shared_vault(team.vault_id, objects)
+        .unwrap_err();
+
+    assert!(err.to_string().contains("does not verify"), "{err}");
+}
+
+/// An epoch missing between genesis and the latest one served is a gap.
+#[test]
+fn inspection_refuses_a_chain_with_a_gap() {
+    let (dir_a, dir_b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (owner, member) = (account(dir_a.path()), account(dir_b.path()));
+    let team = share_with(&owner, &member);
+    let beyond = inspected(&member, &team).epoch + 2;
+    let objects = served_with(&team, vec![forged(&impostor(), &team, &member, beyond)]);
+
+    let err = member
+        .inspect_shared_vault(team.vault_id, objects)
+        .unwrap_err();
+
+    assert!(err.to_string().contains("gap"), "{err}");
+}
+
+/// A server that floods one epoch with manifests is refused rather than
+/// walked: the kept set per epoch is capped.
+#[test]
+fn inspection_refuses_an_epoch_flooded_with_manifests() {
+    let (dir_a, dir_b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (owner, member) = (account(dir_a.path()), account(dir_b.path()));
+    let team = share_with(&owner, &member);
+    let signer = impostor();
+    let flood = (0..9_u8)
+        .map(|n| {
+            let mut m = forged(&signer, &team, &member, 1);
+            m.signature[0] = n;
+            m
+        })
+        .collect();
+
+    let err = member
+        .inspect_shared_vault(team.vault_id.clone(), served_with(&team, flood))
+        .unwrap_err();
+
+    assert!(err.to_string().contains("too many"), "{err}");
+}
+
+/// A vault this account created needs no trust, through the one-piece
+/// entry point as through the paged one.
+#[test]
+fn inspecting_an_own_vault_says_it_needs_no_trust() {
+    let (dir_a, dir_b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (owner, member) = (account(dir_a.path()), account(dir_b.path()));
+    let team = share_with(&owner, &member);
+
+    let own = owner
+        .inspect_shared_vault(
+            team.vault_id.clone(),
+            team.server.vault_objects(&team.vault_id),
+        )
+        .unwrap();
+
+    assert_eq!(own, None);
 }
 
 /// An account the vault was not shared with is refused: the chain verifies,
@@ -235,9 +367,12 @@ fn a_rejected_shared_vault_arrives_by_targeted_pull_once_its_owner_is_pinned() {
         .unwrap();
     assert!(before.rejected > 0, "{before:?}");
 
-    member
-        .pin_vault_genesis_owner(team.vault_id.clone(), team.owner_ed.clone())
-        .unwrap();
+    let fingerprint = grouped_fingerprint(owner.own_fingerprint().unwrap()).to_uppercase();
+    assert_eq!(
+        trust(&member, &team, &fingerprint),
+        FfiTrustOutcome::Trusted,
+        "the owner's fingerprint, in any grouping or case"
+    );
     member
         .sync_now(team.server.clone(), TENANT.to_owned(), FfiSyncMode::Full)
         .unwrap();
@@ -251,7 +386,7 @@ fn a_rejected_shared_vault_arrives_by_targeted_pull_once_its_owner_is_pinned() {
         .pull_vault_paged(TENANT, |cursor| {
             let at = usize::try_from(cursor).unwrap();
             let next = (at + 1 < objects.len()).then_some(cursor + 1);
-            (objects.get(at).cloned().into_iter().collect(), next)
+            Ok((objects.get(at).cloned().into_iter().collect(), next))
         })
         .unwrap();
 
@@ -262,4 +397,79 @@ fn a_rejected_shared_vault_arrives_by_targeted_pull_once_its_owner_is_pinned() {
             .unwrap(),
         "s3cr3t"
     );
+}
+
+/// A fingerprint that is not the owner's pins nothing.
+#[test]
+fn a_wrong_fingerprint_trusts_nothing() {
+    let (dir_a, dir_b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (owner, member) = (account(dir_a.path()), account(dir_b.path()));
+    let team = share_with(&owner, &member);
+    let wrong = member.member_fingerprint(member_keys(&member).0).unwrap();
+
+    assert_eq!(
+        trust(&member, &team, &wrong),
+        FfiTrustOutcome::FingerprintMismatch
+    );
+    assert_eq!(inspected(&member, &team).trust, FfiVaultTrust::NotPinned);
+}
+
+/// Once this device trusts an owner for a vault, a server that names a
+/// different creator is reported as such and the pin stays as it was, even
+/// for the fingerprint of the creator the server now names.
+#[test]
+fn a_vault_pinned_to_another_owner_is_refused() {
+    let (dir_a, dir_b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (owner, member) = (account(dir_a.path()), account(dir_b.path()));
+    let team = share_with(&owner, &member);
+    let earlier = impostor().signing.verifying.to_bytes();
+    member
+        .pin_vault_genesis_owner(team.vault_id.clone(), hex::encode(earlier))
+        .unwrap();
+
+    let outcome = trust(&member, &team, &owner.own_fingerprint().unwrap());
+
+    assert_eq!(outcome, FfiTrustOutcome::PinnedToAnotherOwner);
+    assert_eq!(
+        inspected(&member, &team).trust,
+        FfiVaultTrust::PinnedToAnotherOwner
+    );
+}
+
+/// A page that cannot be read ends the targeted pull with an error saying
+/// it was cut short, never with a report that looks complete.
+#[test]
+fn a_targeted_pull_cut_short_is_an_error() {
+    let (dir_a, dir_b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (owner, member) = (account(dir_a.path()), account(dir_b.path()));
+    let team = share_with(&owner, &member);
+    trust(&member, &team, &owner.own_fingerprint().unwrap());
+    let objects = team.server.vault_objects(&team.vault_id);
+
+    let err = member
+        .pull_vault_paged(TENANT, |cursor| {
+            if cursor == 0 {
+                Ok((objects.iter().take(1).cloned().collect(), Some(1)))
+            } else {
+                Err(FfiError::Other {
+                    msg: "connection reset".to_owned(),
+                })
+            }
+        })
+        .unwrap_err();
+
+    assert!(err.to_string().contains("cut short"), "{err}");
+}
+
+/// Locked, the account's fingerprint is still read, off the public half of
+/// the keyset file: it is the same one as unlocked.
+#[test]
+fn the_own_fingerprint_reads_while_locked() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = account(dir.path());
+    let unlocked = core.own_fingerprint().unwrap();
+
+    core.lock();
+
+    assert_eq!(core.own_fingerprint().unwrap(), unlocked);
 }

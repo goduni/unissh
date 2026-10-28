@@ -72,7 +72,10 @@ use approvals::{Approvals, Asker, Connection};
 pub use key_rotation::KeyRotationLink;
 use password_fill::FillGuard;
 pub use password_fill::{FillEvent, FillPromptKind, PasswordFillMode};
-pub use shared_vault::{FfiVaultTrust, SharedVaultInfo, VaultPage};
+pub use shared_vault::{
+    grouped_fingerprint, normalize_fingerprint, FfiTrustOutcome, FfiVaultTrust, NotHere,
+    SharedVaultInfo, VaultPage,
+};
 pub use system_agent::{SharedAgentKey, SystemAgent};
 pub use unissh_ssh_transport::AgentCaller;
 
@@ -2249,23 +2252,48 @@ impl Core {
     /// **Inspects a vault shared with this account** before its owner is
     /// trusted (share-accept, A0). `objects` are the vault's raw delta blobs as
     /// the server serves them (`GET /v1/sync/delta?vault=<id>`); only its
-    /// membership manifests and grants are read. The whole manifest chain is
-    /// verified in memory against the genesis author as the candidate owner,
-    /// and the latest epoch must hold a grant this account can open.
+    /// membership manifests and the grants to this account are read. The
+    /// whole manifest chain is verified in memory against the genesis author
+    /// as the candidate owner, and the latest epoch must hold a grant this
+    /// account can open.
     ///
-    /// Returns the candidate owner's key and fingerprint for the user to
-    /// compare with the owner out of band — never trusted on the server's
-    /// word — and this account's role. Writes nothing: trusting is
-    /// [`Core::pin_vault_genesis_owner`] with `owner_ed25519_hex`, then a
-    /// targeted pull of the vault (the earlier rejection moved the pull
-    /// cursor past its objects). Refused for a vault this account created,
-    /// a broken chain, or no grant. Requires unlock.
+    /// Returns the key that created the vault and its fingerprint — whether
+    /// it is the teammate's is what the user checks with them out of band;
+    /// the server's word is never trusted — and this account's role. `None`:
+    /// this account created the vault, and it needs no trust (as
+    /// [`Core::inspect_shared_vault_paged`]). Writes nothing: trusting is
+    /// [`Core::trust_shared_vault`], then a targeted pull of the vault (the
+    /// earlier rejection moved the pull cursor past its objects). Refused for
+    /// a broken chain or no grant. Requires unlock.
     pub fn inspect_shared_vault(
         &self,
         vault_id: String,
         objects: Vec<Vec<u8>>,
-    ) -> Result<SharedVaultInfo, FfiError> {
+    ) -> Result<Option<SharedVaultInfo>, FfiError> {
         shared_vault::inspect_objects(self, &vault_id, objects)
+    }
+
+    /// **Trusts the owner of a vault shared with this account**: inspects
+    /// `objects` (as [`Core::inspect_shared_vault`]), compares the
+    /// fingerprint and pins the owner in one step (see
+    /// [`Core::trust_shared_vault_paged`] for the rules of
+    /// `expected_fingerprint` and `confirmed_displayed`). Pull the vault after
+    /// [`FfiTrustOutcome::Trusted`] or [`FfiTrustOutcome::AlreadyTrusted`].
+    /// Requires unlock.
+    pub fn trust_shared_vault(
+        &self,
+        vault_id: String,
+        objects: Vec<Vec<u8>>,
+        expected_fingerprint: Option<String>,
+        confirmed_displayed: bool,
+    ) -> Result<FfiTrustOutcome, FfiError> {
+        shared_vault::trust_objects(
+            self,
+            &vault_id,
+            objects,
+            expected_fingerprint.as_deref(),
+            confirmed_displayed,
+        )
     }
 
     /// This account's own fingerprint (`member_fingerprint` of its Ed25519
@@ -3111,7 +3139,8 @@ impl Core {
     /// alive on the server. The local tombstone is newer (the version grew on deletion) →
     /// LWW prevents the pull from overwriting it with the server copy, and `list_vaults`
     /// hides it: the vault is "stuck deleted" on this device. We physically erase its
-    /// local record (`purge_vault_data`) and reset the tenant's pull cursor →
+    /// local record (`purge_vault_data_keeping_trust`: a teammate's vault keeps its
+    /// pinned owner) and reset the tenant's pull cursor →
     /// the next `sync_now` re-pulls the live server copy anew. Vaults deleted
     /// on the server too will become tombstones again after re-pull (they won't resurrect — which is correct).
     /// We touch only tombstoned vaults bound to THIS tenant or unbound
@@ -3129,9 +3158,11 @@ impl Core {
                 if !v.sync_tenant.is_empty() && v.sync_tenant != tenant {
                     continue; // bound to ANOTHER server — not ours, don't touch
                 }
+                // The owner the user confirmed for a teammate's vault stays
+                // pinned: the vault comes back under that owner.
                 state
                     .storage
-                    .purge_vault_data(&v.vault_id)
+                    .purge_vault_data_keeping_trust(&v.vault_id)
                     .map_err(FfiError::other)?;
                 state.vault_names.remove(&v.vault_id);
                 restored += 1;

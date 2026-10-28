@@ -336,6 +336,7 @@ fn live_e2e_claim_invite_join_and_two_device_sync() {
         unissh_cloud::shared::pending_shared_vaults(&core_b, base, &session_b.access_token)
             .expect("B lists the vaults waiting for trust");
     let waiting = pending
+        .vaults
         .iter()
         .find(|p| p.vault_id.eq_ignore_ascii_case(&vid))
         .expect("the shared vault waits for B's trust");
@@ -346,10 +347,16 @@ fn live_e2e_claim_invite_join_and_two_device_sync() {
         core_a.own_fingerprint().unwrap(),
         "what A reads out from its own device"
     );
-    core_b
-        .pin_vault_genesis_owner(vid.clone(), info.owner_ed25519_hex.clone())
-        .expect("B pins A as the shared vault's genesis owner");
-    let report_b = HttpSyncTransport::new(base.clone(), session_b.access_token.clone())
+    let transport_b = HttpSyncTransport::new(base.clone(), session_b.access_token.clone());
+    let a_fingerprint = core_a.own_fingerprint().unwrap();
+    assert_eq!(
+        transport_b
+            .trust_vault(&core_b, &waiting.vault_id, Some(&a_fingerprint), false)
+            .expect("B trusts A by the fingerprint A gave"),
+        unissh_ffi::FfiTrustOutcome::Trusted,
+        "B pins A as the shared vault's genesis owner"
+    );
+    let report_b = transport_b
         .pull_vault(&core_b, &space, &vid)
         .expect("B pulls the shared vault");
     // The membership grant makes B's server-side delta include the shared vault's
