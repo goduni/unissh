@@ -35,20 +35,27 @@
 //! vault lock asks the bus nothing; a wake's lock check is bounded, and one
 //! that fails leaves agent access paused.
 //!
-//! Two threads, one per bus, each blocking on its own message stream. Any
+//! Two threads, one per bus, each parked in `zbus::block_on` on its own
+//! message stream: zbus has no blocking API, and its own runtime does the work
+//! of the connections built on a thread inside that thread's `block_on`. So the
+//! sleep's wait for the front end, which blocks the thread, also holds up its
+//! connections for that bounded wait: nothing is asked of the bus meanwhile,
+//! and what arrives waits in the socket until the stream is read again. Any
 //! failure — no D-Bus at all, no logind, no session bus — logs once and ends
 //! that thread; the app then behaves exactly as it did before this feature.
 
+use futures_util::StreamExt;
 use tauri::AppHandle;
 use unissh_automation::logind::{
     display_session, locked_after_wake, Header, Heard, Logind, SessionLookup, WakeCheck,
     CALL_TIMEOUT, LOGIND, MANAGER, MANAGER_PATH, PROPERTIES, SESSION, SESSION_LOOKUPS, USER,
 };
-use zbus::blocking::{connection::Builder, fdo::DBusProxy, Connection, MessageIterator};
+use zbus::connection::Builder;
 use zbus::message::Type;
 use zbus::names::{InterfaceName, MemberName, UniqueName};
-use zbus::zvariant::{ObjectPath, OwnedFd, OwnedObjectPath, OwnedValue};
-use zbus::MatchRule;
+use zbus::{
+    Connection, MatchRule, MessageStream, ObjectPath, OwnedFd, OwnedObjectPath, OwnedVariant,
+};
 
 use super::{emit, emit_suspend_and_wait, SystemLockSignal};
 
@@ -64,8 +71,12 @@ const SCREENSAVERS: [&str; 3] = [
 ];
 
 pub fn start(app: &AppHandle) {
-    spawn("system-lock-logind", app.clone(), watch_logind);
-    spawn("system-lock-screensaver", app.clone(), watch_screensaver);
+    spawn("system-lock-logind", app.clone(), |app| {
+        zbus::block_on(watch_logind(app))
+    });
+    spawn("system-lock-screensaver", app.clone(), |app| {
+        zbus::block_on(watch_screensaver(app))
+    });
 }
 
 fn spawn(name: &'static str, app: AppHandle, run: fn(&AppHandle) -> zbus::Result<()>) {
@@ -91,15 +102,21 @@ fn spawn(name: &'static str, app: AppHandle, run: fn(&AppHandle) -> zbus::Result
 
 /// System bus: `PrepareForSleep` from the manager, `Lock`/`Unlock` from our own
 /// session object, all from logind's current owner only.
-fn watch_logind(app: &AppHandle) -> zbus::Result<()> {
+async fn watch_logind(app: &AppHandle) -> zbus::Result<()> {
     // `calls` only asks and `watch` only listens: see the module docs.
-    let calls = Builder::system()?.method_timeout(CALL_TIMEOUT).build()?;
-    let watch = Builder::system()?.method_timeout(CALL_TIMEOUT).build()?;
+    let calls = Builder::system()
+        .method_timeout(CALL_TIMEOUT)
+        .build()
+        .await?;
+    let watch = Builder::system()
+        .method_timeout(CALL_TIMEOUT)
+        .build()
+        .await?;
 
     // Scope the lock signals to THIS session. Without the path filter we would
     // also hear another logged-in user's screen lock, which is none of our
     // business and would zeroize a vault whose owner never left.
-    let session = match session_path(&calls) {
+    let session = match session_path(&calls).await {
         Ok(path) => Some(path),
         // Not fatal: the screensaver listener covers locking on most desktops,
         // and `PrepareForSleep` below is subscribed regardless.
@@ -109,19 +126,19 @@ fn watch_logind(app: &AppHandle) -> zbus::Result<()> {
         }
     };
 
-    subscribe(&watch, session.as_ref())?;
+    subscribe(&watch, session.as_ref()).await?;
     // From here on `watch` is only read; what changes after the questions
     // below is in the stream, what changed before is in their answers.
-    let messages = MessageIterator::from(&watch);
-    let owner = name_owner(&calls)?;
+    let mut messages = MessageStream::from(&watch);
+    let owner = name_owner(&calls).await?;
 
     // Held from now until the machine actually goes down, then retaken on the
     // way back up. A failure here is not fatal: we still hear the signal and
     // still ask for a lock, we just cannot promise it finishes first.
-    let mut inhibitor = sleep_inhibitor(&calls);
+    let mut inhibitor = sleep_inhibitor(&calls).await;
     let mut logind = Logind::new(Some(owner), session.as_ref().map(|p| p.as_str().to_owned()));
 
-    for msg in messages {
+    while let Some(msg) = messages.next().await {
         let msg = msg?;
         let Some(heard) = logind.heard(&seen(&msg.header())) else {
             continue;
@@ -143,14 +160,14 @@ fn watch_logind(app: &AppHandle) -> zbus::Result<()> {
                     // A lock screen that came up on the way down without a
                     // word to either listener still keeps agent access paused,
                     // and so does a check that fails or times out.
-                    let check = wake_check(&calls, session.as_ref());
+                    let check = wake_check(&calls, session.as_ref()).await;
                     if locked_after_wake(super::is_screen_locked(), check) {
                         log::info!("system-lock-logind: awake; agent access stays paused until the session unlocks");
                     } else {
                         super::wake(app);
                     }
                     // Re-arm the inhibitor for the next sleep.
-                    inhibitor = sleep_inhibitor(&calls);
+                    inhibitor = sleep_inhibitor(&calls).await;
                 }
             }
             Heard::Lock => emit(app, SystemLockSignal::ScreenLock),
@@ -166,38 +183,40 @@ fn watch_logind(app: &AppHandle) -> zbus::Result<()> {
 
 /// The watch connection's rules: logind's owner, its sleep, and `session`'s
 /// lock. Only before the watch stream is open.
-fn subscribe(watch: &Connection, session: Option<&OwnedObjectPath>) -> zbus::Result<()> {
+async fn subscribe(watch: &Connection, session: Option<&OwnedObjectPath>) -> zbus::Result<()> {
     // Who owns logind's name, and every change of it, from the bus itself.
     add_match(
         watch,
         MatchRule::builder()
             .msg_type(Type::Signal)
-            .sender("org.freedesktop.DBus")?
-            .interface("org.freedesktop.DBus")?
-            .member("NameOwnerChanged")?
-            .add_arg(LOGIND)?
-            .build(),
-    )?;
+            .sender("org.freedesktop.DBus")
+            .interface("org.freedesktop.DBus")
+            .member("NameOwnerChanged")
+            .add_arg(LOGIND)
+            .build()?,
+    )
+    .await?;
     // Suspend unconditionally: it is the half that has no fallback anywhere
     // else, so it must survive a session lookup that failed.
     add_match(
         watch,
         MatchRule::builder()
             .msg_type(Type::Signal)
-            .sender(LOGIND)?
-            .path(MANAGER_PATH)?
-            .interface(MANAGER)?
-            .member("PrepareForSleep")?
-            .build(),
-    )?;
+            .sender(LOGIND)
+            .path(MANAGER_PATH)
+            .interface(MANAGER)
+            .member("PrepareForSleep")
+            .build()?,
+    )
+    .await?;
     if let Some(path) = session {
         let rule = MatchRule::builder()
             .msg_type(Type::Signal)
-            .sender(LOGIND)?
-            .path(path.as_ref())?
-            .interface(SESSION)?
-            .build();
-        if let Err(e) = add_match(watch, rule) {
+            .sender(LOGIND)
+            .path(path.as_str())
+            .interface(SESSION)
+            .build()?;
+        if let Err(e) = add_match(watch, rule).await {
             log::warn!("system-lock-logind: no session lock signals ({e})");
         }
     }
@@ -206,11 +225,11 @@ fn subscribe(watch: &Connection, session: Option<&OwnedObjectPath>) -> zbus::Res
 
 /// The session's `LockedHint` on waking up; a failure (or a timeout) is
 /// `WakeCheck::Failed`, which keeps agent access paused.
-fn wake_check(calls: &Connection, session: Option<&OwnedObjectPath>) -> WakeCheck {
+async fn wake_check(calls: &Connection, session: Option<&OwnedObjectPath>) -> WakeCheck {
     let Some(path) = session else {
         return WakeCheck::NoSession;
     };
-    match locked_hint(calls, path) {
+    match locked_hint(calls, path).await {
         Ok(locked) => WakeCheck::Hint(locked),
         Err(e) => {
             log::warn!(
@@ -222,29 +241,31 @@ fn wake_check(calls: &Connection, session: Option<&OwnedObjectPath>) -> WakeChec
 }
 
 /// `take_sleep_inhibitor`, or `None` and a warning.
-fn sleep_inhibitor(calls: &Connection) -> Option<OwnedFd> {
+async fn sleep_inhibitor(calls: &Connection) -> Option<OwnedFd> {
     take_sleep_inhibitor(calls)
+        .await
         .inspect_err(|e| {
             log::warn!("system-lock-logind: the next sleep will not wait for the lock ({e})");
         })
         .ok()
 }
 
-/// `AddMatch` on `bus`: only ever on the watch connection, before its stream
-/// is open.
-fn add_match(bus: &Connection, rule: MatchRule<'_>) -> zbus::Result<()> {
+/// `AddMatch` on `bus`, only ever before its stream is open (on the system
+/// bus, that is the watch connection).
+async fn add_match(bus: &Connection, rule: MatchRule<'_>) -> zbus::Result<()> {
     bus.call_method(
         Some("org.freedesktop.DBus"),
         "/org/freedesktop/DBus",
         Some("org.freedesktop.DBus"),
         "AddMatch",
         &rule.to_string(),
-    )?;
+    )
+    .await?;
     Ok(())
 }
 
 /// Who owns logind's name now.
-fn name_owner(calls: &Connection) -> zbus::Result<String> {
+async fn name_owner(calls: &Connection) -> zbus::Result<String> {
     calls
         .call_method(
             Some("org.freedesktop.DBus"),
@@ -252,7 +273,8 @@ fn name_owner(calls: &Connection) -> zbus::Result<String> {
             Some("org.freedesktop.DBus"),
             "GetNameOwner",
             &LOGIND,
-        )?
+        )
+        .await?
         .body()
         .deserialize()
 }
@@ -269,15 +291,16 @@ fn seen<'h>(header: &'h zbus::message::Header<'_>) -> Header<'h> {
 }
 
 /// Whether the session's lock screen is up, as the desktop told logind.
-fn locked_hint(bus: &Connection, session: &OwnedObjectPath) -> zbus::Result<bool> {
-    let value: OwnedValue = bus
+async fn locked_hint(bus: &Connection, session: &OwnedObjectPath) -> zbus::Result<bool> {
+    let value: OwnedVariant = bus
         .call_method(
             Some(LOGIND),
             session.as_str(),
             Some(PROPERTIES),
             "Get",
             &(SESSION, "LockedHint"),
-        )?
+        )
+        .await?
         .body()
         .deserialize()?;
     Ok(bool::try_from(value)?)
@@ -290,7 +313,7 @@ fn locked_hint(bus: &Connection, session: &OwnedObjectPath) -> zbus::Result<bool
 /// claiming the right to refuse. logind caps that moment at `InhibitDelayMaxSec`
 /// (5s by default) and suspends regardless once it passes, which is the correct
 /// outcome — a hung webview must not be able to stop a laptop from sleeping.
-fn take_sleep_inhibitor(bus: &Connection) -> zbus::Result<OwnedFd> {
+async fn take_sleep_inhibitor(bus: &Connection) -> zbus::Result<OwnedFd> {
     bus.call_method(
         Some(LOGIND),
         MANAGER_PATH,
@@ -302,17 +325,18 @@ fn take_sleep_inhibitor(bus: &Connection) -> zbus::Result<OwnedFd> {
             "Locking the vault before the machine sleeps",
             "delay",
         ),
-    )?
+    )
+    .await?
     .body()
     .deserialize()
 }
 
 /// Our logind session object: the first of `SESSION_LOOKUPS` to find one, or
 /// the last failure.
-fn session_path(calls: &Connection) -> zbus::Result<OwnedObjectPath> {
+async fn session_path(calls: &Connection) -> zbus::Result<OwnedObjectPath> {
     let mut failed = None;
     for lookup in SESSION_LOOKUPS {
-        match look_up_session(calls, lookup) {
+        match look_up_session(calls, lookup).await {
             Ok(path) => return Ok(path),
             Err(e) => {
                 log::debug!("system-lock-logind: session lookup {lookup:?} failed ({e})");
@@ -323,7 +347,10 @@ fn session_path(calls: &Connection) -> zbus::Result<OwnedObjectPath> {
     Err(failed.unwrap_or_else(|| zbus::Error::Failure("no session lookup".into())))
 }
 
-fn look_up_session(calls: &Connection, lookup: SessionLookup) -> zbus::Result<OwnedObjectPath> {
+async fn look_up_session(
+    calls: &Connection,
+    lookup: SessionLookup,
+) -> zbus::Result<OwnedObjectPath> {
     match lookup {
         SessionLookup::Auto => calls
             .call_method(
@@ -332,7 +359,8 @@ fn look_up_session(calls: &Connection, lookup: SessionLookup) -> zbus::Result<Ow
                 Some(MANAGER),
                 "GetSession",
                 &"auto",
-            )?
+            )
+            .await?
             .body()
             .deserialize(),
         SessionLookup::ByPid => calls
@@ -342,24 +370,27 @@ fn look_up_session(calls: &Connection, lookup: SessionLookup) -> zbus::Result<Ow
                 Some(MANAGER),
                 "GetSessionByPID",
                 &std::process::id(),
-            )?
+            )
+            .await?
             .body()
             .deserialize(),
         SessionLookup::UserDisplay => {
             // SAFETY: getuid takes nothing, cannot fail and touches no memory.
             let uid = unsafe { libc::getuid() };
             let user: OwnedObjectPath = calls
-                .call_method(Some(LOGIND), MANAGER_PATH, Some(MANAGER), "GetUser", &uid)?
+                .call_method(Some(LOGIND), MANAGER_PATH, Some(MANAGER), "GetUser", &uid)
+                .await?
                 .body()
                 .deserialize()?;
-            let value: OwnedValue = calls
+            let value: OwnedVariant = calls
                 .call_method(
                     Some(LOGIND),
                     user.as_str(),
                     Some(PROPERTIES),
                     "Get",
                     &(USER, "Display"),
-                )?
+                )
+                .await?
                 .body()
                 .deserialize()?;
             let (id, path) = <(String, OwnedObjectPath)>::try_from(value)?;
@@ -371,17 +402,16 @@ fn look_up_session(calls: &Connection, lookup: SessionLookup) -> zbus::Result<Ow
 }
 
 /// Session bus: `ActiveChanged(bool)` from whichever screensaver is there.
-fn watch_screensaver(app: &AppHandle) -> zbus::Result<()> {
-    let bus = Connection::session()?;
-    let dbus = DBusProxy::new(&bus)?;
+async fn watch_screensaver(app: &AppHandle) -> zbus::Result<()> {
+    let bus = Builder::session().build().await?;
     let mut watching = 0_usize;
     for interface in SCREENSAVERS {
         let rule = MatchRule::builder()
             .msg_type(Type::Signal)
-            .interface(interface)?
-            .member("ActiveChanged")?
-            .build();
-        match dbus.add_match_rule(rule) {
+            .interface(interface)
+            .member("ActiveChanged")
+            .build()?;
+        match add_match(&bus, rule).await {
             Ok(()) => watching += 1,
             Err(e) => log::info!("system-lock-screensaver: {interface} unavailable ({e})"),
         }
@@ -390,7 +420,8 @@ fn watch_screensaver(app: &AppHandle) -> zbus::Result<()> {
         return Ok(()); // nothing to wait for; don't park a thread on it
     }
 
-    for msg in MessageIterator::from(bus) {
+    let mut messages = MessageStream::from(bus);
+    while let Some(msg) = messages.next().await {
         let msg = msg?;
         let header = msg.header();
         match header.member() {

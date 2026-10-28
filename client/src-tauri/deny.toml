@@ -48,12 +48,12 @@ ignore = [
     # --- zbus split crates, unmaintained since zbus 6 (2026-10-16) ---------------
     # RUSTSEC-2026-0370/0371/0372: zvariant, zbus_names and zvariant_derive were
     # folded into zbus 6 and are no longer released on their own. No patched
-    # version exists — the fix is "move to zbus 6". Both zbus lines here still
-    # depend on them: zbus 4 via keyring → secret-service (the Linux Secret
-    # Service keychain) and zbus 5 via tauri-plugin-opener and our own logind
-    # lock watcher. Moving only our code would not drop them. Linux D-Bus only,
-    # not reachable from the crypto/sync core. Revisit when keyring and the
-    # Tauri plugins move to zbus 6, then move ours with them.
+    # version exists — the fix is "move to zbus 6". Our own lock watcher is on
+    # zbus 6, but two older zbus lines here still depend on them: zbus 4 via
+    # keyring → secret-service (the Linux Secret Service keychain) and zbus 5
+    # via tauri-plugin-opener. Linux D-Bus only, not reachable from the
+    # crypto/sync core. Revisit when keyring and the Tauri plugins move to
+    # zbus 6.
     "RUSTSEC-2026-0370", # zvariant
     "RUSTSEC-2026-0371", # zbus_names
     "RUSTSEC-2026-0372", # zvariant_derive
