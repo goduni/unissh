@@ -113,10 +113,10 @@ function GroupsModalBody() {
   const addGroup = async () => {
     const vaultId = useApp.getState().vaultId;
     if (!vaultId) return;
-    const groupId = `group-${Date.now()}`;
     await guard(async () => {
-      await api.saveGroup(vaultId, {
-        groupId,
+      // An empty id: the core mints the new group's id and hands it back.
+      const groupId = await api.saveGroup(vaultId, {
+        groupId: "",
         label: t("groups.newGroupName"),
         memberIds: [],
         parentId: null,

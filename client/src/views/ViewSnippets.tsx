@@ -17,18 +17,6 @@ import { useApp } from "@/store/app";
 import { useNarrow } from "@/store/responsive";
 import { isBuiltinParam, parseParams } from "@/support/snippetParams";
 
-/** A stable id from the label, so a hand-picked name stays readable in the vault
- *  while still being unique enough not to collide with an existing snippet. */
-function mintId(label: string): string {
-  const slug =
-    label
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-|-$/g, "")
-      .slice(0, 40) || "snippet";
-  return `${slug}-${Date.now()}`;
-}
-
 function Editor({
   vaultId,
   edit,
@@ -61,7 +49,8 @@ function Editor({
       await api.saveSnippet(vaultId, {
         // Keep the id on an edit: it is the vault item id, and minting a new one
         // would leave the old snippet behind and break any host referencing it.
-        snippetId: edit?.snippetId ?? mintId(label || command),
+        // A new snippet goes with an empty id: the core mints one from its label.
+        snippetId: edit?.snippetId ?? "",
         label: label.trim() || command.trim().split("\n")[0].slice(0, 40),
         command,
         tags,

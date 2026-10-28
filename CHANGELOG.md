@@ -180,9 +180,26 @@ starts with `0.`:
   `password_fill: PasswordFillMode` parameter (pass `Off` for no fill).
   Observer callbacks (`on_fill`, and to be safe `on_data`) must not call back
   into the session synchronously from the calling thread.
+- Bindings: the core mints item ids. `save_connection`, `save_group` and
+  `save_snippet` now return the item's id (`String`, was nothing); an empty id
+  is a new item and gets `slug(label)-<millis>`. New create-only functions
+  `create_ssh_key`, `create_imported_ssh_key` and `create_identity` fail with
+  `AlreadyExists` instead of replacing; `generate_ssh_key`, `import_ssh_key`
+  and `save_identity` still create or replace. `new_item_id` mints an id for
+  an item whose save takes one from the caller (for now, a new host's saved
+  password). New `FfiError` variants `PassphraseRequired` and
+  `WrongPassphrase` for an encrypted key imported without or with a wrong
+  passphrase; `FfiError::AlreadyExists` now also covers a taken item id, and
+  its text is "already exists" (was "instance already exists").
 
 ### Fixed
 
+- Creating a key or a personal identity under a name that is already taken no
+  longer replaces what is there (#171). The app's New key dialog and its New
+  identity form used to overwrite a key's private material or an identity
+  silently; the app, `unissh keys generate|import` and `unissh identities add`
+  now say the name is taken and change nothing. The check happens as the item
+  is written, so a change synced from another device cannot slip in between.
 - The app and `unissh` now agree on what still uses a key or password (#169):
   a host's own login, an inline jump hop, a jump hop to a saved host that logs
   in with it, a proxy password, and identities. Before, the app missed

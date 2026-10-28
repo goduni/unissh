@@ -727,18 +727,26 @@ pub async fn list_items(
     Ok(v.into_iter().map(Into::into).collect())
 }
 
+/// Generates a NEW key (the core's `create_ssh_key`): an id already taken is
+/// `AlreadyExists`. The app has no flow that replaces a key's material under
+/// its id (rotation has its own commands), so the core's create-or-replace
+/// `generate_ssh_key` has no command.
 #[tauri::command]
-pub async fn generate_ssh_key(
+pub async fn create_ssh_key(
     vault_id: String,
     item_id: String,
     state: State<'_, AppState>,
 ) -> ApiResult<String> {
     let core = state.core.clone();
-    blocking(move || core.generate_ssh_key(vault_id, item_id)).await
+    blocking(move || core.create_ssh_key(vault_id, item_id)).await
 }
 
+/// Imports a private key as a NEW key (the core's `create_imported_ssh_key`;
+/// create-only like `create_ssh_key`, and for the same reason the core's
+/// `import_ssh_key` has no command). An encrypted key without its passphrase
+/// is `PassphraseRequired`, a wrong one `WrongPassphrase`.
 #[tauri::command]
-pub async fn import_ssh_key(
+pub async fn create_imported_ssh_key(
     vault_id: String,
     item_id: String,
     openssh_private: String,
@@ -746,7 +754,21 @@ pub async fn import_ssh_key(
     state: State<'_, AppState>,
 ) -> ApiResult<String> {
     let core = state.core.clone();
-    blocking(move || core.import_ssh_key(vault_id, item_id, openssh_private, passphrase)).await
+    blocking(move || core.create_imported_ssh_key(vault_id, item_id, openssh_private, passphrase))
+        .await
+}
+
+/// A fresh item id for a new item labelled `label`, minted by the core (for
+/// a password stored for a new host; hosts, groups and snippets get theirs
+/// when saved with an empty id).
+#[tauri::command]
+pub async fn new_item_id(
+    vault_id: String,
+    label: String,
+    state: State<'_, AppState>,
+) -> ApiResult<String> {
+    let core = state.core.clone();
+    blocking(move || core.new_item_id(vault_id, label)).await
 }
 
 #[tauri::command]
@@ -1176,12 +1198,14 @@ pub async fn import_known_hosts(
 
 // ---------- connection profiles (hosts) ----------
 
+/// Saves a host; an empty `profileId` is a new host, whose id the core mints.
+/// Returns the host's id.
 #[tauri::command]
 pub async fn save_connection(
     vault_id: String,
     profile: dto::ConnectionProfile,
     state: State<'_, AppState>,
-) -> ApiResult<()> {
+) -> ApiResult<String> {
     let core = state.core.clone();
     let p = profile.into();
     blocking(move || core.save_connection(vault_id, p)).await
@@ -1220,6 +1244,7 @@ pub async fn delete_connection(
 
 // ---------- identities (personal SSH creds) ----------
 
+/// Saves an identity over the one at its id, or creates it (the edit form).
 #[tauri::command]
 pub async fn save_identity(
     vault_id: String,
@@ -1229,6 +1254,19 @@ pub async fn save_identity(
     let core = state.core.clone();
     let i = identity.into();
     blocking(move || core.save_identity(vault_id, i)).await
+}
+
+/// Saves a NEW identity (the "new identity" form): an id already taken is
+/// `AlreadyExists`, and nothing is replaced.
+#[tauri::command]
+pub async fn create_identity(
+    vault_id: String,
+    identity: dto::Identity,
+    state: State<'_, AppState>,
+) -> ApiResult<()> {
+    let core = state.core.clone();
+    let i = identity.into();
+    blocking(move || core.create_identity(vault_id, i)).await
 }
 
 #[tauri::command]
@@ -1445,12 +1483,14 @@ pub async fn import_putty_sessions(
 
 // ---------- groups ----------
 
+/// Saves a snippet; an empty `snippetId` is a new one, whose id the core
+/// mints. Returns the snippet's id.
 #[tauri::command]
 pub async fn save_snippet(
     vault_id: String,
     snippet: dto::Snippet,
     state: State<'_, AppState>,
-) -> ApiResult<()> {
+) -> ApiResult<String> {
     let core = state.core.clone();
     let s = snippet.into();
     blocking(move || core.save_snippet(vault_id, s)).await
@@ -1476,12 +1516,14 @@ pub async fn delete_snippet(
     blocking(move || core.delete_snippet(vault_id, snippet_id)).await
 }
 
+/// Saves a group; an empty `groupId` is a new one, whose id the core mints.
+/// Returns the group's id.
 #[tauri::command]
 pub async fn save_group(
     vault_id: String,
     group: dto::ServerGroup,
     state: State<'_, AppState>,
-) -> ApiResult<()> {
+) -> ApiResult<String> {
     let core = state.core.clone();
     let g = group.into();
     blocking(move || core.save_group(vault_id, g)).await

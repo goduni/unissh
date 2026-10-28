@@ -362,8 +362,9 @@ pub fn run() {
             commands::check_consistency,
             // items / keys / certs
             commands::list_items,
-            commands::generate_ssh_key,
-            commands::import_ssh_key,
+            commands::create_ssh_key,
+            commands::new_item_id,
+            commands::create_imported_ssh_key,
             commands::import_ssh_certificate,
             commands::get_public_key,
             commands::export_ssh_key,
@@ -404,6 +405,7 @@ pub fn run() {
             commands::delete_connection,
             // identities (personal SSH creds)
             commands::save_identity,
+            commands::create_identity,
             commands::list_identities,
             commands::get_identity,
             commands::delete_identity,
