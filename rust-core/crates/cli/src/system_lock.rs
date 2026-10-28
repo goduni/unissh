@@ -45,8 +45,9 @@ mod linux {
 
     use futures_util::StreamExt;
     use unissh_automation::logind::{
-        display_session, locked_after_wake, Header, Heard, Logind, SessionLookup, WakeCheck,
-        CALL_TIMEOUT, LOGIND, MANAGER, MANAGER_PATH, PROPERTIES, SESSION, SESSION_LOOKUPS, USER,
+        display_session, locked_after_wake, session_id, session_sources, Header, Heard, Logind,
+        SessionLookup, SessionSource, WakeCheck, CALL_TIMEOUT, LOGIND, MANAGER, MANAGER_PATH,
+        PROPERTIES, SESSION, USER,
     };
     use unissh_automation::Broker;
     use zbus::connection::Builder;
@@ -334,20 +335,49 @@ mod linux {
             .deserialize()
     }
 
-    /// This process's logind session object: the first of [`SESSION_LOOKUPS`]
-    /// to find one, or the last failure.
+    /// This process's logind session object: the first of [`session_sources`]
+    /// to find one, or the last failure. A session found by a fallback is
+    /// named in a warning: inside tmux it may be another terminal's.
     async fn session_path(calls: &Connection) -> zbus::Result<OwnedObjectPath> {
+        let xdg_session_id = std::env::var("XDG_SESSION_ID").ok();
         let mut failed = None;
-        for lookup in SESSION_LOOKUPS {
-            match look_up_session(calls, lookup).await {
-                Ok(path) => return Ok(path),
+        for source in session_sources(xdg_session_id.as_deref()) {
+            let found = match source {
+                SessionSource::Environment(id) => named_session(calls, id).await,
+                SessionSource::Lookup(lookup) => look_up_session(calls, lookup).await,
+            };
+            match found {
+                Ok(path) => {
+                    if source.is_fallback() {
+                        let env = if xdg_session_id.as_deref().is_some_and(|id| !id.is_empty()) {
+                            "names no session"
+                        } else {
+                            "is not set"
+                        };
+                        log::warn!(
+                            "system lock: $XDG_SESSION_ID {env}; following logind session {} \
+                             (see `loginctl`); a lock of any other session does not pause access",
+                            session_id(path.as_str()),
+                        );
+                    }
+                    return Ok(path);
+                }
                 Err(e) => {
-                    log::debug!("system lock: session lookup {lookup:?} failed ({e})");
+                    log::debug!("system lock: session lookup {source:?} failed ({e})");
                     failed = Some(e);
                 }
             }
         }
         Err(failed.unwrap_or_else(|| zbus::Error::Failure("no session lookup".into())))
+    }
+
+    /// The session `$XDG_SESSION_ID` names.
+    async fn named_session(calls: &Connection, id: &str) -> zbus::Result<OwnedObjectPath> {
+        calls
+            .call_method(Some(LOGIND), MANAGER_PATH, Some(MANAGER), "GetSession", &id)
+            .await?
+            .body()
+            .deserialize()
     }
 
     async fn look_up_session(

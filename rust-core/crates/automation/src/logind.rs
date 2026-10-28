@@ -80,6 +80,65 @@ pub const SESSION_LOOKUPS: [SessionLookup; 3] = [
     SessionLookup::UserDisplay,
 ];
 
+/// Where a watcher's session came from: the session its environment names, or
+/// one of [`SESSION_LOOKUPS`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionSource<'a> {
+    /// `GetSession(id)` for the `$XDG_SESSION_ID` the process inherited: the
+    /// login session a shell was started in. A tmux pane whose server runs in
+    /// a systemd user scope still carries it, though logind finds no session
+    /// by its PID there and `auto` answers the user's display session (another
+    /// tty, perhaps).
+    Environment(&'a str),
+    /// One of the lookups that ask logind about the process itself.
+    Lookup(SessionLookup),
+}
+
+impl SessionSource<'_> {
+    /// Whether the session is only a guess at this process's own: anything
+    /// but the session its environment names. A watcher says which session it
+    /// follows then, so that a wrong one can be noticed.
+    pub const fn is_fallback(self) -> bool {
+        !matches!(self, Self::Environment(_))
+    }
+}
+
+/// The order a watcher looks its session up in: the session `$XDG_SESSION_ID`
+/// names (`xdg_session_id`; unset or empty is none), then [`SESSION_LOOKUPS`].
+pub fn session_sources(xdg_session_id: Option<&str>) -> impl Iterator<Item = SessionSource<'_>> {
+    xdg_session_id
+        .filter(|id| !id.is_empty())
+        .map(SessionSource::Environment)
+        .into_iter()
+        .chain(SESSION_LOOKUPS.into_iter().map(SessionSource::Lookup))
+}
+
+/// The session id in a session object's path, as `loginctl` shows it: the
+/// last path element with logind's `_xx` hex escapes undone
+/// (`/org/freedesktop/login1/session/_34` is session `4`).
+pub fn session_id(path: &str) -> String {
+    let mut rest = path.rsplit('/').next().unwrap_or(path).as_bytes();
+    let mut id = Vec::with_capacity(rest.len());
+    while let Some((&first, tail)) = rest.split_first() {
+        let escaped = tail
+            .get(..2)
+            .filter(|_| first == b'_')
+            .and_then(|hex| std::str::from_utf8(hex).ok())
+            .and_then(|hex| u8::from_str_radix(hex, 16).ok());
+        match escaped {
+            Some(byte) => {
+                id.push(byte);
+                rest = tail.get(2..).unwrap_or_default();
+            }
+            None => {
+                id.push(first);
+                rest = tail;
+            }
+        }
+    }
+    String::from_utf8_lossy(&id).into_owned()
+}
+
 /// The session in a user's `Display` property `(id, path)`. logind reports
 /// `("", "/")` when the user has no display session: that is not one.
 pub fn display_session(id: &str, path: &str) -> Option<String> {
@@ -200,8 +259,9 @@ impl Logind {
 #[cfg(test)]
 mod tests {
     use super::{
-        display_session, locked_after_wake, Header, Heard, Logind, SessionLookup, WakeCheck,
-        MANAGER, MANAGER_PATH, PROPERTIES, SESSION, SESSION_LOOKUPS,
+        display_session, locked_after_wake, session_id, session_sources, Header, Heard, Logind,
+        SessionLookup, SessionSource, WakeCheck, MANAGER, MANAGER_PATH, PROPERTIES, SESSION,
+        SESSION_LOOKUPS,
     };
 
     const OWNER: &str = ":1.7";
@@ -361,6 +421,28 @@ mod tests {
         );
         assert_eq!(display_session("", "/"), None);
         assert_eq!(display_session("2", "/"), None);
+    }
+
+    /// The session `$XDG_SESSION_ID` names comes first and is the only one that
+    /// is not a fallback; unset or empty, the lookups alone are tried.
+    #[test]
+    fn the_environment_session_comes_first() {
+        let lookups = SESSION_LOOKUPS.map(SessionSource::Lookup);
+        let mut with_env = vec![SessionSource::Environment("4")];
+        with_env.extend(lookups);
+        assert_eq!(session_sources(Some("4")).collect::<Vec<_>>(), with_env);
+        assert_eq!(session_sources(None).collect::<Vec<_>>(), lookups);
+        assert_eq!(session_sources(Some("")).collect::<Vec<_>>(), lookups);
+        assert!(!SessionSource::Environment("4").is_fallback());
+        assert!(lookups.iter().all(|source| source.is_fallback()));
+    }
+
+    /// A session path names its session as `loginctl` does.
+    #[test]
+    fn a_session_path_names_its_id() {
+        assert_eq!(session_id("/org/freedesktop/login1/session/_34"), "4");
+        assert_eq!(session_id("/org/freedesktop/login1/session/c2"), "c2");
+        assert_eq!(session_id("/org/freedesktop/login1/session/_312"), "12");
     }
 
     /// A wake resumes only on a lock screen known to be down: a failed or
