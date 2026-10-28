@@ -558,12 +558,16 @@ fn refuse_unpinned(core: &Core, plan: &RotationPlan, only: Option<&BTreeSet<Stri
 
 /// The labels of targets `ids`, each followed by the hosts that hop through
 /// it; every name once.
-fn with_followers(plan: &RotationPlan, ids: impl IntoIterator<Item = &String>) -> Vec<String> {
+fn with_followers(
+    plan: &RotationPlan,
+    ids: impl IntoIterator<Item = impl AsRef<str>>,
+) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
     for id in ids {
+        let id = id.as_ref();
         let label = plan
             .target(id)
-            .map_or_else(|| id.clone(), RotationTarget::label);
+            .map_or_else(|| id.to_owned(), RotationTarget::label);
         let deps = plan.dependents_of(id).into_iter().map(|h| h.label.clone());
         for name in std::iter::once(label).chain(deps) {
             if !names.contains(&name) {
