@@ -13,11 +13,14 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use unissh_cloud::client::http;
 use unissh_cloud::identity;
 use unissh_cloud::transport::HttpSyncTransport;
-use unissh_ffi::{Core, FfiSyncMode, FfiSyncReport, FfiSyncTransport};
+use unissh_ffi::{
+    Core, FfiSyncMode, FfiSyncReport, FfiSyncTransport, FfiUnpushableItem, FfiUnpushableReason,
+};
 
 use crate::device::Device;
 use crate::failure::{best_effort, Failure, Res};
 use crate::home::Link;
+use crate::tty::one_line;
 
 /// How old the local copy may get before a command that reads hosts syncs first.
 pub const STALE_AFTER: Duration = Duration::from_secs(5 * 60);
@@ -124,6 +127,20 @@ fn sync_locked(device: &Device) -> Res<FfiSyncReport> {
     let report = device.core.sync_now(transport, space, FfiSyncMode::Full)?;
     device.home.mark_synced()?;
     Ok(report)
+}
+
+/// Drops this account's edits in vault `vault_id` (hex, as `list_vaults` names
+/// it) that no push can deliver, then pulls that vault so the server's copy
+/// comes back (#166): how many edits were dropped, and the pull's report. The
+/// core must be unlocked.
+pub fn discard_unpushable(device: &Device, vault_id: &str) -> Res<(u32, FfiSyncReport)> {
+    let _one_at_a_time = device.home.sync_lock()?;
+    let access = device.access()?;
+    let space = space_of(device, &access);
+    let transport = HttpSyncTransport::new(device.link.base_url.clone(), access);
+    transport
+        .discard_unpushable_and_pull(&device.core, &space, vault_id)
+        .map_err(Failure::from)
 }
 
 /// The space this device's cloud vaults are bound in — the account's first,
@@ -285,14 +302,114 @@ pub fn warn_about(report: &FfiSyncReport) {
             report.too_large.len()
         );
     }
+    for line in unpushable_lines(&report.unpushable) {
+        eprintln!("unissh: {line}");
+    }
+}
+
+/// What an item of the core's `item_type` is, in a few words.
+pub const fn kind(item_type: u32) -> &'static str {
+    match item_type {
+        1 => "SSH key",
+        2 => "certificate",
+        3 => "host",
+        4 => "password",
+        5 => "group",
+        6 => "note",
+        7 => "identity",
+        8 => "host binding",
+        9 => "snippet",
+        10 => "recording",
+        _ => "item",
+    }
+}
+
+/// One item no push can deliver, as a list entry: its kind and id (its name
+/// is inside the encrypted content the sync does not read) and why.
+pub fn unpushable_entry(item: &FfiUnpushableItem) -> String {
+    let why = match item.reason {
+        FfiUnpushableReason::NotAuthorized => "this account may not change the vault",
+        FfiUnpushableReason::ServerRefused => "the server refused it",
+    };
+    format!(
+        "{} {} ({why})",
+        kind(item.item_type),
+        one_line(&item.item_id)
+    )
+}
+
+/// What a sync says about the edits it could not send (#166), one line per
+/// vault: they stay on this machine, nothing else is held up, and how to drop
+/// the ones made here in favour of the server's copy.
+fn unpushable_lines(items: &[FfiUnpushableItem]) -> Vec<String> {
+    let mut vaults: Vec<(&str, &str)> = Vec::new();
+    for item in items {
+        let vault = (item.vault_id.as_str(), item.vault_name.as_str());
+        if !vaults.contains(&vault) {
+            vaults.push(vault);
+        }
+    }
+    vaults
+        .into_iter()
+        .map(|(id, name)| {
+            let here: Vec<&FfiUnpushableItem> = items.iter().filter(|i| i.vault_id == id).collect();
+            let shown = if name.is_empty() { id } else { name };
+            let entries: Vec<String> = here.iter().copied().map(unpushable_entry).collect();
+            let fix = if here.iter().any(|i| i.mine) {
+                format!(
+                    "; `unissh vaults discard-unpushable {id}` drops the ones made here \
+                     and restores the server's copy"
+                )
+            } else {
+                String::new()
+            };
+            format!(
+                "{} change(s) in vault \"{}\" cannot be sent and stay on this machine: {}{fix}",
+                here.len(),
+                one_line(shown),
+                entries.join(", ")
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
-    use super::{is_refusal, reuse_for, REUSE};
+    use unissh_ffi::{FfiUnpushableItem, FfiUnpushableReason};
+
+    use super::{is_refusal, reuse_for, unpushable_lines, REUSE};
     use crate::failure::Failure;
+
+    /// A sync names what it could not send by vault, by kind and id, and
+    /// points at the discard only where this account made some of it.
+    #[test]
+    fn unsent_edits_are_listed_per_vault_with_the_way_out() {
+        let item = |vault: &str, id: &str, mine, reason| FfiUnpushableItem {
+            vault_id: vault.to_owned(),
+            vault_name: format!("{vault}-name"),
+            item_id: id.to_owned(),
+            item_type: 3,
+            mine,
+            reason,
+        };
+        let lines = unpushable_lines(&[
+            item("aa", "web", true, FfiUnpushableReason::NotAuthorized),
+            item("bb", "db", false, FfiUnpushableReason::ServerRefused),
+        ]);
+        assert_eq!(
+            lines,
+            [
+                "1 change(s) in vault \"aa-name\" cannot be sent and stay on this machine: \
+                 host web (this account may not change the vault); \
+                 `unissh vaults discard-unpushable aa` drops the ones made here and restores \
+                 the server's copy",
+                "1 change(s) in vault \"bb-name\" cannot be sent and stay on this machine: \
+                 host db (the server refused it)",
+            ]
+        );
+    }
 
     /// Half the token's remaining life, never more than the cap and nothing
     /// for one already expired; a server that does not say gets the cap.

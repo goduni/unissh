@@ -39,6 +39,7 @@ mod system_lock;
 mod tree;
 mod tty;
 mod tunnel;
+mod vaults;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -60,6 +61,7 @@ use crate::secrets::{IdentitiesAction, KeysAction, SecretsAction};
 use crate::snippet_edit::SnippetWrite;
 use crate::tty::Tty;
 use crate::tunnel::Forward;
+use crate::vaults::VaultsAction;
 
 #[derive(Parser)]
 #[command(
@@ -105,6 +107,9 @@ enum Command {
     Status,
     /// Sync the vaults with the server now.
     Sync,
+    /// Vaults as a whole: drop the changes made here that the server will not take.
+    #[command(subcommand)]
+    Vaults(VaultsAction),
     /// List the hosts, or add, change or delete one.
     #[command(args_conflicts_with_subcommands = true)]
     Hosts {
@@ -444,6 +449,11 @@ fn run(cli: Cli) -> Res<u8> {
             let report = server::sync(&device)?;
             println!("{}", server::summary(&report));
             server::warn_about(&report);
+            Ok(0)
+        }
+        Command::Vaults(action) => {
+            let device = unlocked(home, &credentials)?;
+            vaults::run(&device, offline, action)?;
             Ok(0)
         }
         Command::Hosts {

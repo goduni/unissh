@@ -68,6 +68,7 @@ unissh known-hosts list|trust|forget
 unissh recordings list|play|export|rm   # see Recordings below
 unissh hosts add|edit|rm, groups, secrets, keys, identities, snippets add   # see Editing the vaults
 unissh sync | status | logout
+unissh vaults discard-unpushable Team   # drop changes the server won't take; see below
 unissh mcp                     # an MCP server for a local AI agent (see below)
 ```
 
@@ -79,6 +80,15 @@ from the terminal (`/dev/tty`, so pipes still work) or from an owner-only
 `--password-file` / `UNISSH_PASSWORD_FILE`. A command that reads hosts syncs first
 when the local copy is more than five minutes old; a sync that fails is a warning,
 and the command uses the copy on this machine. `--offline` never contacts the server.
+
+A change the server will not take — made in a vault this account could only
+view, before UniSSH refused such edits, or one the server refuses on its own —
+no longer holds up the rest of a sync: it stays on this machine, everything else
+is sent, and every sync names it by vault, kind and id. `unissh vaults
+discard-unpushable <vault>` deletes the ones made by this account, after asking
+(`--yes` skips the question), and pulls the vault again so the server's copy of
+each item comes back; an item the server never had is gone. Other changes not
+sent yet are kept.
 
 The interactive list locks the instance after 15 minutes without input and asks
 for the master password again, on the terminal even when a password file is set.
