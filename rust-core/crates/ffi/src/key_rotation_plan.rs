@@ -412,12 +412,9 @@ impl<'h> Routes<'h> {
         jumps: &[JumpHost],
         proxy: Option<&ProxyConfig>,
     ) -> Option<ProxyConfig> {
-        proxy.cloned().or_else(|| {
-            jumps
-                .first()
-                .and_then(|j| self.ref_profile(j))
-                .and_then(|r| r.proxy.clone())
-        })
+        proxy
+            .cloned()
+            .or_else(|| self.ref_profile(jumps.first()?)?.proxy.clone())
     }
 
     /// Identity of the login `endpoint` reached through `jumps` behind `proxy`
@@ -1447,6 +1444,7 @@ impl RotationDriver {
             let mut run = self.lock();
             run.record_step(&id, step, outcome);
             on_change(&id, &run);
+            drop(run);
         }
     }
 
@@ -1891,7 +1889,7 @@ mod tests {
                 let cmd = authorized_keys_remove_command(OLD, CAND).unwrap();
                 assert_eq!(
                     (run(awk, h.path(), &cmd), read(&file)),
-                    (1, before.clone()),
+                    (1, before),
                     "{}",
                     awk.name
                 );
