@@ -173,6 +173,12 @@ starts with `0.`:
 
 ### Fixed
 
+- The app and `unissh` now agree on what still uses a key or password (#169):
+  a host's own login, an inline jump hop, a jump hop to a saved host that logs
+  in with it, a proxy password, and identities. Before, the app missed
+  identities and proxy passwords and `unissh secrets rm` missed jump hops to
+  saved hosts. The key list shows identities beside hosts, and deleting a
+  password now warns when something still uses it.
 - The admin panel's sign-in says that the password is optional: it is the
   account's master password from the UniSSH app (or the one set when the
   instance was set up); an account without one signs in with it empty.
