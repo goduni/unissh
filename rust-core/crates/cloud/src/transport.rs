@@ -184,7 +184,7 @@ impl HttpSyncTransport {
             .filter_map(|item| item.get("object").and_then(Value::as_str))
             .map(client::unb64)
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| failed("an object on the page is not base64".to_owned()))?;
+            .map_err(|e| failed(format!("an object on the page is not base64 ({e})")))?;
         let next = next_page(&v, cursor);
         let more = v.get("has_more").and_then(Value::as_bool).unwrap_or(false);
         if more && next.is_none() {
