@@ -558,10 +558,7 @@ fn refuse_unpinned(core: &Core, plan: &RotationPlan, only: Option<&BTreeSet<Stri
 
 /// The labels of targets `ids`, each followed by the hosts that hop through
 /// it; every name once.
-fn with_followers<'a>(
-    plan: &RotationPlan,
-    ids: impl IntoIterator<Item = &'a String>,
-) -> Vec<String> {
+fn with_followers(plan: &RotationPlan, ids: impl IntoIterator<Item = &String>) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
     for id in ids {
         let label = plan
