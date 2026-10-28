@@ -14,7 +14,9 @@
 //! counts only when it names this vault. A `hop_ref` into another vault never
 //! counts, even when that vault holds an item under the same id.
 //!
-//! Reads references only; no secret is decrypted or returned.
+//! Reads references only; no secret is decrypted or returned. The guided key
+//! rotation's planner (`key_rotation_plan`) finds the machines to move with
+//! these same predicates.
 
 use std::collections::{BTreeSet, HashSet};
 
@@ -74,13 +76,33 @@ impl KeyUsage {
 }
 
 /// Whether a host's own login is `item_id`.
-fn logs_in_with(auth: &ProfileAuth, item_id: &str) -> bool {
+pub(crate) fn logs_in_with(auth: &ProfileAuth, item_id: &str) -> bool {
     match auth {
         ProfileAuth::Key { key_item_id } => key_item_id == item_id,
         ProfileAuth::VaultPassword { password_item_id } => password_item_id == item_id,
         ProfileAuth::PromptPassword | ProfileAuth::SystemAgent { .. } | ProfileAuth::Personal => {
             false
         }
+    }
+}
+
+/// Whether an inline hop's auth is item `item_id` of this vault; `same_vault`
+/// says whether a vault id it names is this vault.
+pub(crate) fn auth_uses(
+    auth: &AuthMethod,
+    item_id: &str,
+    same_vault: &impl Fn(&str) -> bool,
+) -> bool {
+    match auth {
+        AuthMethod::Agent {
+            vault_id,
+            key_item_id,
+        } => key_item_id == item_id && same_vault(vault_id),
+        AuthMethod::VaultPassword {
+            vault_id,
+            password_item_id,
+        } => password_item_id == item_id && same_vault(vault_id),
+        AuthMethod::Password { .. } | AuthMethod::SystemAgent { .. } => false,
     }
 }
 
@@ -95,17 +117,7 @@ fn usage_in(
     if item_id.is_empty() {
         return KeyUsage::default();
     }
-    let inline = |auth: &AuthMethod| match auth {
-        AuthMethod::Agent {
-            vault_id,
-            key_item_id,
-        } => key_item_id == item_id && same_vault(vault_id),
-        AuthMethod::VaultPassword {
-            vault_id,
-            password_item_id,
-        } => password_item_id == item_id && same_vault(vault_id),
-        AuthMethod::Password { .. } | AuthMethod::SystemAgent { .. } => false,
-    };
+    let inline = |auth: &AuthMethod| auth_uses(auth, item_id, &same_vault);
     // Profiles of this vault whose own login is the item, by uid: what a
     // referenced hop resolves to.
     let login_uids: HashSet<&str> = hosts
@@ -182,6 +194,24 @@ fn named_vaults(hosts: &[ConnectionProfile]) -> BTreeSet<String> {
 }
 
 impl Core {
+    /// The vault ids `hosts`' references name that are vault `vault_id`. A
+    /// reference may name the vault by any id `resolve_vid` accepts, so this
+    /// compares what they resolve to, not the strings.
+    pub(crate) fn names_of_vault(
+        &self,
+        vault_id: &str,
+        hosts: &[ConnectionProfile],
+    ) -> Result<BTreeSet<String>, FfiError> {
+        let names = named_vaults(hosts);
+        self.with_state(|state| {
+            let vid = resolve_vid(&state.storage, vault_id);
+            Ok(names
+                .into_iter()
+                .filter(|n| resolve_vid(&state.storage, n) == vid)
+                .collect())
+        })
+    }
+
     /// What in vault `vault_id` uses the key or password item `item_id`: hosts
     /// (own login, inline hop, hop referencing a saved profile of this vault,
     /// proxy password) and identities. See the module docs for the rules. An
@@ -189,16 +219,7 @@ impl Core {
     pub fn key_usage(&self, vault_id: String, item_id: String) -> Result<KeyUsage, FfiError> {
         let hosts = self.list_connections(vault_id.clone())?;
         let identities = self.list_identities(vault_id.clone())?;
-        // A reference may name the vault by any id `resolve_vid` accepts, so
-        // compare what they resolve to, not the strings.
-        let names = named_vaults(&hosts);
-        let same: HashSet<String> = self.with_state(|state| {
-            let vid = resolve_vid(&state.storage, &vault_id);
-            Ok(names
-                .into_iter()
-                .filter(|n| resolve_vid(&state.storage, n) == vid)
-                .collect())
-        })?;
+        let same = self.names_of_vault(&vault_id, &hosts)?;
         Ok(usage_in(
             &item_id,
             |v| same.contains(v),

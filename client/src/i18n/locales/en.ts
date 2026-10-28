@@ -1445,6 +1445,7 @@ export const en = {
     "skipSystemAgent": "System agent key — not in the vault",
     "skipPassword": "Password login",
     "certNote": "The certificate attached to this key is not carried over. Request a new one for the new key after finishing.",
+    "unpinnedNote": "Not every machine's host key is pinned yet. The rotation logs in with both keys, so it only goes to machines this device already knows. Connect once to {{hosts}} first, then open the rotation again.",
     "stepDeploy": "Deploy",
     "stepVerify": "Verify",
     "stepRemove": "Remove old",

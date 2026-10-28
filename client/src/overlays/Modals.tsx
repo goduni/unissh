@@ -61,7 +61,6 @@ import type {
 } from "@/bridge/types";
 import type { TunnelType } from "@/store/app";
 import { exportPath } from "@/support/paths";
-import { authorizedKeysAppendCmd } from "@/support/authorizedKeys";
 import { indexHostGroups } from "@/support/hostGroups";
 import { AppearancePicker } from "@/components/AppearancePicker";
 import type { TagColor } from "@/components/appearance";
@@ -3058,7 +3057,14 @@ function CopyKeyToServerModal({
       ctx.toast(t("modals.copyKey.selectHost"), "warn");
       return;
     }
-    const cmd = authorizedKeysAppendCmd(openssh);
+    // The core builds it: the same idempotent ssh-copy-id the guided rotation deploys with.
+    let cmd: string;
+    try {
+      cmd = await api.authorizedKeysAppendCommand(openssh);
+    } catch (e) {
+      ctx.toast(apiErrorMessage(e), "err");
+      return;
+    }
 
     setBusy(true);
     setErrors([]);

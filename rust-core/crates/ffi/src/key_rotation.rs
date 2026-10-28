@@ -25,6 +25,7 @@ use std::collections::{BTreeMap, HashSet};
 use unissh_ssh_agent::{ssh_key::HashAlg, InMemoryAgent};
 use unissh_vault::{DecryptedItem, Vault};
 
+use super::key_rotation_plan::RotationKeys;
 use super::{
     agent_key_id, drop_certificate, map_vault_err, require_ssh_key, resolve_vid, store_new_ssh_key,
     Core, CoreState, FfiError, ITEM_TYPE_SSH_KEY,
@@ -129,6 +130,18 @@ fn public_fingerprint(item: &DecryptedItem) -> Result<String, FfiError> {
         .public_key(b"x")
         .ok_or_else(|| FfiError::ssh("no public key"))?;
     Ok(public.fingerprint(HashAlg::Sha256).to_string())
+}
+
+/// An SSH key item's public half as an OpenSSH line, as `get_public_key`
+/// gives it.
+fn public_openssh(item: &DecryptedItem) -> Result<String, FfiError> {
+    let mut tmp = InMemoryAgent::new();
+    tmp.add_from_item(b"x".to_vec(), item)
+        .map_err(FfiError::ssh)?;
+    let public = tmp
+        .public_key(b"x")
+        .ok_or_else(|| FfiError::ssh("no public key"))?;
+    public.to_openssh().map_err(FfiError::ssh)
 }
 
 /// The live candidate `link` points at, when it is still the key the link was
@@ -318,6 +331,42 @@ impl Core {
             state.agent.remove(&agent_key_id(&vault_id, &candidate_id));
             Ok(())
         })
+    }
+
+    /// The keys of the rotation of `key_id` recorded on this device: the key
+    /// item's public key, and the candidate's — the candidate the link names,
+    /// still holding the key it was created with. `NotFound` for a rotation
+    /// not begun here, or one whose candidate is gone or was replaced: a run
+    /// must never move machines to a key nobody here generated.
+    pub fn key_rotation_keys(
+        &self,
+        vault_id: String,
+        key_id: String,
+    ) -> Result<RotationKeys, FfiError> {
+        self.with_state_mut(|state| {
+            let vid = resolve_vid(&state.storage, &vault_id);
+            let vault =
+                Vault::open(&state.storage, &state.keyset, &vid).map_err(FfiError::other)?;
+            let links = load_links(state, &vid)?;
+            let link = links.get(&key_id).ok_or(FfiError::NotFound)?;
+            let candidate = linked_candidate(&vault, link)?.ok_or(FfiError::NotFound)?;
+            Ok(RotationKeys {
+                old: public_openssh(&require_ssh_key(&vault, &key_id)?)?,
+                candidate: public_openssh(&candidate)?,
+                candidate_id: link.candidate_id.clone(),
+            })
+        })
+    }
+
+    /// Whether the key item already holds the candidate of its rotation (see
+    /// [`RotationKeys::committed`]): a finish was interrupted, and completing
+    /// it is all that is left.
+    pub fn key_rotation_committed(
+        &self,
+        vault_id: String,
+        key_id: String,
+    ) -> Result<bool, FfiError> {
+        Ok(self.key_rotation_keys(vault_id, key_id)?.committed())
     }
 
     /// Rotations in progress for `vault_id`: this device's links whose candidate
@@ -559,6 +608,41 @@ mod tests {
                 Some(KeyLoginFailure::AcceptedNeedsMore),
                 None,
             ]
+        );
+    }
+
+    #[test]
+    fn rotation_keys_name_this_devices_candidate_and_refuse_a_replaced_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = fixture(dir.path());
+        let candidate = core
+            .begin_key_rotation("v".to_owned(), "key".to_owned())
+            .unwrap();
+        let public = |id: &str| {
+            core.get_public_key("v".to_owned(), id.to_owned())
+                .unwrap()
+                .openssh
+        };
+        let keys = core
+            .key_rotation_keys("v".to_owned(), "key".to_owned())
+            .unwrap();
+        assert_eq!(
+            keys,
+            RotationKeys {
+                old: public("key"),
+                candidate: public(&candidate),
+                candidate_id: candidate.clone(),
+            },
+            "the recorded candidate"
+        );
+        // Another key under the candidate's id (one synced in, say).
+        core.generate_ssh_key("v".to_owned(), candidate).unwrap();
+        assert!(
+            matches!(
+                core.key_rotation_keys("v".to_owned(), "key".to_owned()),
+                Err(FfiError::NotFound)
+            ),
+            "a replaced candidate is refused"
         );
     }
 

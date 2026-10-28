@@ -227,6 +227,9 @@ unissh secrets show <name> [--reveal [--yes]]                   # --reveal print
 unissh secrets rm <name>
 unissh keys generate <name> | import <name> <file|-> | public <name> | certificate <name> <file|->
 unissh keys rotate <name>                                       # a new pair in place
+unissh keys rotation begin <name>                               # a new key beside it
+unissh keys rotation run <name> [--host H]... [--json]          # install + prove it per machine
+unissh keys rotation finish <name> [--yes [--allow-lockout]]    # drop the old key, commit the new
 unissh keys rotation list | abandon <name>
 unissh identities list | add <name> --user U [--key K] | edit <name> | rm <name>
 unissh snippets add [--label L] [--command C | --stdin]         # else $EDITOR
@@ -274,8 +277,38 @@ what is missing and fails. Do not run `add` again then: finish the host with
 
 Deleting asks first on the terminal; `--yes` skips the question. `keys rotate`
 replaces a key at once, which locks out every host that has only the old public
-key. The app's guided rotation moves each machine over first; the rotations it
-begins can be listed and abandoned here.
+key. The guided rotation moves each machine over first, as the app's rotation
+dialog does (the plan and the steps are the same, from the core):
+
+- `keys rotation begin` lists the machines that have to learn a new key —
+  each host that logs in with the key and each jump host that does, over its
+  route — the hosts that follow them, and the hosts it leaves alone (personal
+  logins, system agent keys, passwords). Then it creates the new key beside
+  the old one. A key no host logs in with is refused: `keys rotate` it.
+- `keys rotation run` installs the new public key on each machine (logged in
+  with the old key) and proves a key-only login with the new one, a line per
+  step as it lands and a table at the end. It removes nothing, so run it again,
+  for some machines with `--host`, until every machine passes; it exits
+  non-zero while one does not. A machine behind a jump host that uses the key
+  goes after that jump host, through it with the new key once it works there.
+- `keys rotation finish` checks the new key on every machine again and says
+  which machines a finish would lock out — those it does not log in on, and
+  those reached through a jump host it does not log in on — then asks. With
+  `--yes` it refuses such a lockout unless `--allow-lockout` is given too. It
+  removes the old key's line only where the new key logged in, checks that the
+  old key is then refused, and makes the new key the key's current version
+  (the old one stays in this device's history; a certificate on the key is
+  removed). It exits non-zero when a machine is left locked out or still
+  accepting the old key.
+
+`run` and `finish` log in with both keys, so they go only to machines whose
+host key this device has pinned: connect once first (`unissh ssh <host>`; for a
+jump host, the host behind it). A changed host key fails as on every connect.
+
+Ctrl-C stops a run or finish: steps in flight finish, nothing new starts, and a
+finish stopped before its last step changes no key. It names the machines it
+already took the old key off: they take only the new key until you finish. A rotation begun on another
+device can only be abandoned here.
 ## MCP server
 
 `unissh mcp` is the desktop app's MCP server (`docs/desktop-mcp.md`) in a terminal:
@@ -411,8 +444,8 @@ machine that can no longer reach it; revoke the device from another one afterwar
 
 Agent forwarding (each signature needs an approval prompt, which a raw terminal
 cannot show), the saved-password offer at `sudo` prompts, running a host's
-startup snippets, auto-reconnect, creating or sharing vaults, the guided key
-rotation (begin and finish it in the app), claiming an instance, SSO sign-in,
+startup snippets, auto-reconnect, creating or sharing vaults, claiming an
+instance, SSO sign-in,
 and more than one server per machine. Interactive use needs a Unix terminal.
 
 Sessions are recorded when the host asks for it, as in the app, and the recording

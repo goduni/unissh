@@ -62,6 +62,7 @@ pub mod automation;
 pub mod automation_recording;
 mod item_ids;
 mod key_rotation;
+pub mod key_rotation_plan;
 mod key_usage;
 mod password_fill;
 pub mod snippet_params;

@@ -5,8 +5,11 @@
 //! directly. These mirrors carry the same data with `camelCase` JSON, plus
 //! `From` conversions in both directions.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use unissh_ffi as ffi;
+use unissh_ffi::key_rotation_plan as rotation;
 
 // ---------- inputs (frontend -> core) ----------
 
@@ -1055,6 +1058,243 @@ impl From<ffi::KeyRotationLink> for KeyRotationLink {
             key_id: l.key_id,
             candidate_id: l.candidate_id,
             started_elsewhere: l.started_elsewhere,
+        }
+    }
+}
+
+// ---------- guided key rotation ----------
+
+/// One step of a target's rotation.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RotationStep {
+    Deploy,
+    Verify,
+    Remove,
+    Confirm,
+}
+impl From<rotation::RotationStep> for RotationStep {
+    fn from(s: rotation::RotationStep) -> Self {
+        match s {
+            rotation::RotationStep::Deploy => Self::Deploy,
+            rotation::RotationStep::Verify => Self::Verify,
+            rotation::RotationStep::Remove => Self::Remove,
+            rotation::RotationStep::Confirm => Self::Confirm,
+        }
+    }
+}
+
+/// Why a step did not pass; the dialog words it.
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum RotationStepFailure {
+    NoResult,
+    TimedOut,
+    Error { message: String },
+    Locked,
+    OldKeyStillPresent,
+    NoAuthorizedKeys,
+    RemoveNeedsSecondFactor,
+    OldKeyStillAccepted,
+    OldKeyCheckFailed { message: Option<String> },
+}
+impl From<&rotation::StepFailure> for RotationStepFailure {
+    fn from(f: &rotation::StepFailure) -> Self {
+        use rotation::StepFailure as F;
+        match f {
+            F::NoResult => Self::NoResult,
+            F::TimedOut => Self::TimedOut,
+            F::Error { message } => Self::Error {
+                message: message.clone(),
+            },
+            F::Locked => Self::Locked,
+            F::OldKeyStillPresent => Self::OldKeyStillPresent,
+            F::NoAuthorizedKeys => Self::NoAuthorizedKeys,
+            F::RemoveNeedsSecondFactor => Self::RemoveNeedsSecondFactor,
+            F::OldKeyStillAccepted => Self::OldKeyStillAccepted,
+            F::OldKeyCheckFailed { message } => Self::OldKeyCheckFailed {
+                message: message.clone(),
+            },
+        }
+    }
+}
+
+/// One target's place in a run.
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum RotationTargetState {
+    Pending {
+        step: RotationStep,
+    },
+    Running {
+        step: RotationStep,
+    },
+    Failed {
+        step: RotationStep,
+        failure: RotationStepFailure,
+    },
+    Switched,
+    KeptOld {
+        after: Option<RotationStep>,
+    },
+    Unconfirmed,
+}
+impl From<&rotation::TargetState> for RotationTargetState {
+    fn from(s: &rotation::TargetState) -> Self {
+        use rotation::TargetState as T;
+        match s {
+            T::Pending { step } => Self::Pending {
+                step: (*step).into(),
+            },
+            T::Running { step } => Self::Running {
+                step: (*step).into(),
+            },
+            T::Failed { step, failure } => Self::Failed {
+                step: (*step).into(),
+                failure: failure.into(),
+            },
+            T::Switched => Self::Switched,
+            T::KeptOld { after } => Self::KeptOld {
+                after: after.map(Into::into),
+            },
+            T::Unconfirmed => Self::Unconfirmed,
+        }
+    }
+}
+
+/// A machine the candidate key goes to, as the dialog lists it.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RotationTarget {
+    pub id: String,
+    /// The host's label, or `user@host[:port]` for a bare hop.
+    pub label: String,
+    pub user: String,
+    pub host: String,
+    pub port: u16,
+    /// The hops in front of it, as the logins they land on.
+    pub route: Vec<String>,
+    /// For a hop: the label of the host whose chain it was found in.
+    pub via_label: Option<String>,
+    /// The first-dial proxy as `host:port`.
+    pub proxy: Option<String>,
+}
+
+/// A host that only hops with the key.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RotationDependent {
+    pub profile_id: String,
+    pub label: String,
+    pub target_ids: Vec<String>,
+}
+
+/// A host the rotation leaves alone.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RotationSkip {
+    pub profile_id: String,
+    pub label: String,
+    /// `personal`, `systemAgent` or `password`.
+    pub reason: &'static str,
+}
+
+/// The plan of a guided key rotation, kept in `AppState` under `handle`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyRotationPlan {
+    pub handle: String,
+    pub targets: Vec<RotationTarget>,
+    pub dependents: Vec<RotationDependent>,
+    pub skipped: Vec<RotationSkip>,
+    /// One login is reached over more than one route.
+    pub shared_endpoint: bool,
+    /// Targets reached over a machine whose host key is not pinned yet: the
+    /// rotation refuses to start until each was connected to once.
+    pub unpinned: Vec<String>,
+}
+impl KeyRotationPlan {
+    pub fn new(handle: String, plan: &rotation::RotationPlan, unpinned: Vec<String>) -> Self {
+        let targets = plan
+            .targets
+            .iter()
+            .map(|t| RotationTarget {
+                id: t.id.clone(),
+                label: t.label(),
+                user: t.user.clone(),
+                host: t.host.clone(),
+                port: t.port,
+                route: t.route.clone(),
+                via_label: t.via.as_ref().map(|h| h.label.clone()),
+                proxy: t.proxy.as_ref().map(|p| format!("{}:{}", p.host, p.port)),
+            })
+            .collect();
+        let dependents = plan
+            .dependents
+            .iter()
+            .map(|d| RotationDependent {
+                profile_id: d.host.profile_id.clone(),
+                label: d.host.label.clone(),
+                target_ids: d.target_ids.clone(),
+            })
+            .collect();
+        let skipped = plan
+            .skipped
+            .iter()
+            .map(|s| RotationSkip {
+                profile_id: s.host.profile_id.clone(),
+                label: s.host.label.clone(),
+                reason: match s.reason {
+                    rotation::RotationSkipReason::Personal => "personal",
+                    rotation::RotationSkipReason::SystemAgent => "systemAgent",
+                    rotation::RotationSkipReason::Password => "password",
+                },
+            })
+            .collect();
+        Self {
+            handle,
+            targets,
+            dependents,
+            skipped,
+            shared_endpoint: plan.has_shared_endpoint(),
+            unpinned,
+        }
+    }
+}
+
+/// A guided key rotation's run as it stands.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyRotationRun {
+    /// Target id → its state.
+    pub states: BTreeMap<String, RotationTargetState>,
+    /// Targets where a login with the candidate passed in this run.
+    pub verified: Vec<String>,
+    pub cancelled: bool,
+    /// Nothing in flight and nothing left to start.
+    pub settled: bool,
+    /// Targets finishing would lock out (the candidate was not proven there).
+    pub unproven: Vec<String>,
+    /// Targets finishing would cut off: proven, but reached through a hop in
+    /// `unproven`.
+    pub cut_off: Vec<String>,
+    /// Targets where the candidate works but the old key was not seen refused.
+    pub old_not_refused: Vec<String>,
+}
+impl KeyRotationRun {
+    pub fn new(plan: &rotation::RotationPlan, run: &rotation::RotationRun) -> Self {
+        let outlook = run.finish_outlook(plan);
+        Self {
+            states: run
+                .states()
+                .map(|(id, s)| (id.to_owned(), s.into()))
+                .collect(),
+            verified: run.verified().iter().cloned().collect(),
+            cancelled: run.cancelled(),
+            settled: run.settled(),
+            unproven: outlook.unproven,
+            cut_off: outlook.cut_off,
+            old_not_refused: outlook.old_not_refused,
         }
     }
 }
