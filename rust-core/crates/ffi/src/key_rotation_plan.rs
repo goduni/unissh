@@ -17,9 +17,10 @@
 //! Nothing here touches private key material: the steps carry public-key
 //! lines and log in through the embedded agent by key item id.
 
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
+use crate::key_usage::{auth_uses, logs_in_with};
 use crate::{
     AuthMethod, ConnectionProfile, Core, FfiError, JumpHost, KeyLoginFailure, MultiExecResult,
     MultiExecTarget, ProfileAuth, ProxyConfig, ProxyKind,
@@ -319,6 +320,8 @@ pub struct RotationSkip {
 pub struct RotationPlan {
     /// The vault's hosts the plan was made from — hop refs resolve against them.
     hosts: Vec<ConnectionProfile>,
+    /// The vault ids those hosts' references name that are this vault.
+    same_vault: BTreeSet<String>,
     /// The vault.
     pub vault_id: String,
     /// The rotated key item.
@@ -331,39 +334,51 @@ pub struct RotationPlan {
     pub skipped: Vec<RotationSkip>,
 }
 
-/// Predicates for "does this log in with key `key_item_id` of vault
-/// `vault_id`" — the same rule as the app's key-usage count. A hop is either
-/// inline (its own auth) or a reference to a saved profile (`hop_ref`), which
-/// the core resolves by vault + uid and then logs in with THAT profile's auth
-/// — so a ref hop uses the key when it points into this vault at a profile
-/// whose own login is the key. A ref hop's inline auth is a placeholder and is
-/// ignored. Key ids are unique only per vault, so an inline hop counts only
-/// when its auth names this vault. `hosts` are the vault's own.
-struct KeyMatcher<'h> {
+/// How a plan reads the vault's hosts: which of them use the rotated key and
+/// where each hop lands. The key-use rule is the core's one answer, shared
+/// with `Core::key_usage` (see [`crate::key_usage`]): a host logs in with the
+/// key; an inline hop authenticates with it, naming this vault; a `hop_ref` hop
+/// points into this vault (by any id that names it) at a saved profile whose
+/// own login is the key — the core resolves it by vault + uid and logs in with
+/// THAT profile's auth, so a ref hop's inline auth is a placeholder and is
+/// ignored. `hosts` are the vault's own.
+struct Routes<'h> {
     by_uid: HashMap<&'h str, &'h ConnectionProfile>,
-    vault_id: &'h str,
+    same_vault: &'h BTreeSet<String>,
     key_item_id: &'h str,
 }
 
-impl<'h> KeyMatcher<'h> {
-    fn new(hosts: &'h [ConnectionProfile], vault_id: &'h str, key_item_id: &'h str) -> Self {
+impl<'h> Routes<'h> {
+    fn new(
+        hosts: &'h [ConnectionProfile],
+        same_vault: &'h BTreeSet<String>,
+        key_item_id: &'h str,
+    ) -> Self {
         // A uid listed twice resolves to its last profile, as the app's map does.
         let by_uid = hosts.iter().map(|h| (h.uid.as_str(), h)).collect();
         Self {
             by_uid,
-            vault_id,
+            same_vault,
             key_item_id,
         }
     }
 
+    fn of(plan: &'h RotationPlan) -> Self {
+        Self::new(&plan.hosts, &plan.same_vault, &plan.key_item_id)
+    }
+
+    fn is_this_vault(&self, vault_id: &str) -> bool {
+        self.same_vault.contains(vault_id)
+    }
+
     fn uses_key(&self, h: &ConnectionProfile) -> bool {
-        matches!(&h.auth, ProfileAuth::Key { key_item_id } if key_item_id == self.key_item_id)
+        logs_in_with(&h.auth, self.key_item_id)
     }
 
     /// The saved profile a ref hop resolves to, when it is in this vault.
     fn ref_profile(&self, j: &JumpHost) -> Option<&'h ConnectionProfile> {
         let r = j.hop_ref.as_ref()?;
-        if r.vault_id != self.vault_id {
+        if !self.is_this_vault(&r.vault_id) {
             return None;
         }
         self.by_uid.get(r.profile_uid.as_str()).copied()
@@ -373,8 +388,7 @@ impl<'h> KeyMatcher<'h> {
         if j.hop_ref.is_some() {
             return self.ref_profile(j).is_some_and(|r| self.uses_key(r));
         }
-        matches!(&j.auth, AuthMethod::Agent { vault_id, key_item_id }
-            if vault_id == self.vault_id && key_item_id == self.key_item_id)
+        auth_uses(&j.auth, self.key_item_id, &|v: &str| self.is_this_vault(v))
     }
 
     /// The machine a hop lands on. A `hop_ref` resolves to the saved profile's
@@ -479,13 +493,31 @@ fn endpoint_id(user: &str, host: &str, port: u16) -> String {
 /// with the key become dependents of the hop targets they go through. Hosts
 /// not using the key whose login is Personal, the system agent or a password
 /// are listed as skipped with that reason.
+///
+/// A reference names this vault only by `vault_id` itself here;
+/// [`Core::plan_key_rotation`] also accepts every other id that names it.
 pub fn plan_rotation(
     hosts: Vec<ConnectionProfile>,
     vault_id: &str,
     key_item_id: &str,
 ) -> RotationPlan {
+    plan_rotation_in(
+        hosts,
+        vault_id,
+        key_item_id,
+        BTreeSet::from([vault_id.to_owned()]),
+    )
+}
+
+/// [`plan_rotation`], a reference naming this vault by any id in `same_vault`.
+fn plan_rotation_in(
+    hosts: Vec<ConnectionProfile>,
+    vault_id: &str,
+    key_item_id: &str,
+    same_vault: BTreeSet<String>,
+) -> RotationPlan {
     let (targets, dependents, skipped) = {
-        let m = KeyMatcher::new(&hosts, vault_id, key_item_id);
+        let m = Routes::new(&hosts, &same_vault, key_item_id);
         let mut targets: Vec<RotationTarget> = Vec::new();
         let mut add = |t: RotationTarget| {
             if !targets.iter().any(|x| x.id == t.id) {
@@ -573,6 +605,7 @@ pub fn plan_rotation(
     };
     RotationPlan {
         hosts,
+        same_vault,
         vault_id: vault_id.to_owned(),
         key_item_id: key_item_id.to_owned(),
         targets,
@@ -599,6 +632,23 @@ impl RotationPlan {
             .map(|t| endpoint_id(&t.user, &t.host, t.port))
             .collect();
         endpoints.len() < self.targets.len()
+    }
+
+    /// The targets of the plan in front of target `id` as jump hops that use
+    /// the rotated key, first hop first: each logs in with the old key until it
+    /// has verified, and with the candidate after.
+    pub fn key_hops(&self, id: &str) -> Vec<String> {
+        let Some(t) = self.target(id) else {
+            return Vec::new();
+        };
+        let m = Routes::of(self);
+        t.jumps
+            .iter()
+            .enumerate()
+            .filter(|(_, j)| m.hop_uses_key(j))
+            .filter_map(|(i, _)| m.hop_target_id(&t.jumps, t.proxy.as_ref(), i))
+            .filter(|hop| self.target(hop).is_some())
+            .collect()
     }
 
     /// The hosts that reach the key only through target `id` as a hop: they
@@ -742,6 +792,8 @@ pub struct RotationRun {
     /// these may run `remove`, and only these are reached with the candidate
     /// as a hop.
     verified: BTreeSet<String>,
+    /// Each target's key hops in this run ([`RotationPlan::key_hops`]).
+    hops: BTreeMap<String, Vec<String>>,
     cancelled: bool,
     last: RotationStep,
 }
@@ -761,29 +813,65 @@ const fn stopped_at(after: Option<RotationStep>) -> TargetState {
     }
 }
 
+/// Whether a target waits for, or runs, its deploy or verify.
+const fn at_deploy_or_verify(s: &TargetState) -> bool {
+    matches!(
+        s,
+        TargetState::Pending {
+            step: RotationStep::Deploy | RotationStep::Verify
+        } | TargetState::Running {
+            step: RotationStep::Deploy | RotationStep::Verify
+        }
+    )
+}
+
 /// What finishing the rotation now would leave behind, machine by machine.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FinishOutlook {
     /// No login with the candidate passed here: once the key item holds the
     /// candidate, these machines refuse it — a lockout until they get it.
     pub unproven: Vec<String>,
+    /// The candidate logs in here, but the route runs through a jump hop in
+    /// `unproven`: once that hop refuses the key, this machine cannot be
+    /// reached either — locked out as well.
+    pub cut_off: Vec<String>,
     /// The candidate logs in, but the old key was not seen refused: the
     /// machine keeps working and may still accept the old key.
     pub old_not_refused: Vec<String>,
 }
 
+impl FinishOutlook {
+    /// The machines a finish now locks out: [`Self::unproven`], then
+    /// [`Self::cut_off`].
+    pub fn locked_out(&self) -> impl Iterator<Item = &String> {
+        self.unproven.iter().chain(&self.cut_off)
+    }
+}
+
 impl RotationRun {
     /// A run of `plan` in `scope`: every chosen target waits for `scope.first`.
     pub fn start(plan: &RotationPlan, scope: &RunScope) -> Self {
-        let states = plan
+        let states: Vec<(String, TargetState)> = plan
             .targets
             .iter()
             .filter(|t| scope.only.as_ref().is_none_or(|o| o.contains(&t.id)))
             .map(|t| (t.id.clone(), TargetState::Pending { step: scope.first }))
             .collect();
+        let hops = states
+            .iter()
+            .map(|(id, _)| {
+                let in_run = plan
+                    .key_hops(id)
+                    .into_iter()
+                    .filter(|h| states.iter().any(|(x, _)| x == h))
+                    .collect();
+                (id.clone(), in_run)
+            })
+            .collect();
         Self {
             states,
             verified: BTreeSet::new(),
+            hops,
             cancelled: false,
             last: scope.last,
         }
@@ -814,6 +902,11 @@ impl RotationRun {
         self.cancelled
     }
 
+    /// Target `id`'s key hops in this run.
+    fn hops_of(&self, id: &str) -> &[String] {
+        self.hops.get(id).map(Vec::as_slice).unwrap_or_default()
+    }
+
     fn set(&mut self, id: &str, state: TargetState) {
         if let Some((_, s)) = self.states.iter_mut().find(|(x, _)| x == id) {
             *s = state;
@@ -825,16 +918,30 @@ impl RotationRun {
     /// route through another target as a jump hop with the OLD key, which a
     /// concurrent remove would pull from under them. So removes wait until no
     /// deploy/verify is waiting or in flight, and a deploy/verify waits while
-    /// a remove is in flight. A confirm starts whenever it is due: its hops
-    /// are either verified (and use the candidate) or have not reached remove.
+    /// a remove is in flight. A remove on a target also waits while any step
+    /// runs through it as a jump hop: that step may have set out with the old
+    /// key on it. A deploy/verify of a target waits while one of its key hops
+    /// is still at deploy/verify: once the hop has verified the step goes
+    /// through it with the candidate — a hop an earlier run already moved off
+    /// the old key can be passed no other way. A confirm starts whenever it is
+    /// due: its hops are either verified (and use the candidate) or have not
+    /// reached remove.
     pub fn startable(&self) -> Vec<(String, RotationStep)> {
         if self.cancelled {
             return Vec::new();
         }
-        let early = self.states.iter().any(|(_, s)| {
-            matches!(s, TargetState::Pending { step } | TargetState::Running { step }
-                if matches!(step, RotationStep::Deploy | RotationStep::Verify))
-        });
+        let early = self.states.iter().any(|(_, s)| at_deploy_or_verify(s));
+        let hop_early = |id: &str| {
+            self.hops_of(id)
+                .iter()
+                .any(|h| self.state(h).is_some_and(at_deploy_or_verify))
+        };
+        let routed_through = |id: &str| {
+            self.states.iter().any(|(t, s)| {
+                matches!(s, TargetState::Running { .. })
+                    && self.hops_of(t.as_str()).iter().any(|h| h == id)
+            })
+        };
         let removing = self.states.iter().any(|(_, s)| {
             matches!(
                 s,
@@ -853,9 +960,11 @@ impl RotationRun {
                     return None;
                 }
                 let ok = match step {
-                    RotationStep::Remove => !early && self.verified.contains(id),
+                    RotationStep::Remove => {
+                        !early && self.verified.contains(id) && !routed_through(id)
+                    }
                     RotationStep::Confirm => true,
-                    RotationStep::Deploy | RotationStep::Verify => !removing,
+                    RotationStep::Deploy | RotationStep::Verify => !removing && !hop_early(id),
                 };
                 ok.then(|| (id.clone(), *step))
             })
@@ -944,16 +1053,24 @@ impl RotationRun {
     /// What finishing now would leave behind, over every target of `plan`.
     pub fn finish_outlook(&self, plan: &RotationPlan) -> FinishOutlook {
         let mut unproven = Vec::new();
+        let mut cut_off = Vec::new();
         let mut old_not_refused = Vec::new();
         for t in &plan.targets {
             if !self.verified.contains(&t.id) {
                 unproven.push(t.id.clone());
+            } else if plan
+                .key_hops(&t.id)
+                .iter()
+                .any(|h| !self.verified.contains(h))
+            {
+                cut_off.push(t.id.clone());
             } else if self.state(&t.id) != Some(&TargetState::Switched) {
                 old_not_refused.push(t.id.clone());
             }
         }
         FinishOutlook {
             unproven,
+            cut_off,
             old_not_refused,
         }
     }
@@ -961,13 +1078,17 @@ impl RotationRun {
 
 // ---------- the steps ----------
 
-/// The public halves of the two keys of a rotation, OpenSSH lines.
+/// The two keys of a rotation: the public halves as OpenSSH lines, and the
+/// candidate's item id. Made by `Core::key_rotation_keys` from the rotation
+/// recorded on this device.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RotationKeys {
     /// The key item's current public key.
     pub old: String,
     /// The candidate's public key.
     pub candidate: String,
+    /// The candidate key item.
+    pub candidate_id: String,
 }
 
 impl RotationKeys {
@@ -1003,7 +1124,7 @@ enum KeyLogin {
 /// Reads a key-only login's outcome off the exec result of its target. The two
 /// answers about the key come from the core as a value (`key_login`), never
 /// from the error text.
-fn key_login(r: Option<&MultiExecResult>) -> KeyLogin {
+const fn key_login(r: Option<&MultiExecResult>) -> KeyLogin {
     let Some(r) = r else {
         return KeyLogin::Unknown;
     };
@@ -1147,7 +1268,7 @@ pub fn step_connect(
     candidate_id: &str,
 ) -> Option<MultiExecTarget> {
     let t = plan.target(id)?;
-    let m = KeyMatcher::new(&plan.hosts, &plan.vault_id, &plan.key_item_id);
+    let m = Routes::of(plan);
     let candidate = AuthMethod::Agent {
         vault_id: plan.vault_id.clone(),
         key_item_id: candidate_id.to_owned(),
@@ -1209,27 +1330,19 @@ pub fn step_connect(
 pub struct RotationDriver {
     plan: RotationPlan,
     keys: RotationKeys,
-    candidate_id: String,
     resumed: bool,
     run: Mutex<RotationRun>,
 }
 
 impl RotationDriver {
-    /// A run of `plan` in `scope`, moving the machines to `candidate_id`
-    /// (whose public key is `keys.candidate`). `resumed`: the rotation was
-    /// begun before this run (see [`run_step`], deploy).
-    pub fn new(
-        plan: RotationPlan,
-        keys: RotationKeys,
-        candidate_id: String,
-        resumed: bool,
-        scope: &RunScope,
-    ) -> Self {
+    /// A run of `plan` in `scope`, moving the machines to the candidate of
+    /// `keys`. `resumed`: the rotation was begun before this run (see
+    /// [`run_step`], deploy).
+    pub fn new(plan: RotationPlan, keys: RotationKeys, resumed: bool, scope: &RunScope) -> Self {
         let run = RotationRun::start(&plan, scope);
         Self {
             plan,
             keys,
-            candidate_id,
             resumed,
             run: Mutex::new(run),
         }
@@ -1347,7 +1460,8 @@ impl RotationDriver {
         cmd: &str,
         timeout_secs: u32,
     ) -> Result<Option<MultiExecResult>, StepFailure> {
-        let Some(target) = step_connect(&self.plan, verified, id, step, &self.candidate_id) else {
+        let Some(target) = step_connect(&self.plan, verified, id, step, &self.keys.candidate_id)
+        else {
             return Ok(None);
         };
         match core.ssh_exec_multi(vec![target], cmd.to_owned(), 0, timeout_secs) {
@@ -1369,19 +1483,43 @@ impl Core {
         key_id: String,
     ) -> Result<RotationPlan, FfiError> {
         let hosts = self.list_connections(vault_id.clone())?;
-        Ok(plan_rotation(hosts, &vault_id, &key_id))
+        let same_vault = self.names_of_vault(&vault_id, &hosts)?;
+        Ok(plan_rotation_in(hosts, &vault_id, &key_id, same_vault))
     }
 
-    /// The public keys of a rotation: key `key_id`'s and its candidate's.
-    pub fn key_rotation_keys(
-        &self,
-        vault_id: String,
-        key_id: String,
-        candidate_id: String,
-    ) -> Result<RotationKeys, FfiError> {
-        let old = self.get_public_key(vault_id.clone(), key_id)?.openssh;
-        let candidate = self.get_public_key(vault_id, candidate_id)?.openssh;
-        Ok(RotationKeys { old, candidate })
+    /// The targets of `plan` reached over a machine whose host key is not
+    /// pinned yet: the target itself or a jump hop in front of it. A rotation
+    /// must not be what pins it — it would trust whatever key answers there
+    /// first, and hand that machine logins with both keys. A connect to the
+    /// host (for a hop: to the host it is a hop of) pins every machine on the
+    /// way. The proxy is no SSH endpoint and has no host key.
+    pub fn key_rotation_unpinned(&self, plan: &RotationPlan) -> Result<Vec<String>, FfiError> {
+        let m = Routes::of(plan);
+        let endpoints = |t: &RotationTarget| -> Vec<(String, u16)> {
+            let hops = t.jumps.iter().map(|j| match m.ref_profile(j) {
+                Some(r) => (r.host.clone(), r.port),
+                None => (j.host.clone(), j.port),
+            });
+            hops.chain(std::iter::once((t.host.clone(), t.port)))
+                .collect()
+        };
+        self.with_state(|state| {
+            let mut out = Vec::new();
+            for t in &plan.targets {
+                for (host, port) in endpoints(t) {
+                    let pinned = state
+                        .storage
+                        .get_known_host(&host, port)
+                        .map_err(FfiError::other)?
+                        .is_some();
+                    if !pinned {
+                        out.push(t.id.clone());
+                        break;
+                    }
+                }
+            }
+            Ok(out)
+        })
     }
 }
 
@@ -2298,6 +2436,7 @@ mod tests {
                 Some(&TargetState::Switched),
                 FinishOutlook {
                     unproven: vec![a.to_owned()],
+                    cut_off: Vec::new(),
                     old_not_refused: vec![c.to_owned()],
                 }
             ),
@@ -2310,6 +2449,7 @@ mod tests {
         let keys = |old: &str| RotationKeys {
             old: old.to_owned(),
             candidate: "ssh-ed25519 AAAANEW rotation\n".to_owned(),
+            candidate_id: "k (rotation)".to_owned(),
         };
         assert_eq!(
             (
@@ -2426,6 +2566,141 @@ mod tests {
         );
     }
 
+    /// A bastion that logs in with the key, and a host behind it that does too.
+    fn behind_bastion() -> (RotationPlan, &'static str, &'static str) {
+        let p = plan(vec![
+            host("bastion", key(), Vec::new()),
+            host("db", key(), vec![ref_hop("bastion")]),
+        ]);
+        (
+            p,
+            "root@bastion.example:22",
+            "root@db.example:22 via root@bastion.example:22",
+        )
+    }
+
+    #[test]
+    fn a_target_behind_a_key_hop_starts_only_once_that_hop_has_verified() {
+        let (p, bastion, db) = behind_bastion();
+        // As `unissh keys rotation finish` resumes a rotation whose earlier run
+        // may already have taken the old key off the bastion.
+        let scope = RunScope {
+            first: RotationStep::Verify,
+            ..RunScope::full()
+        };
+        let mut run = RotationRun::start(&p, &scope);
+        let first = run.startable();
+        run.begin_step(bastion);
+        run.record_step(bastion, RotationStep::Verify, Ok(()));
+        assert_eq!(
+            (first, run.startable(), run.is_verified(bastion)),
+            (
+                vec![(bastion.to_owned(), RotationStep::Verify)],
+                vec![(db.to_owned(), RotationStep::Verify)],
+                true
+            ),
+            "db waits for the bastion, then goes through it with the candidate"
+        );
+        // A step under way through the bastion holds back the bastion's remove.
+        run.begin_step(db);
+        run.record_step(db, RotationStep::Verify, Ok(()));
+        run.begin_step(db);
+        assert_eq!(
+            run.startable(),
+            Vec::new(),
+            "no remove on the bastion while db's remove runs through it"
+        );
+    }
+
+    #[test]
+    fn a_machine_behind_an_unproven_hop_is_locked_out_too() {
+        let (p, bastion, db) = behind_bastion();
+        let mut run = full(&p);
+        drive(&mut run, |id, step| {
+            if id == bastion && step == RotationStep::Verify {
+                fail("x")
+            } else {
+                Ok(())
+            }
+        });
+        let outlook = run.finish_outlook(&p);
+        assert_eq!(
+            (
+                outlook.clone(),
+                outlook.locked_out().cloned().collect::<Vec<_>>()
+            ),
+            (
+                FinishOutlook {
+                    unproven: vec![bastion.to_owned()],
+                    cut_off: vec![db.to_owned()],
+                    old_not_refused: Vec::new(),
+                },
+                vec![bastion.to_owned(), db.to_owned()]
+            ),
+            "db took the new key through the bastion's old one"
+        );
+    }
+
+    #[test]
+    fn the_hosts_following_a_machine_are_those_that_hop_through_it_only() {
+        let p = plan(vec![
+            host("bastion", key(), Vec::new()),
+            host("db", ProfileAuth::PromptPassword, vec![ref_hop("bastion")]),
+            host("web", key(), vec![ref_hop("bastion")]),
+            host("cache", ProfileAuth::PromptPassword, Vec::new()),
+        ]);
+        let labels = |id: &str| {
+            p.dependents_of(id)
+                .into_iter()
+                .map(|h| h.label.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            (
+                labels("root@bastion.example:22"),
+                labels("root@web.example:22 via root@bastion.example:22")
+            ),
+            (vec!["db".to_owned()], Vec::<String>::new()),
+            "web is a machine of its own, cache does not hop"
+        );
+    }
+
+    #[test]
+    fn a_target_is_unpinned_until_it_and_every_hop_in_front_have_a_host_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = Core::new(
+            dir.path().join("i.db").to_string_lossy().into_owned(),
+            dir.path().join("i.keyset").to_string_lossy().into_owned(),
+        );
+        core.create_account(None).unwrap();
+        core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
+        // Any valid public key serves as a host key.
+        let line = core
+            .generate_ssh_key("v".to_owned(), "hostkey".to_owned())
+            .unwrap();
+        let host_key = line
+            .split_whitespace()
+            .take(2)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let pin = |host: &str| {
+            core.import_known_hosts(format!("{host} {host_key}"))
+                .unwrap();
+        };
+        let p = plan(vec![host("db", key(), vec![inline_hop("jump", "x")])]);
+        let db = vec!["root@db.example:22 via ops@jump.example:22".to_owned()];
+        let unpinned = || core.key_rotation_unpinned(&p).unwrap();
+        let before = unpinned();
+        pin("db.example");
+        let hop_unpinned = unpinned();
+        pin("jump.example");
+        assert_eq!(
+            (before, hop_unpinned, unpinned()),
+            (db.clone(), db, Vec::new()),
+            "the machine, then the hop in front of it"
+        );
+    }
+
     // ---------- the steps ----------
 
     fn result(exit_status: i32) -> MultiExecResult {
@@ -2475,6 +2750,7 @@ mod tests {
         let keys = RotationKeys {
             old: "ssh-ed25519 AAAAOLD".to_owned(),
             candidate: "ssh-ed25519 AAAACAND".to_owned(),
+            candidate_id: "cand".to_owned(),
         };
         let mut logins = Vec::new();
         let out = run_step(step, &keys, resumed, &mut |as_step, _cmd| {
@@ -2603,6 +2879,7 @@ mod tests {
         let keys = RotationKeys {
             old: OLD.to_owned(),
             candidate: CAND.to_owned(),
+            candidate_id: "cand".to_owned(),
         };
         let out = run_step(RotationStep::Confirm, &keys, false, &mut |_, _| {
             Err(StepFailure::Locked)
