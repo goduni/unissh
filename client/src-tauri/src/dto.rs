@@ -1059,6 +1059,74 @@ impl From<ffi::KeyRotationLink> for KeyRotationLink {
     }
 }
 
+/// How a host uses a key or password item (see `ffi::KeyUseRole`).
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum KeyUseRole {
+    Login,
+    InlineHop,
+    ReferencedHop,
+    ProxyPassword,
+}
+impl From<ffi::KeyUseRole> for KeyUseRole {
+    fn from(r: ffi::KeyUseRole) -> Self {
+        match r {
+            ffi::KeyUseRole::Login => Self::Login,
+            ffi::KeyUseRole::InlineHop => Self::InlineHop,
+            ffi::KeyUseRole::ReferencedHop => Self::ReferencedHop,
+            ffi::KeyUseRole::ProxyPassword => Self::ProxyPassword,
+        }
+    }
+}
+
+/// A host using a key or password item, with every way it does.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostKeyUse {
+    pub profile_id: String,
+    pub label: String,
+    pub roles: Vec<KeyUseRole>,
+}
+
+/// An identity referencing a key or password item.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentityKeyUse {
+    pub identity_id: String,
+    pub label: String,
+}
+
+/// What in a vault uses one key or password item (ids and labels only).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyUsage {
+    pub hosts: Vec<HostKeyUse>,
+    pub identities: Vec<IdentityKeyUse>,
+}
+impl From<ffi::KeyUsage> for KeyUsage {
+    fn from(u: ffi::KeyUsage) -> Self {
+        Self {
+            hosts: u
+                .hosts
+                .into_iter()
+                .map(|h| HostKeyUse {
+                    profile_id: h.profile_id,
+                    label: h.label,
+                    roles: h.roles.into_iter().map(Into::into).collect(),
+                })
+                .collect(),
+            identities: u
+                .identities
+                .into_iter()
+                .map(|i| IdentityKeyUse {
+                    identity_id: i.identity_id,
+                    label: i.label,
+                })
+                .collect(),
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KnownHostInfo {

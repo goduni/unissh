@@ -18,13 +18,22 @@ import { useNarrow } from "@/store/responsive";
 import * as api from "@/bridge/api";
 import { apiErrorMessage, ItemType } from "@/bridge/types";
 import { logWarn } from "@/bridge/log";
-import type { ConnectionProfile, ItemInfo, Identity, KeyRotationLink, ServerStatus, VaultInfo } from "@/bridge/types";
+import type {
+  ConnectionProfile,
+  ItemInfo,
+  Identity,
+  KeyRotationLink,
+  KeyUsage,
+  KeyUseRole,
+  ServerStatus,
+  VaultInfo,
+} from "@/bridge/types";
 import { isOwnedCloud, serverShortLabel, vaultLoc, vaultServer } from "@/bridge/vaults";
 import { exportPath } from "@/support/paths";
 import { isDesktopOs } from "@/bridge/platform";
 import { systemAgentSetShared, systemAgentSharedKeys, systemAgentStatus } from "@/bridge/systemAgent";
 import { guard } from "@/store/action";
-import { isKeyOld, keyUsage, keyUsageCount } from "@/support/keyHygiene";
+import { isKeyOld, keyUsageCount } from "@/support/keyHygiene";
 import { keyRowRotationActions, type KeyRowRotationAction } from "@/support/keyRotation";
 import { useFmt } from "@/i18n/format";
 
@@ -241,10 +250,28 @@ function KeyRow({
   const ctx = useCtx();
   const { fmtDate } = useFmt();
   const hosts = useApp((s) => s.hosts);
+  const items = useApp((s) => s.items);
   const keyAgeDays = useApp((s) => s.keyAgeDays);
   const vault = useApp((s) => s.vaultId);
-  const usage = keyUsage(hosts, vault ?? "", item.itemId);
-  const uses = keyUsageCount(usage);
+  // The core's answer to "what uses this key" (hosts and identities). Reloaded
+  // whenever the vault's hosts or items change; null until it arrives.
+  const [usage, setUsage] = useState<KeyUsage | null>(null);
+  useEffect(() => {
+    let alive = true;
+    if (!vault) return;
+    api.keyUsage(vault, item.itemId).then(
+      (u) => alive && setUsage(u),
+      () => alive && setUsage(null),
+    );
+    return () => {
+      alive = false;
+    };
+  }, [vault, item.itemId, hosts, items]);
+  const uses = usage ? keyUsageCount(usage) : null;
+  const usedHosts = (pick: (roles: KeyUseRole[]) => boolean): ConnectionProfile[] => {
+    const ids = new Set(usage?.hosts.filter((u) => pick(u.roles)).map((u) => u.profileId));
+    return hosts.filter((h) => ids.has(h.profileId));
+  };
   const old = isKeyOld(item.createdAt, keyAgeDays, Date.now());
   const [open, setOpen] = useState(false);
   const detailsId = `key-details-${item.itemId}`;
@@ -380,13 +407,14 @@ function KeyRow({
     abandon: { label: t("secrets.abandonRotation"), icon: "x", onClick: onAbandonRotation },
   };
 
-  const onDelete = () => {
+  const onDelete = async () => {
     if (!vault) return;
-    // Warn if the key still backs any host login (direct auth or a jump hop), so
-    // deleting it doesn't silently break those connections.
+    // Warn if the key still backs any login (a host's own, a jump hop, an
+    // identity), so deleting it doesn't silently break those connections.
+    const count = await usageCountNow(vault, item.itemId);
     ctx.confirm({
       title: t("secrets.deleteKeyTitle"),
-      body: uses > 0 ? t("secrets.deleteKeyInUse", { item: item.itemId, count: uses }) : item.itemId,
+      body: count > 0 ? t("secrets.deleteKeyInUse", { item: item.itemId, count }) : item.itemId,
       danger: true,
       confirmLabel: t("common.delete"),
       icon: "trash",
@@ -460,9 +488,19 @@ function KeyRow({
         >
           {fp ?? "…"}
         </span>
-        <MetaChip icon="link" tone={uses === 0 ? "warn" : "neutral"}>
-          {uses === 0 ? t("secrets.unused") : t("secrets.usedByHosts", { count: uses })}
-        </MetaChip>
+        {usage && (
+          <MetaChip icon="link" tone={uses === 0 ? "warn" : "neutral"}>
+            {uses === 0
+              ? t("secrets.unused")
+              : [
+                  usage.hosts.length > 0 && t("secrets.usedByHosts", { count: usage.hosts.length }),
+                  usage.identities.length > 0 &&
+                    t("secrets.usedByIdentities", { count: usage.identities.length }),
+                ]
+                  .filter(Boolean)
+                  .join(", ")}
+          </MetaChip>
+        )}
         {old && (
           <span title={t("secrets.keyOldTitle", { days: keyAgeDays })}>
             <MetaChip icon="clock">{t("secrets.keyOld")}</MetaChip>
@@ -591,12 +629,16 @@ function KeyRow({
           </div>
           {uses === 0 ? (
             <div>{t("secrets.keyNoHosts")}</div>
-          ) : (
+          ) : usage ? (
             <>
-              <KeyHostList label={t("secrets.keyUsedDirect")} hosts={usage.direct} />
-              <KeyHostList label={t("secrets.keyUsedJump")} hosts={usage.jump} />
+              <KeyHostList label={t("secrets.keyUsedDirect")} hosts={usedHosts((r) => r.includes("login"))} />
+              <KeyHostList
+                label={t("secrets.keyUsedJump")}
+                hosts={usedHosts((r) => r.includes("inlineHop") || r.includes("referencedHop"))}
+              />
+              <KeyIdentityList label={t("secrets.keyUsedIdentity")} identities={usage.identities} />
             </>
-          )}
+          ) : null}
         </div>
       )}
     </>
@@ -642,6 +684,50 @@ function KeyHostList({ label, hosts }: { label: string; hosts: ConnectionProfile
       </ul>
     </div>
   );
+}
+
+/** The identities in a key's details that reference it. Plain labels (they
+ *  live under the Identities tab); renders nothing when empty. */
+function KeyIdentityList({ label, identities }: { label: string; identities: KeyUsage["identities"] }) {
+  const p = usePalette();
+  if (identities.length === 0) return null;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: rem(4) }}>
+      <div style={{ fontSize: TEXT.micro, fontWeight: 700, color: p.txt3, textTransform: "uppercase" }}>
+        {label}
+      </div>
+      <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexWrap: "wrap", gap: rem(6) }}>
+        {identities.map((i) => (
+          <li
+            key={i.identityId}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: rem(6),
+              padding: `${rem(4)} ${rem(10)}`,
+              borderRadius: 8,
+              border: `1px solid ${p.line}`,
+              color: p.txt,
+              fontSize: TEXT.small,
+            }}
+          >
+            <Icon name="fingerprint" size={12} color={p.txt3} />
+            {i.label || i.identityId}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** A fresh usage count right before a delete; 0 (the plain confirm) when the
+ *  core cannot answer, so a failed lookup never blocks the delete. */
+async function usageCountNow(vaultId: string, itemId: string): Promise<number> {
+  try {
+    return keyUsageCount(await api.keyUsage(vaultId, itemId));
+  } catch {
+    return 0;
+  }
 }
 
 function KeysTab({ keys, isMobile }: { keys: ItemInfo[]; isMobile: boolean }) {
@@ -1028,11 +1114,13 @@ function PasswordCard({ item }: { item: ItemInfo }) {
     }
   };
 
-  const onDelete = () => {
+  const onDelete = async () => {
     if (!vault) return;
+    // Same warning as a key's: hosts (own login, hop, proxy) and identities.
+    const count = await usageCountNow(vault, item.itemId);
     ctx.confirm({
       title: t("secrets.deletePasswordTitle"),
-      body: item.itemId,
+      body: count > 0 ? t("secrets.deletePasswordInUse", { item: item.itemId, count }) : item.itemId,
       danger: true,
       confirmLabel: t("common.delete"),
       icon: "trash",
