@@ -12,7 +12,10 @@ use std::sync::{Mutex, PoisonError};
 use reqwest::blocking::{RequestBuilder, Response};
 use reqwest::StatusCode;
 use serde_json::{json, Value};
-use unissh_ffi::{FfiError, FfiSyncTransport, SyncDeltaItem};
+use unissh_ffi::{
+    Core, FfiError, FfiSyncReport, FfiSyncTransport, FfiTrustOutcome, SharedVaultInfo,
+    SyncDeltaItem, VaultPage,
+};
 
 use crate::client::{self, Reauth};
 
@@ -154,26 +157,88 @@ impl HttpSyncTransport {
     /// vault that follow `cursor` (0 for the first page), and the cursor of the
     /// next page — `None` after the last one. The caller hands each page to the
     /// core before it asks for the next, so a large vault is never held in
-    /// memory whole. Best-effort like `delta_since`: any transport error ends
-    /// the paging with an empty page; the core verifies every object before
-    /// applying it, and what the earlier pages brought stays applied.
-    pub fn vault_delta_page(&self, vault_id_hex: &str, cursor: u64) -> (Vec<Vec<u8>>, Option<u64>) {
+    /// memory whole.
+    ///
+    /// Unlike `delta_since`, a page that cannot be read — a transport error, a
+    /// non-2xx, bad JSON, an object that is not base64, or "more follows"
+    /// without a usable cursor — is an error: the targeted pull and the
+    /// share-accept inspection must not take a cut-short set for the whole
+    /// vault.
+    pub fn vault_delta_page(&self, vault_id_hex: &str, cursor: u64) -> Result<VaultPage, FfiError> {
+        let failed = |why: String| FfiError::Other {
+            msg: format!("the server's objects for this vault could not be read: {why}"),
+        };
         let path =
             format!("/v1/sync/delta?cursor={cursor}&limit={DELTA_LIMIT}&vault={vault_id_hex}");
         let url = client::url(&self.base_url, &path);
-        let resp = match self.send(|bearer| client::headers(client::http().get(&url), Some(bearer)))
-        {
-            Ok(r) if r.status().is_success() => r,
-            _ => return (Vec::new(), None),
-        };
-        let Ok(v) = resp.json::<Value>() else {
-            return (Vec::new(), None);
-        };
+        let resp = self
+            .send(|bearer| client::headers(client::http().get(&url), Some(bearer)))
+            .map_err(|e| failed(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(failed(format!("http {}", resp.status().as_u16())));
+        }
+        let v = resp
+            .json::<Value>()
+            .map_err(|e| failed(format!("bad JSON: {e}")))?;
         let objects = items_of(&v)
             .filter_map(|item| item.get("object").and_then(Value::as_str))
-            .filter_map(|obj_b64| client::unb64(obj_b64).ok())
-            .collect();
-        (objects, next_page(&v, cursor))
+            .map(client::unb64)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| failed(format!("an object on the page is not base64 ({e})")))?;
+        let next = next_page(&v, cursor);
+        let more = v.get("has_more").and_then(Value::as_bool).unwrap_or(false);
+        if more && next.is_none() {
+            return Err(failed(
+                "more follows, but no usable cursor came with it".to_owned(),
+            ));
+        }
+        Ok((objects, next))
+    }
+
+    /// **Pulls ONE vault** (by hex id) onto this device: its objects page by
+    /// page through the core's verify-before-apply, born-bound to `tenant_b64`,
+    /// WITHOUT moving the pull cursor (see [`Core::pull_vault_paged`]). The
+    /// recovery for a vault an earlier sync rejected — a teammate's vault
+    /// before its owner was pinned — and the app's "Pull from server". A page
+    /// that cannot be read is an error saying the pull was cut short.
+    pub fn pull_vault(
+        &self,
+        core: &Core,
+        tenant_b64: &str,
+        vault_id_hex: &str,
+    ) -> Result<FfiSyncReport, FfiError> {
+        core.pull_vault_paged(tenant_b64, |cursor| {
+            self.vault_delta_page(vault_id_hex, cursor)
+        })
+    }
+
+    /// Inspects a vault shared with this account before its owner is trusted
+    /// (see [`Core::inspect_shared_vault_paged`]): the vault's objects are read
+    /// page by page and only its membership is kept. `Ok(None)`: this account
+    /// created the vault and it needs no trust. Writes nothing.
+    pub fn inspect_vault(
+        &self,
+        core: &Core,
+        vault_id_hex: &str,
+    ) -> Result<Option<SharedVaultInfo>, FfiError> {
+        core.inspect_shared_vault_paged(vault_id_hex, |cursor| {
+            self.vault_delta_page(vault_id_hex, cursor)
+        })
+    }
+
+    /// Trusts the owner of a vault shared with this account: the core
+    /// inspects the vault's membership read from the server, compares
+    /// `expected_fingerprint` and pins in one step (see
+    /// [`Core::trust_shared_vault_paged`]). Pull the vault after.
+    pub fn trust_vault(
+        &self,
+        core: &Core,
+        vault_id_hex: &str,
+        expected_fingerprint: &str,
+    ) -> Result<FfiTrustOutcome, FfiError> {
+        core.trust_shared_vault_paged(vault_id_hex, expected_fingerprint, |cursor| {
+            self.vault_delta_page(vault_id_hex, cursor)
+        })
     }
 }
 
@@ -401,6 +466,19 @@ mod tests {
             "the rejected request is retried with the fresh token, and so is the next one"
         );
         assert_eq!(*asked.lock().unwrap(), 1, "one rotation for the whole sync");
+    }
+
+    /// An object that does not decode fails the whole page instead of being
+    /// dropped: a vault page with a hole in it is not the vault.
+    #[test]
+    fn a_vault_page_with_an_object_that_is_not_base64_is_an_error() {
+        let (base, _) = serve(vec![(
+            "200 OK",
+            r#"{"items":[{"object":"AAAA"},{"object":"not base64!"}],"has_more":false}"#,
+        )]);
+        let transport = HttpSyncTransport::with_reauth(base, "token".to_owned(), None);
+
+        assert!(transport.vault_delta_page(&"ab".repeat(16), 0).is_err());
     }
 
     #[test]

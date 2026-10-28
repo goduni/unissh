@@ -408,6 +408,54 @@ pub fn open_grant(
         .map_err(|_| VaultError::Decrypt)
 }
 
+/// Opens this account's own grant at the epoch of `members` (a verified set):
+/// among `grants`, the first one addressed to `keyset`'s Ed25519 key that
+/// passes [`verify_grant`] and opens ([`open_grant`]) with its X25519 secret.
+/// Returns the vault key and the role the grant carries (equal to the role in
+/// `members`: `verify_grant` checks it).
+///
+/// `not_after` is enforced against the wall clock, failing CLOSED: an
+/// unreadable or pre-epoch clock expires every grant that carries an expiry
+/// (F16); a grant without one (`not_after <= 0`) is unaffected.
+///
+/// No grant addressed to this key is `NotAMember` (a revoked member has none
+/// at the latest epoch); otherwise the last grant's failure is returned.
+/// Shared by `Vault::open` (member path) and the share-accept inspection.
+pub fn open_own_grant(
+    grants: &[MembershipGrant],
+    vault_id: &[u8],
+    members: &VerifiedMembers,
+    keyset: &UnlockedKeyset,
+) -> Result<(SymmetricKey, MemberRole), VaultError> {
+    let own_ed = keyset.signing.verifying.to_bytes();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|d| i64::try_from(d.as_secs()).ok())
+        .unwrap_or(i64::MAX);
+    let mut failure = VaultError::NotAMember;
+    for grant in grants {
+        if grant.member_pubkey != own_ed {
+            continue;
+        }
+        let opened = verify_grant(grant, vault_id, members).and_then(|()| {
+            open_grant(
+                grant,
+                vault_id,
+                &keyset.encryption.secret,
+                &own_ed,
+                members.epoch(),
+                now,
+            )
+        });
+        match opened {
+            Ok(vk) => return Ok((vk, grant.role)),
+            Err(e) => failure = e,
+        }
+    }
+    Err(failure)
+}
+
 // `parse_verified` (only a self-signature check, without the D1 chain) was removed
 // in the P3 review: the read path no longer trusts the mere presence of a manifest
 // in storage — see `verify_chain_to_epoch`.
@@ -439,16 +487,54 @@ pub fn verify_chain_to_epoch(
     if target_epoch == 0 {
         return Err(VaultError::EpochInvalid);
     }
+    // Read lazily, one epoch at a time: the walk stops at the first epoch that
+    // fails, before the next manifest is read. A missing manifest is an empty
+    // candidate set — a gap, which `verify_chain` refuses.
+    verify_chain(
+        vault_id,
+        genesis_owner,
+        (1..=target_epoch).map(|epoch| {
+            storage
+                .get_membership_manifest(vault_id, epoch)
+                .map(|manifest| manifest.into_iter().collect::<Vec<_>>())
+                .map_err(VaultError::from)
+        }),
+    )
+}
+
+/// The storage-free D1 chain walk under [`verify_chain_to_epoch`] and the
+/// inspection of a vault before its owner is trusted (share-accept).
+///
+/// `epochs` yields, in order from epoch 1, the candidate manifests the caller
+/// holds for each epoch (storage holds one; a server may serve several). At
+/// each epoch the first candidate that verifies against the previous verified
+/// set ([`verify_manifest`], genesis anchored on `genesis_owner`) is taken.
+/// An epoch with no candidate is a gap (`AuthorityInvalid`: authority cannot
+/// be proven); an epoch whose candidates all fail returns the last failure.
+/// Returns the verified set of the last epoch; no epoch at all is
+/// `EpochInvalid`. An error item from `epochs` ends the walk with that error.
+pub fn verify_chain<C: AsRef<[MembershipManifest]>>(
+    vault_id: &[u8],
+    genesis_owner: &[u8],
+    epochs: impl IntoIterator<Item = Result<C, VaultError>>,
+) -> Result<VerifiedMembers, VaultError> {
     let mut prev: Option<VerifiedMembers> = None;
-    for epoch in 1..=target_epoch {
-        let manifest = storage
-            .get_membership_manifest(vault_id, epoch)?
-            // A gap in the chain — authority is unprovable (storage cannot be trusted).
-            .ok_or(VaultError::AuthorityInvalid)?;
-        let verified = verify_manifest(&manifest, vault_id, prev.as_ref(), genesis_owner)?;
-        prev = Some(verified);
+    for candidates in epochs {
+        let candidates = candidates?;
+        // No candidate: a gap in the chain.
+        let mut failure = VaultError::AuthorityInvalid;
+        let mut verified = None;
+        for manifest in candidates.as_ref() {
+            match verify_manifest(manifest, vault_id, prev.as_ref(), genesis_owner) {
+                Ok(members) => {
+                    verified = Some(members);
+                    break;
+                }
+                Err(e) => failure = e,
+            }
+        }
+        prev = Some(verified.ok_or(failure)?);
     }
-    // target_epoch >= 1 ⇒ the loop ran at least once ⇒ prev is Some.
     prev.ok_or(VaultError::EpochInvalid)
 }
 

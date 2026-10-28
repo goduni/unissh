@@ -131,7 +131,7 @@ fn sync_locked(device: &Device) -> Res<FfiSyncReport> {
 /// that could not read the spaces, or an account that had none yet) looks
 /// again at every sync and keeps what it finds. Without one a sync still
 /// pulls, but sends nothing, and that is said.
-fn space_of(device: &Device, access: &str) -> String {
+pub fn space_of(device: &Device, access: &str) -> String {
     if !device.link.space_id.is_empty() {
         return device.link.space_id.clone();
     }
@@ -268,7 +268,9 @@ pub fn warn_about(report: &FfiSyncReport) {
     if report.rejected > 0 {
         eprintln!(
             "unissh: {} object(s) from the server failed verification and were not applied \
-             (signed by someone this account does not trust, or tampered with)",
+             (signed by someone this account does not trust, or tampered with); \
+             `unissh vaults list` shows vaults teammates shared that wait for you to trust \
+             their owner",
             report.rejected
         );
     }

@@ -125,6 +125,16 @@ starts with `0.`:
   `set_manual_approval_available`, `made_recordings`, `PromptFactory::can_ask`,
   the `logind` signal filter and the limits file helpers the desktop now uses
   too.
+- `unissh keys rotation begin|run|finish` is the app's guided key rotation in
+  the CLI: `begin` creates the new key beside the old one and lists the
+  machines that have to learn it; `run` installs it on each machine and proves a
+  key-only login with it, removing nothing, with a line per machine and
+  `--host` to retry some; `finish` checks every machine again, names the ones a
+  finish would lock out and asks, then removes the old key where the new one
+  logs in, checks the old key is refused, and makes the new key current. The
+  plan, the steps and the `authorized_keys` commands moved from the app into the
+  core (`unissh_ffi::key_rotation_plan`), so the app's rotation dialog and the
+  CLI run the same ones; the dialog looks and works as before.
 - Bindings: `ExecHandleFfi::close_stdin` ends a streaming command's input and
   keeps its output coming; `Core::wait_for_recordings` waits for session
   recordings still to be written (a recorded session counts from the moment it
@@ -194,6 +204,16 @@ starts with `0.`:
 
 ### Fixed
 
+- A teammate could never receive a vault shared with them, in the app or the
+  CLI: their device rejected it, because it did not know the vault's owner and
+  nothing let them say who that was. Now they confirm the owner's fingerprint
+  once: `unissh sync` says how many shared vaults wait, `unissh vaults list`
+  lists them, and `unissh vaults trust <id>` asks for the fingerprint the owner
+  gave them (each account's own is in `unissh status`), then fetches the
+  vault. The server is never trusted to say who the owner is. The app's screen for it follows; the core and the app's
+  "Pull from server" now share one single-vault pull, and it says when a pull
+  was cut short instead of reporting it complete. "Restore deleted" keeps the
+  owner you trusted for a teammate's vault.
 - Creating a key or a personal identity under a name that is already taken no
   longer replaces what is there (#171). The app's New key dialog and its New
   identity form used to overwrite a key's private material or an identity

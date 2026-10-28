@@ -55,9 +55,9 @@ mod vault_id;
 pub use error::VaultError;
 pub use membership::{
     add_member, build_grant, build_manifest, member_fingerprint, open_account_payload, open_grant,
-    pin_and_verify_member, pin_and_verify_vault_anchor, seal_account_payload, sign_account_state,
-    verify_account_state, verify_chain_to_epoch, verify_grant, verify_manifest, Member,
-    VerifiedMembers,
+    open_own_grant, pin_and_verify_member, pin_and_verify_vault_anchor, seal_account_payload,
+    sign_account_state, verify_account_state, verify_chain, verify_chain_to_epoch, verify_grant,
+    verify_manifest, Member, VerifiedMembers,
 };
 pub use vault::{
     check_item_record, check_vault_record, verify_record_authority, DecryptedItem,

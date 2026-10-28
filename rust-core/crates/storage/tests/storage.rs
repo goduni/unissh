@@ -781,6 +781,22 @@ fn vault_trust_anchor_roundtrip_and_purge() {
     assert!(s.get_vault_trust_anchor(b"v").unwrap().is_none());
 }
 
+/// "Restore deleted" drops a vault's local copy to pull the server's anew: the
+/// owner the user confirmed for it stays pinned, the rest of the vault goes.
+#[test]
+fn purging_to_restore_keeps_the_trust_anchor() {
+    let s = Storage::open_in_memory(&key(0x5b)).unwrap();
+    let owner = vec![0xAB_u8; 32];
+    s.set_vault_trust_anchor(b"v", &owner).unwrap();
+    s.set_vault_epoch_floor(b"v", 2).unwrap();
+
+    s.purge_vault_data_keeping_trust(b"v").unwrap();
+
+    let a = s.get_vault_trust_anchor(b"v").unwrap().unwrap();
+    assert_eq!(a.genesis_owner_pubkey, owner);
+    assert!(s.get_vault_epoch_floor(b"v").unwrap().is_none());
+}
+
 // --- upgrade v3 -> v4 (schema migration) ---
 
 /// Opens a raw SQLCipher connection to the file with the same key as `Storage`.

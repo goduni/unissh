@@ -46,11 +46,11 @@ log = "0.4"
 rustix = { version = "1", features = ["termios", "event", "process"] }
 
 # `unissh mcp` pauses on a session lock or sleep, as the desktop does: logind on
-# the system bus (src/system_lock.rs). The desktop's D-Bus crate (zbus 5, pure
-# Rust, no libdbus), here on the Tokio runtime the server already runs; its
-# `async-io` and blocking API are the desktop's choices for keyring, not needed.
+# the system bus (src/system_lock.rs). zbus 6, pure Rust, no libdbus, on the
+# Tokio runtime the server already runs, so `default-rt` is not needed. The
+# desktop stays on zbus 5 until keyring and tauri-plugin-opener move to 6.
 [target.'cfg(target_os = "linux")'.dependencies]
-zbus = { version = "5", default-features = false, features = ["tokio"] }
+zbus = { version = "6", default-features = false, features = ["tokio"] }
 futures-util = { version = "0.3", default-features = false }
 
 [lints]

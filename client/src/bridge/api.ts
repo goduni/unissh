@@ -29,6 +29,8 @@ import type {
   InstanceStatus,
   InviteInfo,
   KeyRotationLink,
+  KeyRotationPlan,
+  KeyRotationRun,
   KeyUsage,
   JoinPreview,
   SpaceInfo,
@@ -202,6 +204,37 @@ export const listKeyRotations = (vaultId: string) =>
 /** What in the vault uses a key or password item (hosts by role, identities). */
 export const keyUsage = (vaultId: string, itemId: string) =>
   invoke<KeyUsage>("key_usage", { vaultId, itemId });
+/** Guided rotation: the core's plan for rotating `keyId`, frozen until `keyRotationClose`. */
+export const keyRotationPlan = (vaultId: string, keyId: string) =>
+  invoke<KeyRotationPlan>("key_rotation_plan", { vaultId, keyId });
+/** Whether `keyId` already holds the candidate of this device's rotation of it
+ *  (an interrupted finish — nothing to run, only the finish). */
+export const keyRotationCommitted = (vaultId: string, keyId: string) =>
+  invoke<boolean>("key_rotation_committed", { vaultId, keyId });
+/** Ready a fresh run of the plan towards `candidateId`; null when the key item
+ *  already holds the candidate (an interrupted finish — nothing to run). */
+export const keyRotationStart = (handle: string, candidateId: string, resumed: boolean) =>
+  invoke<KeyRotationRun | null>("key_rotation_start", { handle, candidateId, resumed });
+/** Run every step that may start until the run settles; `onRun` sees each change. */
+export const keyRotationDrive = (
+  handle: string,
+  maxConcurrency: number,
+  timeoutSecs: number,
+  onRun: (run: KeyRotationRun) => void,
+) => {
+  const onEvent = new Channel<KeyRotationRun>();
+  onEvent.onmessage = onRun;
+  return invoke<KeyRotationRun>("key_rotation_drive", { handle, maxConcurrency, timeoutSecs, onEvent });
+};
+/** Stop the run: nothing new starts; steps in flight still land. */
+export const keyRotationStop = (handle: string) => invoke<KeyRotationRun>("key_rotation_stop", { handle });
+/** Put a failed target back in the queue at the step that failed. */
+export const keyRotationRetry = (handle: string, targetId: string) =>
+  invoke<KeyRotationRun>("key_rotation_retry", { handle, targetId });
+export const keyRotationClose = (handle: string) => invoke<void>("key_rotation_close", { handle });
+/** The idempotent ssh-copy-id command for `openssh`, the one the rotation deploys with. */
+export const authorizedKeysAppendCommand = (openssh: string) =>
+  invoke<string>("authorized_keys_append_command", { openssh });
 export const renameItem = (vaultId: string, itemId: string, newItemId: string) =>
   afterMut(vaultId, invoke<void>("rename_item", { vaultId, itemId, newItemId }));
 export const deleteItem = (vaultId: string, itemId: string) =>

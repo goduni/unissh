@@ -958,9 +958,9 @@ pub async fn server_list_vaults(
 
 /// **Pull ONE vault** (by hex id) from a server (defaults to active) onto this device:
 /// targeted fetch of just that vault's objects + verify-before-apply, WITHOUT advancing
-/// the pull cursor. The vault is fetched and applied page by page, in the server's
-/// order, so it is never held in memory whole; the report is the sum over the pages.
-/// Requires a session.
+/// the pull cursor (`HttpSyncTransport::pull_vault`, shared with the CLI). The vault is
+/// fetched and applied page by page, in the server's order, so it is never held in
+/// memory whole; the report is the sum over the pages. Requires a session.
 #[tauri::command]
 pub async fn server_pull_vault(
     vault_id: String,
@@ -971,34 +971,10 @@ pub async fn server_pull_vault(
     let access = require_access(&state, server_id.as_deref())?;
     let core = state.core.clone();
     let report = blocking_api(move || {
-        let space = cfg.space_id.clone();
         let transport = HttpSyncTransport::new(cfg.base_url, access);
-        let mut total = unissh_ffi::FfiSyncReport {
-            applied: 0,
-            skipped_stale: 0,
-            conflicts: 0,
-            rejected: 0,
-            pushed: 0,
-            too_large: Vec::new(),
-        };
-        let mut cursor = 0_u64;
-        loop {
-            let (objects, next) = transport.vault_delta_page(&vault_id, cursor);
-            if !objects.is_empty() {
-                let page = core
-                    .apply_pulled_vault(space.clone(), objects)
-                    .map_err(ApiError::from)?;
-                total.applied = total.applied.saturating_add(page.applied);
-                total.skipped_stale = total.skipped_stale.saturating_add(page.skipped_stale);
-                total.conflicts = total.conflicts.saturating_add(page.conflicts);
-                total.rejected = total.rejected.saturating_add(page.rejected);
-            }
-            match next {
-                Some(next) => cursor = next,
-                None => break,
-            }
-        }
-        Ok(total)
+        transport
+            .pull_vault(&core, &cfg.space_id, &vault_id)
+            .map_err(ApiError::from)
     })
     .await?;
     Ok(report.into())

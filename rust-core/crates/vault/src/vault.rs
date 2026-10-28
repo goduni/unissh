@@ -23,7 +23,7 @@ use unissh_storage::{
 
 use crate::error::VaultError;
 use crate::membership::{
-    add_member, build_grant, build_manifest, open_grant, verify_chain_to_epoch, verify_grant,
+    add_member, build_grant, build_manifest, open_own_grant, verify_chain_to_epoch, verify_grant,
     verify_manifest, Member,
 };
 
@@ -248,33 +248,13 @@ impl<'a> Vault<'a> {
                 None => record.key_epoch,
             };
             let members = verify_chain_to_epoch(storage, &record.vault_id, epoch, &genesis_owner)?;
-            // This member's own grant at the latest epoch. A revoked member has NO grant
-            // at the latest epoch → read denied (NotAMember, the same kind the owner-set
-            // authority check surfaces for a non-member).
-            let grant = storage
-                .list_membership_grants(&record.vault_id, epoch)?
-                .into_iter()
-                .find(|g| g.member_pubkey == own_ed)
-                .ok_or(VaultError::NotAMember)?;
-            verify_grant(&grant, &record.vault_id, &members)?;
-            // `now` for local not_after enforcement (F16): wall-clock unix seconds
-            // (the FFI only exposes a monotonic Instant, so read SystemTime here).
-            // Fail CLOSED on an unreadable clock: a pre-epoch wall clock must not silently
-            // bypass local `not_after` enforcement (F16). `i64::MAX` marks any expiry-bearing
-            // grant expired; no-expiry grants (`not_after <= 0`) are unaffected.
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .ok()
-                .and_then(|d| i64::try_from(d.as_secs()).ok())
-                .unwrap_or(i64::MAX);
-            let vk = open_grant(
-                &grant,
-                &record.vault_id,
-                &keyset.encryption.secret,
-                &own_ed,
-                epoch,
-                now,
-            )?;
+            // This member's own grant at the latest epoch, verified and opened with
+            // `not_after` enforced, failing closed on an unreadable clock (F16). A
+            // revoked member has NO grant at the latest epoch → read denied
+            // (NotAMember, the same kind the owner-set authority check surfaces for
+            // a non-member).
+            let grants = storage.list_membership_grants(&record.vault_id, epoch)?;
+            let (vk, _role) = open_own_grant(&grants, &record.vault_id, &members, keyset)?;
             // The verified set of the latest epoch, which new records are stamped
             // with (see `key_epoch` below): a Viewer reads, but may not author records.
             (vk, members.can_write(&own_ed))
