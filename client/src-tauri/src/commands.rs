@@ -9,6 +9,7 @@
 use std::sync::Arc;
 use tauri::ipc::Channel;
 use tauri::{Manager, State};
+use unissh_ffi::key_rotation_plan::{RotationDriver, RotationRun, RunScope};
 use unissh_ffi::{
     BroadcastObserver, CancelToken, ExecObserver, FfiAlgorithmPolicy, FfiError, SessionObserver,
     SftpProgressObserver,
@@ -20,7 +21,7 @@ use crate::observers::{
     AppApprover, AppPrompter, BroadcastEvent, ChannelBroadcastObserver, ChannelExecObserver,
     ChannelSessionObserver, ChannelSftpProgress, ExecEvent, ProgressEvent, TermEvent,
 };
-use crate::state::{new_id, AppState, LiveSession};
+use crate::state::{new_id, AppState, KeyRotationSlot, LiveSession};
 
 // ---------- helpers ----------
 
@@ -839,6 +840,152 @@ pub async fn list_key_rotations(
     let core = state.core.clone();
     let links = blocking(move || core.list_key_rotations(vault_id)).await?;
     Ok(links.into_iter().map(Into::into).collect())
+}
+
+// ---------- guided key rotation (the core's planner and driver) ----------
+
+/// Guided rotation: the plan for rotating `key_id`, made from the vault's hosts
+/// as they are now and kept, frozen, under the returned handle until
+/// `key_rotation_close`.
+#[tauri::command]
+pub async fn key_rotation_plan(
+    vault_id: String,
+    key_id: String,
+    state: State<'_, AppState>,
+) -> ApiResult<dto::KeyRotationPlan> {
+    let core = state.core.clone();
+    let plan = blocking(move || core.plan_key_rotation(vault_id, key_id)).await?;
+    let handle = new_id();
+    let out = dto::KeyRotationPlan::new(handle.clone(), &plan);
+    state.key_rotations.insert(
+        handle,
+        KeyRotationSlot {
+            plan: Arc::new(plan),
+            driver: None,
+        },
+    );
+    Ok(out)
+}
+
+/// Guided rotation: readies a fresh run of plan `handle` towards candidate
+/// `candidate_id` and returns it, every machine waiting for its first step.
+/// `None` when the key item already holds the candidate's key (an interrupted
+/// finish): there is nothing to run then, only the finish.
+#[tauri::command]
+pub async fn key_rotation_start(
+    handle: String,
+    candidate_id: String,
+    resumed: bool,
+    state: State<'_, AppState>,
+) -> ApiResult<Option<dto::KeyRotationRun>> {
+    let plan = state
+        .key_rotations
+        .get(&handle)
+        .map(|slot| slot.plan.clone())
+        .ok_or_else(|| ApiError::not_found("key rotation"))?;
+    let core = state.core.clone();
+    let (vault, key, candidate) = (
+        plan.vault_id.clone(),
+        plan.key_item_id.clone(),
+        candidate_id.clone(),
+    );
+    let keys = blocking(move || core.key_rotation_keys(vault, key, candidate)).await?;
+    if keys.committed() {
+        return Ok(None);
+    }
+    let driver = RotationDriver::new(
+        (*plan).clone(),
+        keys,
+        candidate_id,
+        resumed,
+        &RunScope::full(),
+    );
+    let run = dto::KeyRotationRun::new(&plan, &driver.snapshot());
+    let mut slot = state
+        .key_rotations
+        .get_mut(&handle)
+        .ok_or_else(|| ApiError::not_found("key rotation"))?;
+    slot.driver = Some(Arc::new(driver));
+    Ok(Some(run))
+}
+
+fn rotation_driver(state: &AppState, handle: &str) -> ApiResult<Arc<RotationDriver>> {
+    state
+        .key_rotations
+        .get(handle)
+        .and_then(|slot| slot.driver.clone())
+        .ok_or_else(|| ApiError::not_found("key rotation run"))
+}
+
+/// Guided rotation: runs every step that may start until the run settles,
+/// `max_concurrency` at a time, pushing the run into `on_event` after each
+/// change. Returns the settled run. Stop with `key_rotation_stop`.
+#[tauri::command]
+pub async fn key_rotation_drive(
+    handle: String,
+    max_concurrency: u32,
+    timeout_secs: u32,
+    on_event: Channel<dto::KeyRotationRun>,
+    state: State<'_, AppState>,
+) -> ApiResult<dto::KeyRotationRun> {
+    let driver = rotation_driver(&state, &handle)?;
+    let core = state.core.clone();
+    let concurrency = usize::try_from(max_concurrency).unwrap_or(usize::MAX);
+    blocking_ok(move || {
+        let plan = driver.plan();
+        let push = |_: &str, run: &RotationRun| {
+            if let Err(e) = on_event.send(dto::KeyRotationRun::new(plan, run)) {
+                log::trace!("key rotation: update dropped, the webview channel is gone: {e}");
+            }
+        };
+        let run = driver.drive(&core, concurrency, timeout_secs, &push);
+        dto::KeyRotationRun::new(plan, &run)
+    })
+    .await
+}
+
+/// Guided rotation: stops the run (in-flight steps still land) and returns it.
+#[tauri::command]
+pub async fn key_rotation_stop(
+    handle: String,
+    state: State<'_, AppState>,
+) -> ApiResult<dto::KeyRotationRun> {
+    let driver = rotation_driver(&state, &handle)?;
+    Ok(dto::KeyRotationRun::new(driver.plan(), &driver.stop()))
+}
+
+/// Guided rotation: puts failed target `target_id` back in the queue and
+/// returns the run; `key_rotation_drive` then runs it.
+#[tauri::command]
+pub async fn key_rotation_retry(
+    handle: String,
+    target_id: String,
+    state: State<'_, AppState>,
+) -> ApiResult<dto::KeyRotationRun> {
+    let driver = rotation_driver(&state, &handle)?;
+    Ok(dto::KeyRotationRun::new(
+        driver.plan(),
+        &driver.retry(&target_id),
+    ))
+}
+
+/// Guided rotation: the dialog closed. Forgets the plan, and stops a run that
+/// is somehow still going so that it starts nothing new.
+#[tauri::command]
+pub async fn key_rotation_close(handle: String, state: State<'_, AppState>) -> ApiResult<()> {
+    if let Some((_, slot)) = state.key_rotations.remove(&handle) {
+        if let Some(driver) = slot.driver {
+            driver.stop();
+        }
+    }
+    Ok(())
+}
+
+/// The command that appends `openssh` to `~/.ssh/authorized_keys` on a host
+/// (idempotent ssh-copy-id), as the guided rotation's deploy runs it.
+#[tauri::command]
+pub async fn authorized_keys_append_command(openssh: String) -> ApiResult<String> {
+    Ok(unissh_ffi::key_rotation_plan::authorized_keys_append_command(&openssh))
 }
 
 #[tauri::command]

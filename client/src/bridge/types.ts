@@ -616,6 +616,85 @@ export interface KeyRotationLink {
   startedElsewhere: boolean;
 }
 
+// Guided key rotation: the core plans it and runs the steps
+// (rust-core/crates/ffi/src/key_rotation_plan.rs); the dialog shows them.
+
+export type RotationStep = "deploy" | "verify" | "remove" | "confirm";
+
+/** Why a step did not pass. The dialog words it. */
+export type RotationStepFailure =
+  /** Nothing came back for the target. */
+  | { kind: "noResult" }
+  | { kind: "timedOut" }
+  /** The connection or the command failed, in its own words. */
+  | { kind: "error"; message: string }
+  /** The vault locked while the step ran. */
+  | { kind: "locked" }
+  /** Remove: the old key's blob is still in the file. */
+  | { kind: "oldKeyStillPresent" }
+  | { kind: "noAuthorizedKeys" }
+  /** Remove: the candidate cannot get a shell without a second factor, and the
+   *  old key is still accepted — its line has to be removed by hand. */
+  | { kind: "removeNeedsSecondFactor" }
+  /** Confirm: the old key still logs in. */
+  | { kind: "oldKeyStillAccepted" }
+  /** The old-key login failed for a reason that says nothing about the key. */
+  | { kind: "oldKeyCheckFailed"; message: string | null };
+
+/** One target's place in a run (see the core's `TargetState`):
+ *  keptOld — stopped before the old key was removed; `after` is the last
+ *  passed step. unconfirmed — stopped after the old line was removed and
+ *  before the old key was tried. */
+export type RotationTargetState =
+  | { kind: "pending"; step: RotationStep }
+  | { kind: "running"; step: RotationStep }
+  | { kind: "failed"; step: RotationStep; failure: RotationStepFailure }
+  | { kind: "switched" }
+  | { kind: "keptOld"; after: RotationStep | null }
+  | { kind: "unconfirmed" };
+
+/** A machine the candidate key goes to: one login over one route. */
+export interface RotationTarget {
+  id: string;
+  /** The host's label, or `user@host[:port]` for a bare jump hop. */
+  label: string;
+  user: string;
+  host: string;
+  port: number;
+  /** The hops in front of it, as the logins they land on. */
+  route: string[];
+  /** For a hop: the label of the host whose chain it was found in. */
+  viaLabel: string | null;
+  /** The first-dial proxy as `host:port`. */
+  proxy: string | null;
+}
+
+export type RotationSkipReason = "personal" | "systemAgent" | "password";
+
+export interface KeyRotationPlan {
+  /** Addresses the plan (and its run) in the core until `keyRotationClose`. */
+  handle: string;
+  targets: RotationTarget[];
+  /** Hosts that only hop with the key: they follow the targets they go through. */
+  dependents: { profileId: string; label: string; targetIds: string[] }[];
+  skipped: { profileId: string; label: string; reason: RotationSkipReason }[];
+  /** One login is reached over more than one route. */
+  sharedEndpoint: boolean;
+}
+
+export interface KeyRotationRun {
+  states: Record<string, RotationTargetState>;
+  /** Targets where a login with the candidate passed in this run. */
+  verified: string[];
+  cancelled: boolean;
+  /** Nothing in flight and nothing left to start. */
+  settled: boolean;
+  /** Finishing locks these out: the candidate was not proven there. */
+  unproven: string[];
+  /** The candidate works here, but the old key was not seen refused. */
+  oldNotRefused: string[];
+}
+
 export interface ServerStatus {
   /** Local, stable id of this server link (null when nothing is linked). */
   serverId: string | null;
