@@ -28,6 +28,7 @@ import type {
   KeyRotationLink,
   KeyRotationPlan,
   KeyRotationRun,
+  KeyUsage,
   JoinPreview,
   SpaceInfo,
   DirectoryEntry,
@@ -192,6 +193,9 @@ export const abandonKeyRotation = (vaultId: string, candidateId: string) =>
 /** Rotations in progress on this device (device-local links, live candidates only). */
 export const listKeyRotations = (vaultId: string) =>
   invoke<KeyRotationLink[]>("list_key_rotations", { vaultId });
+/** What in the vault uses a key or password item (hosts by role, identities). */
+export const keyUsage = (vaultId: string, itemId: string) =>
+  invoke<KeyUsage>("key_usage", { vaultId, itemId });
 /** Guided rotation: the core's plan for rotating `keyId`, frozen until `keyRotationClose`. */
 export const keyRotationPlan = (vaultId: string, keyId: string) =>
   invoke<KeyRotationPlan>("key_rotation_plan", { vaultId, keyId });

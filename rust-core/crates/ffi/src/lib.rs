@@ -62,6 +62,7 @@ pub mod automation;
 pub mod automation_recording;
 mod key_rotation;
 pub mod key_rotation_plan;
+mod key_usage;
 mod password_fill;
 pub mod snippet_params;
 mod ssh_include;
@@ -70,6 +71,7 @@ mod terminal_workspace;
 
 use approvals::{Approvals, Asker, Connection};
 pub use key_rotation::KeyRotationLink;
+pub use key_usage::{HostKeyUse, IdentityKeyUse, KeyUsage, KeyUseRole};
 use password_fill::FillGuard;
 pub use password_fill::{FillEvent, FillPromptKind, PasswordFillMode};
 pub use system_agent::{SharedAgentKey, SystemAgent};

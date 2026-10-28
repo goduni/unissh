@@ -695,6 +695,18 @@ export interface KeyRotationRun {
   oldNotRefused: string[];
 }
 
+/** How a host uses a key or password item. */
+export type KeyUseRole = "login" | "inlineHop" | "referencedHop" | "proxyPassword";
+
+/** What in a vault uses one key or password item — the core's single answer
+ *  (`key_usage`, #169), shared with the CLI. Ids and labels only. */
+export interface KeyUsage {
+  /** Hosts using it, each once, with every way it does. */
+  hosts: { profileId: string; label: string; roles: KeyUseRole[] }[];
+  /** Identities referencing it as their key or password. */
+  identities: { identityId: string; label: string }[];
+}
+
 export interface ServerStatus {
   /** Local, stable id of this server link (null when nothing is linked). */
   serverId: string | null;

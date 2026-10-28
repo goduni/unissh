@@ -988,6 +988,19 @@ pub async fn authorized_keys_append_command(openssh: String) -> ApiResult<String
     Ok(unissh_ffi::key_rotation_plan::authorized_keys_append_command(&openssh))
 }
 
+/// What in a vault uses a key or password item: hosts (own login, inline or
+/// referenced jump hop, proxy password) and identities (#169).
+#[tauri::command]
+pub async fn key_usage(
+    vault_id: String,
+    item_id: String,
+    state: State<'_, AppState>,
+) -> ApiResult<dto::KeyUsage> {
+    let core = state.core.clone();
+    let usage = blocking(move || core.key_usage(vault_id, item_id)).await?;
+    Ok(usage.into())
+}
+
 #[tauri::command]
 pub async fn rename_item(
     vault_id: String,
