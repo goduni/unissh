@@ -106,7 +106,12 @@ enum Command {
     /// What this machine is signed in to.
     Status,
     /// Sync the vaults with the server now.
-    Sync,
+    Sync {
+        /// Send again the changes the server refused before (too large, or not
+        /// permitted), instead of leaving them out until they change.
+        #[arg(long)]
+        retry_refused: bool,
+    },
     /// Vaults as a whole: drop the changes made here that the server will not take.
     #[command(subcommand)]
     Vaults(VaultsAction),
@@ -441,12 +446,16 @@ fn run(cli: Cli) -> Res<u8> {
             manage::status(&home)?;
             Ok(0)
         }
-        Command::Sync => {
+        Command::Sync { retry_refused } => {
             if offline {
                 return Err(Failure::msg("`sync` and --offline contradict each other"));
             }
             let device = unlocked(home, &credentials)?;
-            let report = server::sync(&device)?;
+            let report = if retry_refused {
+                server::sync_retrying_refused(&device)?
+            } else {
+                server::sync(&device)?
+            };
             println!("{}", server::summary(&report));
             server::warn_about(&report);
             Ok(0)

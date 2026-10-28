@@ -405,7 +405,7 @@ pub fn syncs(core: &Core, vault_id: &str) -> Res<bool> {
 /// [`server::push_after_write`] for where the change then stands.
 pub fn commit(device: &Device, vault_id: &str, offline: bool, done: &str) -> Res<()> {
     let cloud = syncs(&device.core, vault_id)?;
-    server::push_after_write(device, cloud, offline, done)
+    server::push_after_write(device, vault_id, cloud, offline, done)
 }
 
 #[cfg(test)]

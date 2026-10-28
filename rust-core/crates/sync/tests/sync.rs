@@ -958,6 +958,8 @@ fn failed_request_does_not_resend_what_was_already_delivered() {
 struct ForbiddingServer {
     inner: InMemoryTransport,
     refused_item: &'static [u8],
+    /// Refuses every request, as a proxy in front of the server might.
+    refuse_all: bool,
     requests: usize,
 }
 
@@ -966,6 +968,7 @@ impl ForbiddingServer {
         Self {
             inner: InMemoryTransport::new(),
             refused_item,
+            refuse_all: false,
             requests: 0,
         }
     }
@@ -989,9 +992,10 @@ impl ForbiddingServer {
 impl SyncTransport for ForbiddingServer {
     fn push_objects(&mut self, objects: &[SyncObject]) -> Result<Vec<u64>, SyncError> {
         self.requests += 1;
-        let refused = objects
-            .iter()
-            .any(|o| matches!(o, SyncObject::Item(i) if i.item_id == self.refused_item));
+        let refused = self.refuse_all
+            || objects
+                .iter()
+                .any(|o| matches!(o, SyncObject::Item(i) if i.item_id == self.refused_item));
         if refused {
             return Err(SyncError::Forbidden);
         }
@@ -1089,11 +1093,60 @@ fn item_its_author_may_not_write_is_left_out_without_a_request() {
 }
 
 #[test]
+fn a_server_that_refuses_every_push_gets_no_item_left_out() {
+    // A 403 for every request (a proxy, a server-side state) is not about the
+    // items: the push fails, and no item is remembered as refused — or a
+    // discard would then drop edits the server would have taken.
+    let (s, k) = vault_with_a_refused_item(&[44_u8; 32]);
+    let mut server = ForbiddingServer::new(b"none");
+    sync_push(&mut server, &s, TENANT).unwrap();
+    let vault = Vault::open(&s, &k, b"vault-1").unwrap();
+    vault.put_item(b"viewer-edit", 1, b"edit 2").unwrap();
+    vault.put_item(b"fine", 1, b"ok 2").unwrap();
+    server.refuse_all = true;
+
+    let err = sync_push_vault_data(&mut server, &s, TENANT).unwrap_err();
+    assert!(matches!(err, SyncError::Forbidden), "{err:?}");
+
+    server.refuse_all = false;
+    let next = sync_push_vault_data(&mut server, &s, TENANT).unwrap();
+    assert!(next.unpushable.is_empty(), "{:?}", next.unpushable);
+    assert_eq!(
+        next.pushed, 2,
+        "both edits went up once the server took them"
+    );
+}
+
+#[test]
+fn discard_sends_a_refused_edit_again_and_keeps_it_when_it_goes_through() {
+    let (s, k) = vault_with_a_refused_item(&[45_u8; 32]);
+    let ctx = SyncContext {
+        genesis_owner: genesis(&k),
+        tenant: TENANT.to_vec(),
+    };
+    let mut server = ForbiddingServer::new(b"viewer-edit");
+    let first = sync_push(&mut server, &s, TENANT).unwrap();
+    assert_eq!(first.unpushable.len(), 1, "{:?}", first.unpushable);
+    // The refusal was not about the item after all.
+    server.refused_item = b"none";
+    let server_copy = server.inner.delta_since(0);
+
+    let done = discard_unpushable(&mut server, &s, &ctx, b"vault-1", server_copy).unwrap();
+
+    assert!(done.dropped.is_empty(), "{:?}", done.dropped);
+    assert!(
+        server.item_ids().contains(&b"viewer-edit".to_vec()),
+        "the edit went up"
+    );
+    let kept = s.get_item(b"vault-1", b"viewer-edit").unwrap().unwrap();
+    assert_eq!(kept.version, 1, "the edit is kept");
+}
+
+#[test]
 fn discard_restores_the_server_copy_and_keeps_other_dirty_items() {
     let (s, k) = vault_with_a_refused_item(&[43_u8; 32]);
-    let own = genesis(&k);
     let ctx = SyncContext {
-        genesis_owner: own.clone(),
+        genesis_owner: genesis(&k),
         tenant: TENANT.to_vec(),
     };
     // Both items reach the server at version 1.
@@ -1106,24 +1159,21 @@ fn discard_restores_the_server_copy_and_keeps_other_dirty_items() {
     server.refused_item = b"viewer-edit";
     sync_push(&mut server, &s, TENANT).unwrap();
     vault.put_item(b"fine", 1, b"ok 2").unwrap();
+    let server_copy = server.inner.delta_since(0);
 
-    let dropped = discard_unpushable(&s, b"vault-1", &own).unwrap();
-    assert_eq!(dropped.len(), 1, "{dropped:?}");
-    assert_eq!(dropped[0].item_id, b"viewer-edit".to_vec());
-    // The targeted pull of the vault brings the server's copy back.
-    apply_pulled_objects(&s, &ctx, server.inner.delta_since(0)).unwrap();
+    let done = discard_unpushable(&mut server, &s, &ctx, b"vault-1", server_copy).unwrap();
 
+    assert_eq!(done.dropped.len(), 1, "{:?}", done.dropped);
+    assert_eq!(done.dropped[0].item_id, b"viewer-edit".to_vec());
     let restored = s.get_item(b"vault-1", b"viewer-edit").unwrap().unwrap();
     assert_eq!(restored.version, 1, "the server's copy");
-    let dirty: Vec<(Vec<u8>, u64)> = s
-        .list_dirty_bound_item_versions(TENANT)
-        .unwrap()
-        .into_iter()
-        .map(|h| (h.item_id, h.version))
-        .collect();
+    let other = s.get_item(b"vault-1", b"fine").unwrap().unwrap();
     assert_eq!(
-        dirty,
-        vec![(b"fine".to_vec(), 2)],
-        "the other unsent edit is kept"
+        other.version, 2,
+        "the other unsent edit is kept, and went up"
+    );
+    assert!(
+        s.list_dirty_bound_item_versions(TENANT).unwrap().is_empty(),
+        "nothing is left waiting"
     );
 }

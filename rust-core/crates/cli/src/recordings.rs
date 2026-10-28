@@ -363,7 +363,7 @@ pub fn remove(device: &Device, query: &str, yes: bool, offline: bool) -> Res<()>
     device
         .core
         .delete_recording(found.vault_id.clone(), found.meta.recording_id.clone())?;
-    server::push_after_write(device, found.cloud, offline, "Deleted")
+    server::push_after_write(device, &found.vault_id, found.cloud, offline, "Deleted")
 }
 
 #[cfg(test)]

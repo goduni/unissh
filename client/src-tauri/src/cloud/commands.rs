@@ -984,28 +984,30 @@ pub async fn server_pull_vault(
 /// **Discard the unpushable edits of ONE vault** (by hex id; the server defaults to
 /// the active one): drops this account's edits there that no push can deliver (a
 /// Viewer's edit made before the core refused them, an edit the server refuses —
-/// the `unpushable` items of a sync report marked `mine`), then pulls the vault like
-/// [`server_pull_vault`] so the server's copy of each comes back. Other items of the
-/// vault, including other edits not pushed yet, are kept. The UI confirms first: the
-/// dropped edits are lost. Returns how many were dropped. Requires a session.
+/// the `unpushable` items of a sync report marked `mine`) and puts back the server's
+/// copy of each; other members' unsendable items there are no longer sent. The
+/// vault's objects are read from the server first, and the core pushes again before
+/// it drops anything, so only a refusal confirmed now drops an edit (see
+/// `HttpSyncTransport::discard_unpushable_and_pull`). Other items of the vault,
+/// including other edits not pushed yet, are kept. The UI confirms first: the dropped
+/// edits are lost. Requires a session.
 #[tauri::command]
 pub async fn server_discard_unpushable(
     vault_id: String,
     server_id: Option<String>,
     state: State<'_, AppState>,
-) -> ApiResult<u32> {
+) -> ApiResult<dto::DiscardReport> {
     let cfg = require_config(&state, server_id.as_deref())?;
     let access = require_access(&state, server_id.as_deref())?;
     let core = state.core.clone();
-    blocking_api(move || {
+    let report = blocking_api(move || {
         let space = cfg.space_id.clone();
-        let transport = HttpSyncTransport::new(cfg.base_url, access);
-        let (dropped, _pulled) = transport
+        HttpSyncTransport::new(cfg.base_url, access)
             .discard_unpushable_and_pull(&core, &space, &vault_id)
-            .map_err(ApiError::from)?;
-        Ok(dropped)
+            .map_err(ApiError::from)
     })
-    .await
+    .await?;
+    Ok(report.into())
 }
 
 /// **Bind an already-cloud vault to a server, then push it** (the "Push" action in the

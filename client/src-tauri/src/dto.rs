@@ -840,6 +840,24 @@ impl From<ffi::FfiSyncReport> for SyncReport {
     }
 }
 
+/// What discarding a vault's unsendable edits did (mirror of `FfiDiscardReport`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscardReport {
+    /// This account's edits that were dropped.
+    pub dropped: u32,
+    /// Other members' items no longer sent (kept as they are).
+    pub released: u32,
+}
+impl From<ffi::FfiDiscardReport> for DiscardReport {
+    fn from(r: ffi::FfiDiscardReport) -> Self {
+        Self {
+            dropped: r.dropped,
+            released: r.released,
+        }
+    }
+}
+
 /// An edit no push can deliver (mirror of `FfiUnpushableItem`).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

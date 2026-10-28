@@ -49,8 +49,8 @@ pub fn serve(replies: Vec<(&'static str, &'static str)>) -> (String, Arc<Mutex<V
             }
             // A request body (a push) is read before the reply: a socket
             // closed with unread data resets the connection under the client.
-            let mut body = vec![0_u8; body_len];
-            std::io::Read::read_exact(&mut reader, &mut body)
+            let mut request_body = vec![0_u8; body_len];
+            std::io::Read::read_exact(&mut reader, &mut request_body)
                 .expect("the test client sends the body it announced");
             seen2.lock().unwrap().push(auth);
             let reply = format!(

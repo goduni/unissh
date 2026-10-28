@@ -1543,8 +1543,20 @@ pub struct FfiSyncReport {
     /// server refused them as not permitted. They are NOT on the server (the
     /// rest of the push went through), are listed by every sync until the
     /// item changes, and are dropped in favour of the server's copy by
-    /// [`Core::discard_unpushable_changes`].
+    /// [`Core::discard_unpushable_changes`] (only once a fresh push there
+    /// confirms they still cannot be delivered).
     pub unpushable: Vec<FfiUnpushableItem>,
+}
+
+/// What [`Core::discard_unpushable_changes`] did.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FfiDiscardReport {
+    /// This account's edits that were dropped.
+    pub dropped: u32,
+    /// Other members' items that are no longer sent (kept as they are).
+    pub released: u32,
+    /// What putting back the server's copy of the vault applied.
+    pub restored: FfiSyncReport,
 }
 
 /// Why an edit is in [`FfiSyncReport::unpushable`].
@@ -3106,37 +3118,77 @@ impl Core {
         })
     }
 
-    /// **Drops this account's edits in `vault_id` that no push can deliver**
-    /// (the [`FfiSyncReport::unpushable`] items marked `mine`), so the server's
-    /// copy of each can come back: typically a Viewer's edit made before the
-    /// core refused them (#166), which the server refuses and which, at a
-    /// higher version than the server's copy, would otherwise outrank it on
-    /// every pull.
+    /// **Drops this account's edits in `vault_id` that no push can deliver
+    /// and puts back the server's copy** (#166): typically a Viewer's edit
+    /// made before the core refused them, which the server refuses and which,
+    /// at a higher version than the server's copy, would otherwise outrank it
+    /// on every pull. `server_copy` is the vault's objects as the server has
+    /// them (`GET /v1/sync/delta?vault=<id>`, every page), fetched by the
+    /// caller BEFORE this call: a fetch that fails means nothing is dropped.
     ///
-    /// Only those rows are deleted, past the version monotonicity
-    /// (`Storage::discard_unpushed_item`): rows that are still dirty, at the
-    /// version found unpushable, and authored by this account. Every other
-    /// item of the vault — clean, still to be pushed, another member's — stays
-    /// as it is. The local edits are lost; that is the point, and the caller
-    /// confirms it with the user first.
+    /// Nothing is dropped on an old word. The remembered server refusals are
+    /// forgotten and the vault data is pushed again through `transport` to
+    /// `tenant_b64` first, so an edit is dropped only when that push confirms
+    /// it cannot be delivered (the local authorship check, or a fresh 403 for
+    /// the item); one that goes through now is kept. A push that fails — a
+    /// request-level refusal included — fails this call and nothing changes.
     ///
-    /// The server's copies arrive with a pull of the vault that follows (the
-    /// targeted pull, `apply_pulled_vault`): a full sync does not bring them,
-    /// its cursor is already past them. An item the server never had (one
-    /// created here) is simply gone. Returns how many edits were dropped.
-    /// Requires unlock.
-    pub fn discard_unpushable_changes(&self, vault_id: String) -> Result<u32, FfiError> {
+    /// Then, in one transaction (`unissh_sync::discard_unpushable`): only the
+    /// confirmed rows of this account are deleted, past the version
+    /// monotonicity; their archived versions above the server's copy go too;
+    /// other members' unsendable items in the vault stop being sent (dirty
+    /// flag cleared, row kept); and `server_copy` is applied with
+    /// verify-before-apply, as `apply_pulled_vault` does, without moving the
+    /// pull cursor. An item the server never had (one created here) is
+    /// simply gone. Every other item stays as it is. The local edits are
+    /// lost; that is the point, and the caller confirms it with the user
+    /// first. Requires unlock.
+    pub fn discard_unpushable_changes(
+        &self,
+        transport: Arc<dyn FfiSyncTransport>,
+        tenant_b64: String,
+        vault_id: String,
+        server_copy: Vec<Vec<u8>>,
+    ) -> Result<FfiDiscardReport, FfiError> {
         self.with_state_mut(|state| {
+            let ctx = SyncContext {
+                genesis_owner: state.keyset.signing.verifying.to_bytes().to_vec(),
+                tenant: tenant_b64.as_bytes().to_vec(),
+            };
+            let mut adapter = ForeignTransportAdapter {
+                inner: transport,
+                push_err: Mutex::new(None),
+            };
             let vid = resolve_vid(&state.storage, &vault_id);
-            let own = state.keyset.signing.verifying.to_bytes().to_vec();
-            let dropped = unissh_sync::discard_unpushable(&state.storage, &vid, &own)
-                .map_err(map_sync_err)?;
-            for u in &dropped {
+            let parsed: Vec<(u64, SyncObject)> = server_copy
+                .iter()
+                .enumerate()
+                .filter_map(|(i, b)| SyncObject::from_bytes(b).ok().map(|o| (i as u64 + 1, o)))
+                .collect();
+            let done =
+                unissh_sync::discard_unpushable(&mut adapter, &state.storage, &ctx, &vid, parsed)
+                    .map_err(|e| push_failure(&adapter, e))?;
+            for u in &done.dropped {
                 let item_id = String::from_utf8_lossy(&u.item_id);
                 state.agent.remove(&agent_key_id(&vault_id, &item_id));
                 system_agent::forget(state, &vault_id, Some(&*item_id));
             }
-            Ok(count_u32(dropped.len()))
+            if !done.dropped.is_empty() || done.pulled.applied > 0 {
+                evict_replaced_agent_keys(state);
+            }
+            Ok(FfiDiscardReport {
+                dropped: count_u32(done.dropped.len()),
+                released: count_u32(done.released.len()),
+                restored: FfiSyncReport {
+                    applied: done.pulled.applied,
+                    skipped_stale: done.pulled.skipped_stale,
+                    conflicts: count_u32(done.pulled.conflicts.len()),
+                    rejected: count_u32(done.pulled.rejected.len()),
+                    pushed: 0,
+                    too_large: Vec::new(),
+                    unpushable: Vec::new(),
+                },
+            })
         })
     }
 
@@ -8440,6 +8492,25 @@ fn map_sync_err(e: unissh_sync::SyncError) -> FfiError {
     FfiError::Other { msg: e.to_string() }
 }
 
+/// A failed push as the caller hears it: one that failed on the transport
+/// reports what the transport said (for a size or permission refusal: the
+/// server's own message). Any other failure is the engine's, whatever an
+/// earlier request left in the adapter.
+fn push_failure(adapter: &ForeignTransportAdapter, e: unissh_sync::SyncError) -> FfiError {
+    let from_transport = matches!(
+        e,
+        unissh_sync::SyncError::Format
+            | unissh_sync::SyncError::PayloadTooLarge
+            | unissh_sync::SyncError::Forbidden
+    );
+    if from_transport {
+        if let Some(fe) = lock_recover(&adapter.push_err).take() {
+            return fe;
+        }
+    }
+    map_sync_err(e)
+}
+
 /// The name of the vault `vault_id` (raw) for a sync report: from the name
 /// cache, else read from the vault; empty when it cannot be read.
 fn report_vault_name(state: &CoreState, vault_id: &[u8]) -> String {
@@ -8472,24 +8543,7 @@ fn push_to_tenant(
         FfiSyncMode::Full => sync_push_as(adapter, &state.storage, ctx),
         FfiSyncMode::PushOnly => sync_push_vault_data_as(adapter, &state.storage, ctx),
     };
-    let report = outcome.map_err(|e| {
-        // A push that failed on the transport reports what the transport said
-        // (for a size or permission refusal: the server's own message). Any
-        // other failure is the engine's, whatever an earlier request left in
-        // the adapter.
-        let from_transport = matches!(
-            e,
-            unissh_sync::SyncError::Format
-                | unissh_sync::SyncError::PayloadTooLarge
-                | unissh_sync::SyncError::Forbidden
-        );
-        if from_transport {
-            if let Some(fe) = lock_recover(&adapter.push_err).take() {
-                return fe;
-            }
-        }
-        map_sync_err(e)
-    })?;
+    let report = outcome.map_err(|e| push_failure(adapter, e))?;
     let too_large = report
         .too_large
         .into_iter()
