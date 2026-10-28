@@ -3,7 +3,7 @@
 //! brings the vault in once its owner is pinned.
 #![expect(
     clippy::unwrap_used,
-    clippy::missing_assert_message,
+    clippy::unwrap_in_result,
     reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
 )]
 
@@ -203,7 +203,7 @@ fn inspection_names_the_owner_a_granted_member_confirms() {
     assert_eq!(info.owner_ed25519_hex, team.owner_ed);
     assert_eq!(
         info.fingerprint,
-        member.member_fingerprint(team.owner_ed.clone()).unwrap()
+        member.member_fingerprint(team.owner_ed).unwrap()
     );
     assert_eq!(
         info.fingerprint,

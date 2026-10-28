@@ -214,6 +214,10 @@ fn account_pubkeys(
 
 #[test]
 #[ignore = "needs `cargo build -p unissh-server` + free TCP ports"]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end story: claim, invite, join, grant, and sync on two devices"
+)]
 fn live_e2e_claim_invite_join_and_two_device_sync() {
     let Some(srv) = spawn_server() else {
         return; // skipped (binary absent)
