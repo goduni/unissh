@@ -200,7 +200,13 @@ starts with `0.`:
   once: `unissh sync` says how many shared vaults wait, `unissh vaults list`
   lists them, and `unissh vaults trust <id>` asks for the fingerprint the owner
   gave them (each account's own is in `unissh status`), then fetches the
-  vault. The server is never trusted to say who the owner is. The app's screen for it follows; the core and the app's
+  vault. The server is never trusted to say who the owner is. In the app,
+  Settings → Cloud lists them under "Shared with you — not verified yet", with
+  the owner the server claims and your role; "Verify owner…" takes the
+  fingerprint the owner gave you (or, as a weaker check, shows it to compare
+  and confirm), then fetches the vault. A vault whose owner changed since you
+  trusted it is shown as a warning, never offered for trust. Your own
+  fingerprint is in Settings → Cloud → Your fingerprint. The core and the app's
   "Pull from server" now share one single-vault pull, and it says when a pull
   was cut short instead of reporting it complete. "Restore deleted" keeps the
   owner you trusted for a teammate's vault.

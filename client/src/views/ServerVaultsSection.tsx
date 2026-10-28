@@ -5,12 +5,13 @@ import { useCallback, useEffect, useState } from "react";
 
 import * as api from "@/bridge/api";
 import { tooLargeSummary } from "@/bridge/syncReport";
-import { apiErrorMessage, type ServerVault } from "@/bridge/types";
+import { apiErrorMessage, type PendingSharedVault, type ServerVault } from "@/bridge/types";
 import { useTranslation } from "@/i18n";
 import { Btn, Icon, Spinner, Tag } from "@/components/primitives";
 import { toast } from "@/store/toast";
 import { usePalette } from "@/theme/ThemeProvider";
 import { rem, TEXT } from "@/theme/tokens";
+import { SharedWithYou } from "./SharedVaultTrust";
 
 /** A vault's status decides the single action offered on its row. */
 type Kind = "inSync" | "pull" | "push";
@@ -38,17 +39,34 @@ export function ServerVaultsSection({
   const [rows, setRows] = useState<ServerVault[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  // Vaults a teammate shared that wait for this device to trust their owner. They
+  // are listed on their own, never with a plain "Pull": a pull before the owner
+  // is confirmed is rejected by verify-before-apply anyway.
+  const [shared, setShared] = useState<PendingSharedVault[]>([]);
 
   const load = useCallback(async () => {
     if (!hasSession) return;
     setLoading(true);
+    // Each waiting vault is inspected (its membership read from the server), so
+    // this runs next to the catalog, and its failure does not hide the catalog.
+    const pending = api.serverPendingSharedVaults(serverId ?? undefined).then(
+      (r) => r.vaults,
+      (e: unknown) => {
+        toast(t("sharedVaults.listFailed", { error: apiErrorMessage(e) }), "warn");
+        return [] as PendingSharedVault[];
+      },
+    );
     try {
-      const list = await api.serverListVaults(serverId ?? undefined);
+      const [all, waiting] = await Promise.all([api.serverListVaults(serverId ?? undefined), pending]);
+      setShared(waiting);
+      const waitingIds = new Set(waiting.map((w) => w.vaultId.toLowerCase()));
+      const list = all.filter((v) => !waitingIds.has(v.vaultId.toLowerCase()));
       // Stable order: not-local first (things you can pull), then by id.
       list.sort((a, b) => Number(a.isLocal) - Number(b.isLocal) || a.vaultId.localeCompare(b.vaultId));
       setRows(list);
     } catch (e) {
       setRows([]);
+      setShared(await pending);
       toast(t("serverVaults.listFailed", { error: apiErrorMessage(e) }), "err");
     } finally {
       setLoading(false);
@@ -106,6 +124,8 @@ export function ServerVaultsSection({
           {t("common.refresh")}
         </Btn>
       </div>
+
+      <SharedWithYou vaults={shared} serverId={serverId} onChanged={() => void load()} />
 
       {loading && rows === null ? (
         <div style={{ display: "flex", alignItems: "center", gap: rem(8), color: p.txt3, fontSize: TEXT.base }}>

@@ -191,6 +191,39 @@ export interface ServerVault {
   localName: string | null;
 }
 
+/** Where a vault a teammate shared with this account stands on this device. */
+export type SharedVaultState =
+  /** No owner pinned yet: the user confirms the owner's fingerprint. */
+  | "waiting"
+  /** The owner is pinned here; the vault is not fetched yet. */
+  | "trustedNotFetched"
+  /** ANOTHER owner is pinned here than the one the server now presents. */
+  | "ownerChanged"
+  /** Its membership could not be verified. */
+  | "unverifiable";
+
+/** A shared vault not on this device yet. `claimedHandle`/`claimedName` are what
+ *  the SERVER says about the owner — never verified, always shown as a claim. */
+export interface PendingSharedVault {
+  vaultId: string;
+  state: SharedVaultState;
+  /** Fingerprint of the key that created the vault, grouped by four. */
+  fingerprint: string | null;
+  role: MemberRole | null;
+  claimedHandle: string | null;
+  claimedName: string | null;
+  error: string | null;
+}
+
+export interface PendingSharedVaults {
+  vaults: PendingSharedVault[];
+  /** Catalog entries the server sent under a malformed id (ignored). */
+  malformed: number;
+}
+
+/** What a trust attempt did; only `trusted`/`alreadyTrusted` pinned (or kept) an owner. */
+export type TrustOutcome = "trusted" | "alreadyTrusted" | "fingerprintMismatch" | "pinnedToAnotherOwner";
+
 // ── vault integrity / maintenance ──────────────────────────────
 export type IntegrityFailureKind = "signatureInvalid" | "authorMismatch" | "malformed";
 

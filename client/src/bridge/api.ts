@@ -61,6 +61,8 @@ import type {
   LocalVolume,
   SshExecResult,
   ServerVault,
+  PendingSharedVaults,
+  TrustOutcome,
   SyncReport,
   MovedVault,
   TermEvent,
@@ -112,6 +114,8 @@ export const unlock = (password: string | null, secretKeyHex: string) =>
   invoke<void>("unlock", { password, secretKeyHex });
 export const lock = () => invoke<void>("lock");
 export const isUnlocked = () => invoke<boolean>("is_unlocked");
+/** This account's own fingerprint, grouped by four (not a secret; works locked). */
+export const ownFingerprint = () => invoke<string>("own_fingerprint");
 /** Resolves to whether biometric unlock was on and has been turned off by the
  *  change (its stored password belonged to the old one). What this cannot say
  *  — the stored password could not be erased, or a change that failed had
@@ -1002,6 +1006,18 @@ export const serverListVaults = (serverId?: string) =>
 /** Pull ONE vault (hex id) from a server onto this device (targeted; no cursor bump). */
 export const serverPullVault = (vaultId: string, serverId?: string) =>
   invoke<SyncReport>("server_pull_vault", { vaultId, serverId: serverId ?? null });
+/** Vaults a teammate shared with this account that are not here yet, each inspected
+ *  by the core (creator's fingerprint, my role, pin state; owner name = server claim). */
+export const serverPendingSharedVaults = (serverId?: string) =>
+  invoke<PendingSharedVaults>("server_pending_shared_vaults", { serverId: serverId ?? null });
+/** Trust a shared vault's owner: the core compares `expectedFingerprint` (REQUIRED —
+ *  the owner's, or the displayed one the user confirmed) and pins in one step. */
+export const serverTrustSharedVault = (vaultId: string, expectedFingerprint: string, serverId?: string) =>
+  invoke<TrustOutcome>("server_trust_shared_vault", {
+    vaultId,
+    expectedFingerprint,
+    serverId: serverId ?? null,
+  });
 /** Bind an already-cloud vault (hex id) to a server, then sync it up (Push). */
 export const serverBindAndPushVault = (vaultId: string, serverId?: string) =>
   invoke<SyncReport>("server_bind_and_push_vault", { vaultId, serverId: serverId ?? null });
