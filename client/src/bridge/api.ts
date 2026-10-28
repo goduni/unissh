@@ -153,12 +153,12 @@ export const vaultImportBackup = (
 export const listItems = (vaultId: string) => invoke<ItemInfo[]>("list_items", { vaultId });
 /** Generates a NEW key; an id already taken is an `alreadyExists` error (the
  *  core never replaces a key's material from here). */
-export const generateSshKey = (vaultId: string, itemId: string) =>
-  afterMut(vaultId, invoke<string>("generate_ssh_key", { vaultId, itemId }));
-/** Imports a NEW key (create-only, like `generateSshKey`). An encrypted key
- *  without its passphrase fails with `passphraseRequired`, a wrong one with
- *  `wrongPassphrase`. */
-export const importSshKey = (
+export const createSshKey = (vaultId: string, itemId: string) =>
+  afterMut(vaultId, invoke<string>("create_ssh_key", { vaultId, itemId }));
+/** Imports a private key as a NEW key (create-only, like `createSshKey`). An
+ *  encrypted key without its passphrase fails with `passphraseRequired`, a
+ *  wrong one with `wrongPassphrase`. */
+export const createImportedSshKey = (
   vaultId: string,
   itemId: string,
   opensshPrivate: string,
@@ -166,7 +166,7 @@ export const importSshKey = (
 ) =>
   afterMut(
     vaultId,
-    invoke<string>("import_ssh_key", {
+    invoke<string>("create_imported_ssh_key", {
       vaultId,
       itemId,
       opensshPrivate,
@@ -203,7 +203,10 @@ export const listItemVersions = (vaultId: string, itemId: string) =>
   invoke<number[]>("list_item_versions", { vaultId, itemId });
 
 // ── passwords ──────────────────────────────────────────────────
-/** A fresh item id for a new item labelled `label`, minted by the core. */
+/** A fresh item id for a new item labelled `label`, minted by the core — for
+ *  `savePassword`, which still takes the caller's id (a new host's password).
+ *  The id is minted in this call and written in the next, so it is not
+ *  reserved in between; interim, until saving a host creates its password. */
 export const newItemId = (vaultId: string, label: string) =>
   invoke<string>("new_item_id", { vaultId, label });
 export const savePassword = (vaultId: string, itemId: string, password: string) =>
@@ -245,10 +248,10 @@ export const deleteConnection = (vaultId: string, profileId: string) =>
 // ── identities (personal SSH creds) ────────────────────────────
 /** Saves an identity over the one at its id (the edit form). */
 export const saveIdentity = (vaultId: string, identity: Identity) =>
-  afterMut(vaultId, invoke<void>("save_identity", { vaultId, identity, createOnly: false }));
+  afterMut(vaultId, invoke<void>("save_identity", { vaultId, identity }));
 /** Saves a NEW identity; an id already taken is an `alreadyExists` error. */
 export const createIdentity = (vaultId: string, identity: Identity) =>
-  afterMut(vaultId, invoke<void>("save_identity", { vaultId, identity, createOnly: true }));
+  afterMut(vaultId, invoke<void>("create_identity", { vaultId, identity }));
 export const listIdentities = (vaultId: string) =>
   invoke<Identity[]>("list_identities", { vaultId });
 export const getIdentity = (vaultId: string, identityId: string) =>

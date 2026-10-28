@@ -726,11 +726,12 @@ pub async fn list_items(
     Ok(v.into_iter().map(Into::into).collect())
 }
 
-/// Generates a NEW key: the app has no flow that replaces a key's material
-/// under its id (rotation has its own commands), so this is create-only and an
-/// id already taken is `AlreadyExists`.
+/// Generates a NEW key (the core's `create_ssh_key`): an id already taken is
+/// `AlreadyExists`. The app has no flow that replaces a key's material under
+/// its id (rotation has its own commands), so the core's create-or-replace
+/// `generate_ssh_key` has no command.
 #[tauri::command]
-pub async fn generate_ssh_key(
+pub async fn create_ssh_key(
     vault_id: String,
     item_id: String,
     state: State<'_, AppState>,
@@ -739,11 +740,12 @@ pub async fn generate_ssh_key(
     blocking(move || core.create_ssh_key(vault_id, item_id)).await
 }
 
-/// Imports a NEW key (create-only, like `generate_ssh_key`). An encrypted key
-/// without its passphrase is `PassphraseRequired`, a wrong one
-/// `WrongPassphrase`.
+/// Imports a private key as a NEW key (the core's `create_imported_ssh_key`;
+/// create-only like `create_ssh_key`, and for the same reason the core's
+/// `import_ssh_key` has no command). An encrypted key without its passphrase
+/// is `PassphraseRequired`, a wrong one `WrongPassphrase`.
 #[tauri::command]
-pub async fn import_ssh_key(
+pub async fn create_imported_ssh_key(
     vault_id: String,
     item_id: String,
     openssh_private: String,
@@ -1044,26 +1046,29 @@ pub async fn delete_connection(
 
 // ---------- identities (personal SSH creds) ----------
 
-/// Saves an identity: `create_only` refuses an id already taken
-/// (`AlreadyExists`, the "new identity" form); without it the identity at
-/// that id is replaced (the edit form).
+/// Saves an identity over the one at its id, or creates it (the edit form).
 #[tauri::command]
 pub async fn save_identity(
     vault_id: String,
     identity: dto::Identity,
-    create_only: bool,
     state: State<'_, AppState>,
 ) -> ApiResult<()> {
     let core = state.core.clone();
     let i = identity.into();
-    blocking(move || {
-        if create_only {
-            core.create_identity(vault_id, i)
-        } else {
-            core.save_identity(vault_id, i)
-        }
-    })
-    .await
+    blocking(move || core.save_identity(vault_id, i)).await
+}
+
+/// Saves a NEW identity (the "new identity" form): an id already taken is
+/// `AlreadyExists`, and nothing is replaced.
+#[tauri::command]
+pub async fn create_identity(
+    vault_id: String,
+    identity: dto::Identity,
+    state: State<'_, AppState>,
+) -> ApiResult<()> {
+    let core = state.core.clone();
+    let i = identity.into();
+    blocking(move || core.create_identity(vault_id, i)).await
 }
 
 #[tauri::command]

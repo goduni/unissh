@@ -1123,7 +1123,7 @@ export const ru = {
       "noKeys": "нет ключей",
       "noKeysInVault": "В хранилище нет SSH-ключей. Создайте ключ в разделе «Секреты».",
       "addNewKey": "+ Новый ключ",
-      "keyNameTaken": "Ключ с таким именем уже есть",
+      "keyNameTaken": "Ключ или запись с таким именем уже есть",
       "newPasswordPlaceholder": "Новый пароль для этого хоста",
       "orSelectSaved": "…или выберите сохранённый:",
       "noPasswords": "нет паролей",

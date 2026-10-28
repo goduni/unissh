@@ -737,8 +737,8 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
     }
     setNewKeyBusy(true);
     try {
-      if (newKeyWillImport) await api.importSshKey(vault, name, newKeyImport.trim());
-      else await api.generateSshKey(vault, name);
+      if (newKeyWillImport) await api.createImportedSshKey(vault, name, newKeyImport.trim());
+      else await api.createSshKey(vault, name);
       await useApp.getState().reloadVault();
       setKeyId(name); // auto-select the freshly created key
       setShowNewKey(false);
@@ -1977,7 +1977,7 @@ function NewKeyModal({ onClose }: { onClose: () => void }) {
   const [passphrase, setPassphrase] = useState("");
   const [busy, setBusy] = useState(false);
 
-  // The core's generate_ssh_key always produces Ed25519. For other algorithms
+  // The core's create_ssh_key always produces Ed25519. For other algorithms
   // (or a key loaded from a file / pasted) we import the existing OpenSSH key.
   const canGenerate = algo === "ed25519";
   // Once a key is provided (pasted or loaded from a file) we import it regardless
@@ -2025,10 +2025,10 @@ function NewKeyModal({ onClose }: { onClose: () => void }) {
           setBusy(false);
           return;
         }
-        await api.importSshKey(vault, name.trim(), imported.trim(), passphrase.trim() || undefined);
+        await api.createImportedSshKey(vault, name.trim(), imported.trim(), passphrase.trim() || undefined);
         ctx.toast(t("modals.key.imported"), "ok");
       } else {
-        await api.generateSshKey(vault, name.trim());
+        await api.createSshKey(vault, name.trim());
         ctx.toast(t("modals.key.generated"), "ok");
       }
       await useApp.getState().reloadVault();

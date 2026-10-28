@@ -1084,7 +1084,7 @@ export const en = {
       "noKeys": "no keys",
       "noKeysInVault": "No SSH keys in this vault. Create a key in the “Secrets” section.",
       "addNewKey": "+ New key",
-      "keyNameTaken": "A key with this name already exists",
+      "keyNameTaken": "A key or item with this name already exists",
       "newPasswordPlaceholder": "New password for this host",
       "orSelectSaved": "…or pick a saved one:",
       "noPasswords": "no passwords",
