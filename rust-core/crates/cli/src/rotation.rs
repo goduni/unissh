@@ -77,6 +77,10 @@ pub enum RotationAction {
         /// Do not ask for confirmation.
         #[arg(long)]
         yes: bool,
+        /// With --yes: finish even though machines where the new key does not
+        /// log in would be locked out.
+        #[arg(long, requires = "yes")]
+        allow_lockout: bool,
     },
     /// List the rotations in progress.
     List {
@@ -109,7 +113,12 @@ pub fn rotation(device: &Device, offline: bool, action: RotationAction) -> Res<(
             hosts,
             json,
         } => run(&device.core, &vault, &name, &hosts, json),
-        RotationAction::Finish { name, vault, yes } => finish(device, offline, &vault, &name, yes),
+        RotationAction::Finish {
+            name,
+            vault,
+            yes,
+            allow_lockout,
+        } => finish(device, offline, &vault, &name, yes, allow_lockout),
         RotationAction::List { vault, json } => list(&device.core, &vault, json),
         RotationAction::Abandon { name, vault, yes } => {
             abandon(device, offline, &vault, &name, yes)
@@ -143,23 +152,26 @@ fn load_rotations(core: &Core, vault: &VaultArg) -> Res<Vec<Rotation>> {
     )
 }
 
-/// The rotation of key `name` (or of the candidate called `name`).
+/// The rotation of the key `name` names (or of the candidate it names), the
+/// key looked up as `begin` and every other key command look it up.
 fn find_rotation(core: &Core, vault: &VaultArg, name: &str) -> Res<Rotation> {
-    let mut matching: Vec<Rotation> = load_rotations(core, vault)?
+    let key = find_one::<Key>(core, vault, name)?;
+    let id = &key.info.item_id;
+    let link = core
+        .list_key_rotations(key.vault_id.clone())?
         .into_iter()
-        .filter(|r| r.link.key_id == name || r.link.candidate_id == name)
-        .collect();
-    match (matching.pop(), matching.is_empty()) {
-        (Some(one), true) => Ok(one),
-        (None, _) => Err(Failure::msg(format!(
-            "no rotation of \"{}\" is in progress (`unissh keys rotation list`)",
-            one_line(name)
-        ))),
-        (Some(_), false) => Err(Failure::msg(format!(
-            "\"{}\" is being rotated in several vaults; choose one with --vault",
-            one_line(name)
-        ))),
-    }
+        .find(|l| &l.key_id == id || &l.candidate_id == id)
+        .ok_or_else(|| {
+            Failure::msg(format!(
+                "no rotation of \"{}\" is in progress (`unissh keys rotation list`)",
+                one_line(id)
+            ))
+        })?;
+    Ok(Rotation {
+        vault_id: key.vault_id,
+        vault_name: key.vault_name,
+        link,
+    })
 }
 
 /// [`find_rotation`], for moving machines: only a rotation begun on this
@@ -223,18 +235,18 @@ fn abandon(device: &Device, offline: bool, vault: &VaultArg, name: &str, yes: bo
     let rotation = find_rotation(&device.core, vault, name)?;
     let link = &rotation.link;
     let (key, candidate) = (one_line(&link.key_id), one_line(&link.candidate_id));
-    let warning = if link.started_elsewhere {
-        format!(
-            "The candidate key \"{candidate}\" (started on another device) will be deleted.\n\
-             \"{key}\" is not changed.\n"
-        )
+    let elsewhere = if link.started_elsewhere {
+        " (started on another device)"
     } else {
-        format!(
-            "The candidate key \"{candidate}\" will be deleted. \"{key}\" is not changed.\n\
-             Any machine where the rotation already removed the old key accepts only\n\
-             \"{candidate}\": deleting it locks you out of that machine.\n"
-        )
+        ""
     };
+    // Said either way: a rotation run on another device may have removed the
+    // old key from machines just as well.
+    let warning = format!(
+        "The candidate key \"{candidate}\"{elsewhere} will be deleted. \"{key}\" is not changed.\n\
+         Any machine where the rotation already removed the old key accepts only\n\
+         \"{candidate}\": deleting it locks you out of that machine.\n"
+    );
     confirm(yes, &warning)?;
     stored(
         &rotation.vault_name,
@@ -256,12 +268,20 @@ fn begin(device: &Device, offline: bool, vault: &VaultArg, name: &str) -> Res<()
     let core = &device.core;
     let key = find_one::<Key>(core, vault, name)?;
     let id = key.info.item_id.clone();
+    // The plan first: a key no host logs in with has no machine to move.
+    let plan = core.plan_key_rotation(key.vault_id.clone(), id.clone())?;
+    if plan.targets.is_empty() {
+        return Err(Failure::msg(format!(
+            "no host logs in with \"{0}\", so no machine has to learn a new key; replace it at \
+             once with `unissh keys rotate \"{0}\"`",
+            one_line(&id)
+        )));
+    }
+    print!("{}", plan_text(&plan));
     let candidate = stored(
         &key.vault_name,
         core.begin_key_rotation(key.vault_id.clone(), id.clone()),
     )?;
-    let plan = core.plan_key_rotation(key.vault_id.clone(), id.clone())?;
-    print!("{}", plan_text(&plan));
     if key.info.has_certificate {
         eprintln!(
             "unissh: the certificate on \"{}\" certifies the old key; finishing removes it",
@@ -483,6 +503,99 @@ fn select(plan: &RotationPlan, names: &[String]) -> Res<Option<BTreeSet<String>>
     Ok(Some(chosen))
 }
 
+/// The host to connect to so that target `id` gets pinned: its own host, or
+/// for a hop the host it is a hop of.
+fn connect_host(plan: &RotationPlan, id: &str) -> String {
+    plan.target(id).map_or_else(
+        || id.to_owned(),
+        |t| {
+            t.via
+                .as_ref()
+                .or(t.profile.as_ref())
+                .map_or_else(|| t.label(), |h| h.label.clone())
+        },
+    )
+}
+
+/// The refusal for targets reached over a machine whose host key is not
+/// pinned yet (`Core::key_rotation_unpinned`): the commands that pin them.
+fn unpinned_refusal(plan: &RotationPlan, unpinned: &[String]) -> Failure {
+    let mut hosts: Vec<String> = Vec::new();
+    for id in unpinned {
+        let host = connect_host(plan, id);
+        if !hosts.contains(&host) {
+            hosts.push(host);
+        }
+    }
+    let commands: Vec<String> = hosts
+        .iter()
+        .map(|h| format!("`unissh ssh \"{}\"`", one_line(h)))
+        .collect();
+    Failure::msg(format!(
+        "{} machine(s) of this rotation have no pinned host key yet, and a rotation logs in \
+         with both keys only where the machine is known; connect once first: {}",
+        unpinned.len(),
+        commands.join(", ")
+    ))
+}
+
+/// Refuses to drive the targets `only` chooses (all for `None`) while one is
+/// reached over a machine whose host key is not pinned: the rotation would
+/// trust whatever answers there first. A changed host key fails the connect
+/// as always.
+fn refuse_unpinned(core: &Core, plan: &RotationPlan, only: Option<&BTreeSet<String>>) -> Res<()> {
+    let unpinned: Vec<String> = core
+        .key_rotation_unpinned(plan)?
+        .into_iter()
+        .filter(|id| only.is_none_or(|o| o.contains(id)))
+        .collect();
+    if unpinned.is_empty() {
+        Ok(())
+    } else {
+        Err(unpinned_refusal(plan, &unpinned))
+    }
+}
+
+/// The labels of targets `ids`, each followed by the hosts that hop through
+/// it; every name once.
+fn with_followers<'a>(
+    plan: &RotationPlan,
+    ids: impl IntoIterator<Item = &'a String>,
+) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for id in ids {
+        let label = plan
+            .target(id)
+            .map_or_else(|| id.clone(), RotationTarget::label);
+        let deps = plan.dependents_of(id).into_iter().map(|h| h.label.clone());
+        for name in std::iter::once(label).chain(deps) {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    names
+}
+
+/// The targets whose old key line the run has removed: they refuse the key
+/// item's current key from then on.
+fn old_key_removed(run: &RotationRun) -> Vec<String> {
+    run.states()
+        .filter(|(_, s)| {
+            matches!(
+                s,
+                TargetState::Switched
+                    | TargetState::Unconfirmed
+                    | TargetState::Failed {
+                        step: RotationStep::Confirm,
+                        ..
+                    }
+            )
+        })
+        .map(|(id, _)| id.to_owned())
+        .collect()
+}
+
 /// Drives `driver` to the end with up to the fleet's parallelism, printing a
 /// line as each step lands (unless `quiet`). Ctrl-C or SIGTERM noted in
 /// `signal` stops it: nothing new starts, steps in flight still land.
@@ -519,11 +632,7 @@ fn run(core: &Core, vault: &VaultArg, name: &str, names: &[String], json: bool) 
     let rotation = own_rotation(core, vault, name)?;
     let (vault_id, link) = (&rotation.vault_id, &rotation.link);
     let key = one_line(&link.key_id);
-    let keys = core.key_rotation_keys(
-        vault_id.clone(),
-        link.key_id.clone(),
-        link.candidate_id.clone(),
-    )?;
+    let keys = core.key_rotation_keys(vault_id.clone(), link.key_id.clone())?;
     if keys.committed() {
         return Err(Failure::msg(format!(
             "\"{key}\" already holds the new key: an earlier finish was interrupted; complete it \
@@ -531,14 +640,22 @@ fn run(core: &Core, vault: &VaultArg, name: &str, names: &[String], json: bool) 
         )));
     }
     let plan = core.plan_key_rotation(vault_id.clone(), link.key_id.clone())?;
+    if plan.targets.is_empty() {
+        eprintln!(
+            "unissh: no host logs in with \"{key}\": there is nothing to deploy; \
+             `unissh keys rotation finish \"{key}\"` makes the new key current"
+        );
+        return Ok(());
+    }
     let scope = RunScope {
         first: RotationStep::Deploy,
         last: RotationStep::Verify,
         only: select(&plan, names)?,
     };
+    refuse_unpinned(core, &plan, scope.only.as_ref())?;
     // Begun by `unissh keys rotation begin` (or the app) before this run: a
     // machine an earlier run got to is tried with the new key first.
-    let driver = RotationDriver::new(plan, keys, link.candidate_id.clone(), true, &scope);
+    let driver = RotationDriver::new(plan, keys, true, &scope);
     let signal = Arc::new(AtomicU8::new(0));
     signals::watch(signals::STOP, &signal)?;
     let result = drive(core, &driver, json, &signal);
@@ -571,24 +688,15 @@ fn run(core: &Core, vault: &VaultArg, name: &str, names: &[String], json: bool) 
 /// The confirmation a finish asks, from the verify pass just made.
 fn finish_warning(plan: &RotationPlan, run: &RotationRun, key: &str, candidate: &str) -> String {
     let mut text = String::new();
-    let unproven = run.finish_outlook(plan).unproven;
-    if !unproven.is_empty() {
-        // Each machine, then the hosts that hop through it; every name once.
-        let mut names: Vec<String> = Vec::new();
-        for id in &unproven {
-            let label = plan
-                .target(id)
-                .map_or_else(|| id.clone(), RotationTarget::label);
-            let deps = plan.dependents_of(id).into_iter().map(|h| h.label.clone());
-            for name in std::iter::once(label).chain(deps) {
-                if !names.contains(&name) {
-                    names.push(name);
-                }
-            }
-        }
+    let outlook = run.finish_outlook(plan);
+    // The machines the new key does not log in on, and those reached only
+    // through one of them; each followed by the hosts that hop through it.
+    let names = with_followers(plan, outlook.locked_out());
+    if !names.is_empty() {
         text.push_str(&format!(
-            "Not switched: {}. They refuse the key once you finish and stay locked out until the \
-             new public key is installed on them some other way.\n",
+            "Locked out once you finish: {}. The new key does not log in there yet (or not on a \
+             jump host in front of them), and they stay locked out until the new public key is \
+             installed on them some other way.\n",
             one_line(&names.join(", "))
         ));
     }
@@ -603,16 +711,19 @@ fn finish_warning(plan: &RotationPlan, run: &RotationRun, key: &str, candidate: 
 }
 
 /// `unissh keys rotation finish`.
-fn finish(device: &Device, offline: bool, vault: &VaultArg, name: &str, yes: bool) -> Res<()> {
+fn finish(
+    device: &Device,
+    offline: bool,
+    vault: &VaultArg,
+    name: &str,
+    yes: bool,
+    allow_lockout: bool,
+) -> Res<()> {
     let core = &device.core;
     let rotation = own_rotation(core, vault, name)?;
     let (vault_id, link) = (&rotation.vault_id, &rotation.link);
     let (key, candidate) = (one_line(&link.key_id), one_line(&link.candidate_id));
-    let keys = core.key_rotation_keys(
-        vault_id.clone(),
-        link.key_id.clone(),
-        link.candidate_id.clone(),
-    )?;
+    let keys = core.key_rotation_keys(vault_id.clone(), link.key_id.clone())?;
     let signal = Arc::new(AtomicU8::new(0));
     let driver = if keys.committed() {
         confirm(
@@ -628,18 +739,29 @@ fn finish(device: &Device, offline: bool, vault: &VaultArg, name: &str, yes: boo
         // Prove the candidate on every machine first, removing nothing: the
         // confirmation has to say which machines a finish locks out.
         let plan = core.plan_key_rotation(vault_id.clone(), link.key_id.clone())?;
+        refuse_unpinned(core, &plan, None)?;
         let scope = RunScope {
             first: RotationStep::Verify,
             last: RotationStep::Verify,
             only: None,
         };
-        let driver = RotationDriver::new(plan, keys, link.candidate_id.clone(), true, &scope);
+        let driver = RotationDriver::new(plan, keys, true, &scope);
         signals::watch(signals::STOP, &signal)?;
         let verified = drive(core, &driver, false, &signal);
         if signal.load(Ordering::SeqCst) != 0 {
             return Err(Failure::msg("stopped: nothing was removed or changed"));
         }
         print!("{}", results_text(driver.plan(), &verified));
+        let outlook = verified.finish_outlook(driver.plan());
+        if yes && !allow_lockout && outlook.locked_out().next().is_some() {
+            let names = with_followers(driver.plan(), outlook.locked_out());
+            return Err(Failure::msg(format!(
+                "finishing now locks you out of {}; nothing was removed or changed. Get the new \
+                 key onto them (`unissh keys rotation run \"{key}\"`) and finish again, or add \
+                 --allow-lockout to finish anyway",
+                one_line(&names.join(", "))
+            )));
+        }
         confirm(
             yes,
             &finish_warning(driver.plan(), &verified, &key, &candidate),
@@ -649,31 +771,48 @@ fn finish(device: &Device, offline: bool, vault: &VaultArg, name: &str, yes: boo
         }
         Some(driver)
     };
+    let mut left = Vec::new();
     if let Some(driver) = &driver {
         driver.extend_to(RotationStep::Confirm);
         let done = drive(core, driver, false, &signal);
         let plan = driver.plan();
         print!("{}", results_text(plan, &done));
         if signal.load(Ordering::SeqCst) != 0 {
+            let removed = old_key_removed(&done);
+            let refusing = if removed.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "; these no longer take the current key of \"{key}\", only the new one: {}",
+                    one_line(&with_followers(plan, &removed).join(", "))
+                )
+            };
             return Err(Failure::msg(format!(
-                "stopped before \"{key}\" took the new key: run `unissh keys rotation finish \
-                 \"{key}\"` again"
+                "stopped before \"{key}\" took the new key{refusing}. Run `unissh keys rotation \
+                 finish \"{key}\"` again"
             )));
         }
-        let still_old = done.finish_outlook(plan).old_not_refused;
-        if !still_old.is_empty() {
-            eprintln!(
-                "unissh: the new key logs in on these, but the old key was not seen refused: {}",
-                one_line(
-                    &still_old
-                        .iter()
-                        .map(|id| plan
-                            .target(id)
-                            .map_or_else(|| id.clone(), RotationTarget::label))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-            );
+        let outlook = done.finish_outlook(plan);
+        let locked = with_followers(plan, outlook.locked_out());
+        if !locked.is_empty() {
+            left.push(format!(
+                "locked out until the new public key is installed there some other way: {}",
+                one_line(&locked.join(", "))
+            ));
+        }
+        if !outlook.old_not_refused.is_empty() {
+            let names: Vec<String> = outlook
+                .old_not_refused
+                .iter()
+                .map(|id| {
+                    plan.target(id)
+                        .map_or_else(|| id.clone(), RotationTarget::label)
+                })
+                .collect();
+            left.push(format!(
+                "the new key logs in, but the old key was not seen refused: {}",
+                one_line(&names.join(", "))
+            ));
         }
     }
     stored(
@@ -689,7 +828,15 @@ fn finish(device: &Device, offline: bool, vault: &VaultArg, name: &str, yes: boo
         vault_id,
         offline,
         &format!("Finished the rotation of {key}"),
-    )
+    )?;
+    if left.is_empty() {
+        Ok(())
+    } else {
+        Err(Failure::msg(format!(
+            "\"{key}\" now holds the new key, but not every machine is done; {}",
+            left.join("; ")
+        )))
+    }
 }
 
 #[cfg(test)]
@@ -800,8 +947,55 @@ mod tests {
         );
         assert_eq!(
             (in_flight, progress_line(&p, web, &run)),
-            (None, Some(one_line("web: deploy failed: denied\x1b[2J"))),
+            (None, Some("web: deploy failed: denied[2J".to_owned())),
             "the remote's words, without terminal control"
+        );
+    }
+
+    #[test]
+    fn the_finish_warning_names_each_machine_it_locks_out_and_the_hosts_behind_it() {
+        let p = plan();
+        let scope = RunScope {
+            first: RotationStep::Verify,
+            last: RotationStep::Verify,
+            only: None,
+        };
+        let mut run = RotationRun::start(&p, &scope);
+        for (id, outcome) in [
+            ("root@web.example:22", Ok(())),
+            (
+                "ops@jump.example:2222",
+                Err(unissh_ffi::key_rotation_plan::StepFailure::TimedOut),
+            ),
+        ] {
+            run.begin_step(id);
+            run.record_step(id, RotationStep::Verify, outcome);
+        }
+        let warning = finish_warning(&p, &run, "k", "k (rotation)");
+        assert_eq!(
+            warning.lines().next(),
+            Some(
+                "Locked out once you finish: ops@jump.example:2222, db. The new key does not log \
+                 in there yet (or not on a jump host in front of them), and they stay locked out \
+                 until the new public key is installed on them some other way."
+            ),
+            "the hop, then db that hops through it"
+        );
+    }
+
+    #[test]
+    fn an_unpinned_machine_is_refused_with_the_host_to_connect_to_first() {
+        let p = plan();
+        let unpinned = [
+            "root@web.example:22".to_owned(),
+            "ops@jump.example:2222".to_owned(),
+        ];
+        assert_eq!(
+            unpinned_refusal(&p, &unpinned).message,
+            "2 machine(s) of this rotation have no pinned host key yet, and a rotation logs in \
+             with both keys only where the machine is known; connect once first: \
+             `unissh ssh \"web\"`, `unissh ssh \"db\"`",
+            "a hop is pinned through the host it is a hop of"
         );
     }
 }
