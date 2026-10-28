@@ -62,6 +62,7 @@ pub mod automation;
 pub mod automation_recording;
 mod key_rotation;
 mod password_fill;
+mod shared_vault;
 pub mod snippet_params;
 mod ssh_include;
 mod system_agent;
@@ -71,6 +72,7 @@ use approvals::{Approvals, Asker, Connection};
 pub use key_rotation::KeyRotationLink;
 use password_fill::FillGuard;
 pub use password_fill::{FillEvent, FillPromptKind, PasswordFillMode};
+pub use shared_vault::{FfiVaultTrust, SharedVaultInfo, VaultPage};
 pub use system_agent::{SharedAgentKey, SystemAgent};
 pub use unissh_ssh_transport::AgentCaller;
 
@@ -2242,6 +2244,46 @@ impl Core {
             }
             pin_and_verify_vault_anchor(&state.storage, &vid, &ed).map_err(map_vault_err)
         })
+    }
+
+    /// **Inspects a vault shared with this account** before its owner is
+    /// trusted (share-accept, A0). `objects` are the vault's raw delta blobs as
+    /// the server serves them (`GET /v1/sync/delta?vault=<id>`); only its
+    /// membership manifests and grants are read. The whole manifest chain is
+    /// verified in memory against the genesis author as the candidate owner,
+    /// and the latest epoch must hold a grant this account can open.
+    ///
+    /// Returns the candidate owner's key and fingerprint for the user to
+    /// compare with the owner out of band — never trusted on the server's
+    /// word — and this account's role. Writes nothing: trusting is
+    /// [`Core::pin_vault_genesis_owner`] with `owner_ed25519_hex`, then a
+    /// targeted pull of the vault (the earlier rejection moved the pull
+    /// cursor past its objects). Refused for a vault this account created,
+    /// a broken chain, or no grant. Requires unlock.
+    pub fn inspect_shared_vault(
+        &self,
+        vault_id: String,
+        objects: Vec<Vec<u8>>,
+    ) -> Result<SharedVaultInfo, FfiError> {
+        shared_vault::inspect_objects(self, &vault_id, objects)
+    }
+
+    /// This account's own fingerprint (`member_fingerprint` of its Ed25519
+    /// key): what a teammate compares before trusting a vault this account
+    /// shared with them. Unlocked, from the keyset in memory; locked, from
+    /// the public half of the keyset file, so it can be shown without the
+    /// master password. Not a secret.
+    pub fn own_fingerprint(&self) -> Result<String, FfiError> {
+        let unlocked = self
+            .locked_state()
+            .as_ref()
+            .map(|state| member_fingerprint(&state.keyset.signing.verifying.to_bytes()));
+        if let Some(fingerprint) = unlocked {
+            return Ok(fingerprint);
+        }
+        let bytes = std::fs::read(&self.keyset_path).map_err(FfiError::other)?;
+        let enc = EncryptedKeyset::from_bytes(&bytes).map_err(map_keychain_err)?;
+        Ok(member_fingerprint(&enc.ed25519_public))
     }
 
     /// Assigns the account's PERSONAL vault (A3.2): the pointer is stored in per-account

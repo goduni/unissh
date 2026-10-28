@@ -12,7 +12,7 @@ use std::sync::{Mutex, PoisonError};
 use reqwest::blocking::{RequestBuilder, Response};
 use reqwest::StatusCode;
 use serde_json::{json, Value};
-use unissh_ffi::{FfiError, FfiSyncTransport, SyncDeltaItem};
+use unissh_ffi::{Core, FfiError, FfiSyncReport, FfiSyncTransport, SharedVaultInfo, SyncDeltaItem};
 
 use crate::client::{self, Reauth};
 
@@ -174,6 +174,36 @@ impl HttpSyncTransport {
             .filter_map(|obj_b64| client::unb64(obj_b64).ok())
             .collect();
         (objects, next_page(&v, cursor))
+    }
+
+    /// **Pulls ONE vault** (by hex id) onto this device: its objects page by
+    /// page through the core's verify-before-apply, born-bound to `tenant_b64`,
+    /// WITHOUT moving the pull cursor (see [`Core::pull_vault_paged`]). The
+    /// recovery for a vault an earlier sync rejected — a teammate's vault
+    /// before its owner was pinned — and the app's "Pull from server".
+    pub fn pull_vault(
+        &self,
+        core: &Core,
+        tenant_b64: &str,
+        vault_id_hex: &str,
+    ) -> Result<FfiSyncReport, FfiError> {
+        core.pull_vault_paged(tenant_b64, |cursor| {
+            self.vault_delta_page(vault_id_hex, cursor)
+        })
+    }
+
+    /// Inspects a vault shared with this account before its owner is trusted
+    /// (see [`Core::inspect_shared_vault`]): the vault's objects are read page
+    /// by page and only its membership is kept. `Ok(None)`: this account
+    /// created the vault and it needs no trust. Writes nothing.
+    pub fn inspect_vault(
+        &self,
+        core: &Core,
+        vault_id_hex: &str,
+    ) -> Result<Option<SharedVaultInfo>, FfiError> {
+        core.inspect_shared_vault_paged(vault_id_hex, |cursor| {
+            self.vault_delta_page(vault_id_hex, cursor)
+        })
     }
 }
 
