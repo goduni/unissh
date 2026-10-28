@@ -13,9 +13,8 @@ use std::time::{Duration, UNIX_EPOCH};
 use clap::{Args, Subcommand};
 use serde_json::{json, Value};
 use unissh_ffi::{
-    AuthMethod, Core, FfiError, Identity, ItemInfo, KeyRotationLink, ProfileAuth, ProxyPassword,
-    VaultInfo, ITEM_TYPE_IDENTITY as IDENTITY, ITEM_TYPE_NOTE as NOTE,
-    ITEM_TYPE_PASSWORD as PASSWORD, ITEM_TYPE_SSH_KEY as SSH_KEY,
+    Core, FfiError, Identity, ItemInfo, KeyRotationLink, VaultInfo, ITEM_TYPE_IDENTITY as IDENTITY,
+    ITEM_TYPE_NOTE as NOTE, ITEM_TYPE_PASSWORD as PASSWORD, ITEM_TYPE_SSH_KEY as SSH_KEY,
 };
 use zeroize::Zeroizing;
 
@@ -516,7 +515,9 @@ fn remove<S>(device: &Device, offline: bool, entry: &Entry<S>, yes: bool) -> Res
             ));
         }
     } else {
-        let uses = uses_of(core, vault_id, id)?;
+        // The core's one answer (#169): hosts by login, inline or referenced
+        // hop and proxy, plus identities.
+        let uses = core.key_usage(vault_id.clone(), id.clone())?.count();
         if uses > 0 {
             warning.push_str(&format!(
                 "It is used by {uses} host(s) or identities. Deleting it will break their login.\n"
@@ -540,48 +541,6 @@ fn remove<S>(device: &Device, offline: bool, entry: &Entry<S>, yes: bool) -> Res
             one_line(id)
         ),
     )
-}
-
-/// How many hosts (their login, a jump hop, a proxy) and identities in the
-/// vault refer to the key or password `id`.
-fn uses_of(core: &Core, vault_id: &str, id: &str) -> Res<usize> {
-    let refers = |auth: &AuthMethod| match auth {
-        AuthMethod::Agent { key_item_id, .. } => key_item_id == id,
-        AuthMethod::VaultPassword {
-            password_item_id, ..
-        } => password_item_id == id,
-        AuthMethod::Password { .. } | AuthMethod::SystemAgent { .. } => false,
-    };
-    let hosts = core
-        .list_connections(vault_id.to_owned())?
-        .into_iter()
-        .filter(|p| {
-            let own = match &p.auth {
-                ProfileAuth::Key { key_item_id } => key_item_id == id,
-                ProfileAuth::VaultPassword { password_item_id } => password_item_id == id,
-                ProfileAuth::PromptPassword
-                | ProfileAuth::SystemAgent { .. }
-                | ProfileAuth::Personal => false,
-            };
-            let hop = p
-                .jumps
-                .iter()
-                .any(|j| j.hop_ref.is_none() && refers(&j.auth));
-            let proxy = p.proxy.as_ref().is_some_and(|x| {
-                matches!(&x.password, Some(ProxyPassword::Vault { password_item_id, .. })
-                    if password_item_id == id)
-            });
-            own || hop || proxy
-        })
-        .count();
-    let identities = core
-        .list_identities(vault_id.to_owned())?
-        .into_iter()
-        .filter(|i| {
-            i.key_item_id.as_deref() == Some(id) || i.password_item_id.as_deref() == Some(id)
-        })
-        .count();
-    Ok(hosts.saturating_add(identities))
 }
 
 // ---------- unissh keys ----------
