@@ -168,6 +168,15 @@ starts with `0.`:
 
 ### Fixed
 
+- A teammate could never receive a vault shared with them, in the app or the
+  CLI: their device rejected it, because it did not know the vault's owner and
+  nothing let them say who that was. Now they confirm the owner's fingerprint
+  once: `unissh sync` names each shared vault that waits, with its owner's
+  fingerprint, `unissh vaults list` lists them, and `unissh vaults trust <id>`
+  asks for the fingerprint the owner gave them (each account's own is in
+  `unissh status`), then fetches the vault. The server is never trusted to say
+  who the owner is. The app's screen for it follows; the core and the app's
+  "Pull from server" now share one single-vault pull.
 - The admin panel's sign-in says that the password is optional: it is the
   account's master password from the UniSSH app (or the one set when the
   instance was set up); an account without one signs in with it empty.

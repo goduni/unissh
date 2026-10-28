@@ -129,6 +129,22 @@ was; uploads are written in place, as `scp` does.
 Nothing that could resume a server session is stored. Each command that needs
 the server signs in with the unlocked keys and signs out when done.
 
+## Vaults a teammate shares
+
+A vault a teammate shares with you arrives once you trust its owner, and only you
+can say who that is: the server is never trusted to. `unissh sync` names each
+shared vault that waits, with its owner's fingerprint:
+
+```bash
+unissh vaults list                # the vaults here, and shared ones waiting
+unissh vaults trust 3f2a9c1e      # shows the owner's fingerprint, asks you to confirm it
+```
+
+Ask the owner for their fingerprint over a channel you trust; they find it in
+`unissh status` or in the app. Paste it, or type `yes` after comparing it digit by
+digit. The name the server gives the owner is shown as unverified. Once trusted,
+the vault is fetched, and a server that later names another owner is refused.
+
 ## Sign out
 
 ```bash

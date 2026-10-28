@@ -13,8 +13,11 @@ use crate::failure::{Failure, Res};
 use crate::home::{Home, Link, Origin};
 use crate::server;
 use crate::tty::{confirm, one_line};
+use crate::vaults::grouped;
 
-/// `unissh status`: what this machine is signed in to. Needs no unlock.
+/// `unissh status`: what this machine is signed in to, and this account's
+/// fingerprint (what teammates compare before trusting a vault it shares).
+/// Needs no unlock.
 pub fn status(home: &Home) -> Res<()> {
     let Some(link) = home.link()? else {
         if home.has_instance() {
@@ -43,10 +46,16 @@ pub fn status(home: &Home) -> Res<()> {
     } else {
         "asked at every unlock"
     };
+    let fingerprint = core.own_fingerprint().map_or_else(
+        |_| "unknown (the keyset cannot be read)".to_owned(),
+        |f| grouped(&f),
+    );
     let synced = home.last_sync().map_or_else(|| "never".to_owned(), ago);
     println!("Server:          {}", link.base_url);
     println!("Account:         {account} ({origin})");
     println!("This device:     {}", link.device_id);
+    // What a teammate compares before trusting a vault this account shares.
+    println!("Fingerprint:     {fingerprint}");
     println!("Master password: {password}");
     println!("Secret Key:      {key_storage}");
     println!("Last sync:       {synced}");

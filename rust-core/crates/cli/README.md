@@ -67,6 +67,7 @@ unissh snippets run restart web db --set service=nginx
 unissh known-hosts list|trust|forget
 unissh recordings list|play|export|rm   # see Recordings below
 unissh hosts add|edit|rm, groups, secrets, keys, identities, snippets add   # see Editing the vaults
+unissh vaults list | trust <id>  # trust a teammate's shared vault (see Shared vaults)
 unissh sync | status | logout
 unissh mcp                     # an MCP server for a local AI agent (see below)
 ```
@@ -142,6 +143,28 @@ the ones already open. The tunnels stay up until Ctrl-C or SIGTERM, then close
 cleanly; a second Ctrl-C while they close quits at once (status 130). A hang-up
 ends the process as usual, without the clean close, and under `nohup` the tunnels
 stay up. A connection that drops is not reopened.
+
+### Shared vaults
+
+A vault a teammate shares with this account is verified against its owner's key,
+and this machine learns that key only from you: the server is never trusted to say
+who owns a vault. Until you trust the owner, the vault stays on the server, and
+`unissh sync` names it with the owner's fingerprint:
+
+```bash
+unissh vaults list                 # the vaults here, and shared ones waiting for trust
+unissh vaults trust 3f2a9c1e       # by id or the start of it
+unissh vaults trust 3f2a9c1e --fingerprint "1a2b 3c4d …"   # the fingerprint the owner gave you
+```
+
+`trust` shows the owner's fingerprint, as the vault's signed membership proves it,
+and the name the server's directory gives that key, marked unverified. Ask the owner
+for their fingerprint over a channel you trust (they find it in `unissh status`, or
+in the app), then paste or type it, or type `yes` once you have compared it digit by
+digit. Anything else, Enter included, trusts nothing. A fingerprint that does not
+match stops with a warning: someone may be posing as the owner. Once trusted, the
+owner is pinned on this machine for good and the vault is fetched; a server that
+later names a different owner for it is refused.
 
 ### Recordings
 

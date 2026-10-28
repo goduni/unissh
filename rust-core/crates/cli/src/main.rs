@@ -39,6 +39,7 @@ mod system_lock;
 mod tree;
 mod tty;
 mod tunnel;
+mod vaults;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -173,6 +174,10 @@ enum Command {
     /// The host keys this machine has pinned.
     #[command(subcommand, name = "known-hosts")]
     KnownHosts(KnownHosts),
+    /// The vaults on this machine; trust the owner of a vault a teammate
+    /// shared, after comparing fingerprints.
+    #[command(subcommand)]
+    Vaults(vaults::VaultsAction),
     /// Host groups: list, add, change or delete them.
     #[command(subcommand)]
     Groups(GroupsAction),
@@ -444,6 +449,7 @@ fn run(cli: Cli) -> Res<u8> {
             let report = server::sync(&device)?;
             println!("{}", server::summary(&report));
             server::warn_about(&report);
+            vaults::name_pending(&device);
             Ok(0)
         }
         Command::Hosts {
@@ -518,6 +524,11 @@ fn run(cli: Cli) -> Res<u8> {
                 KnownHosts::Forget { host } => KnownHostsAction::Forget { host },
             };
             manage::known_hosts(&device.core, action)?;
+            Ok(0)
+        }
+        Command::Vaults(action) => {
+            let device = unlocked(home, &credentials)?;
+            vaults::run(&device, offline, action)?;
             Ok(0)
         }
         Command::Groups(action) => edit(home, &credentials, offline, |d| {
