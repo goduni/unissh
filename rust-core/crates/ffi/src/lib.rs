@@ -60,7 +60,9 @@ use unissh_vault::{
 mod approvals;
 pub mod automation;
 pub mod automation_recording;
+mod item_ids;
 mod key_rotation;
+mod key_usage;
 mod password_fill;
 mod shared_vault;
 pub mod snippet_params;
@@ -69,7 +71,9 @@ mod system_agent;
 mod terminal_workspace;
 
 use approvals::{Approvals, Asker, Connection};
+use item_ids::{mint_item_id, refuse_taken};
 pub use key_rotation::KeyRotationLink;
+pub use key_usage::{HostKeyUse, IdentityKeyUse, KeyUsage, KeyUseRole};
 use password_fill::FillGuard;
 pub use password_fill::{FillEvent, FillPromptKind, PasswordFillMode};
 pub use shared_vault::{
@@ -220,9 +224,19 @@ pub enum FfiError {
     /// Object not found.
     #[error("not found")]
     NotFound,
-    /// An instance already exists at this path (guards against overwriting the keyset/DB).
-    #[error("instance already exists")]
+    /// Something already holds the name or id: an instance at this path
+    /// (guards against overwriting the keyset/DB), a vault, or a live item a
+    /// create-only write (`create_ssh_key`, `create_imported_ssh_key`,
+    /// `create_identity`) or a write of another item type would replace.
+    #[error("already exists")]
     AlreadyExists,
+    /// The private key is encrypted and no passphrase was given: ask for it
+    /// and import again.
+    #[error("the private key is passphrase-protected; a passphrase is required")]
+    PassphraseRequired,
+    /// The passphrase given for an encrypted private key is not its passphrase.
+    #[error("incorrect passphrase for the private key")]
+    WrongPassphrase,
     /// The vault is already a cloud vault, so an operation that applies only to a
     /// local vault (the local-to-cloud conversion) does not apply to it.
     #[error("vault is already a cloud vault")]
@@ -3546,26 +3560,30 @@ impl Core {
 
     /// Generates an Ed25519 SSH key **in the core**, stores the private key encrypted in
     /// the vault and returns the **public** key (OpenSSH). The private key is not handed out.
+    ///
+    /// Creates the key or REPLACES the material of the key already at `item_id`
+    /// (`AlreadyExists` only for a live item of another type). To make a new key
+    /// without ever replacing one, use [`Self::create_ssh_key`].
     pub fn generate_ssh_key(&self, vault_id: String, item_id: String) -> Result<String, FfiError> {
-        self.with_state_mut(|state| {
-            let vault = Vault::open(
-                &state.storage,
-                &state.keyset,
-                &resolve_vid(&state.storage, &vault_id),
-            )
-            .map_err(FfiError::other)?;
-            let public = store_new_ssh_key(&state.storage, &vault, &vault_id, &item_id)?;
-            // The key material was replaced under the same id → unload the previous private key from
-            // the agent (namespaced), otherwise whatever signs straight from the agent by id — a
-            // forwarded agent in a live session — keeps signing with the OLD key. (A connect
-            // reloads the key from the item anyway, see load_key_into_agent.)
-            state.agent.remove(&agent_key_id(&vault_id, &item_id));
-            Ok(public)
-        })
+        self.store_generated_key(&vault_id, &item_id, false)
+    }
+
+    /// Generates a NEW Ed25519 SSH key, like [`Self::generate_ssh_key`], but
+    /// never replaces anything: [`FfiError::AlreadyExists`] when a live item of
+    /// any type already holds `item_id` (checked under the same lock as the
+    /// write, so no pull lands in between). The create path of the app and the
+    /// CLI.
+    pub fn create_ssh_key(&self, vault_id: String, item_id: String) -> Result<String, FfiError> {
+        self.store_generated_key(&vault_id, &item_id, true)
     }
 
     /// Imports an existing OpenSSH private key into the vault. Returns the public
     /// key. (Private-key input from the UI is allowed; it is not handed back.)
+    ///
+    /// An encrypted key without `passphrase` is [`FfiError::PassphraseRequired`]
+    /// (ask for it and call again), a wrong one [`FfiError::WrongPassphrase`].
+    /// Creates the key or REPLACES the material of the key already at `item_id`;
+    /// [`Self::create_imported_ssh_key`] is the create-only twin.
     pub fn import_ssh_key(
         &self,
         vault_id: String,
@@ -3573,51 +3591,33 @@ impl Core {
         openssh_private: String,
         passphrase: Option<String>,
     ) -> Result<String, FfiError> {
-        // We keep the private key and password in Zeroizing — zeroized on exit.
-        let openssh_private = Zeroizing::new(openssh_private);
-        let passphrase = passphrase.map(Zeroizing::new);
-        self.with_state_mut(|state| {
-            // We accept not only the OpenSSH container but also classic PEM
-            // (PKCS#1 `BEGIN RSA PRIVATE KEY`, SEC1 `BEGIN EC PRIVATE KEY`,
-            // PKCS#8 `BEGIN PRIVATE KEY`, including password-encrypted ones): we normalize to
-            // a canonical OpenSSH private key. Without a password for an encrypted key
-            // an `Encrypted` error is returned — the UI will prompt for a password and retry.
-            let normalized = unissh_ssh_agent::normalize_private_key_with_passphrase(
-                &openssh_private,
-                passphrase.as_deref().map(String::as_str),
-            )
-            .map_err(FfiError::ssh)?;
-            // validate and extract the public key via a temporary agent
-            let mut tmp = InMemoryAgent::new();
-            tmp.add_from_openssh(b"tmp".to_vec(), normalized.as_bytes())
-                .map_err(FfiError::ssh)?;
-            let public = tmp
-                .public_key(b"tmp")
-                .ok_or_else(|| FfiError::ssh("no public key"))?
-                .to_openssh()
-                .map_err(FfiError::ssh)?;
-            ensure_item_type(
-                &state.storage,
-                &vault_id,
-                item_id.as_bytes(),
-                ITEM_TYPE_SSH_KEY,
-            )?;
-            let vault = Vault::open(
-                &state.storage,
-                &state.keyset,
-                &resolve_vid(&state.storage, &vault_id),
-            )
-            .map_err(FfiError::other)?;
-            vault
-                .put_item(item_id.as_bytes(), ITEM_TYPE_SSH_KEY, normalized.as_bytes())
-                .map_err(map_vault_err)?;
-            // The key material was replaced under the same id → unload the previous private key from
-            // the agent (namespaced), otherwise whatever signs straight from the agent by id — a
-            // forwarded agent in a live session — keeps signing with the OLD key. (A connect
-            // reloads the key from the item anyway, see load_key_into_agent.)
-            state.agent.remove(&agent_key_id(&vault_id, &item_id));
-            Ok(public)
-        })
+        self.store_imported_key(&vault_id, &item_id, openssh_private, passphrase, false)
+    }
+
+    /// Imports a private key as a NEW key, like [`Self::import_ssh_key`], but
+    /// never replaces anything: [`FfiError::AlreadyExists`] when a live item of
+    /// any type already holds `item_id`.
+    pub fn create_imported_ssh_key(
+        &self,
+        vault_id: String,
+        item_id: String,
+        openssh_private: String,
+        passphrase: Option<String>,
+    ) -> Result<String, FfiError> {
+        self.store_imported_key(&vault_id, &item_id, openssh_private, passphrase, true)
+    }
+
+    /// A fresh item id in `vault_id` for a new item labelled `label`, for an
+    /// item whose save takes the id from the caller (such as a password stored
+    /// for a new host): `slug(label)-<millis>`, stepped past any id the vault
+    /// already has. Hosts, groups and snippets need no call: saved with an
+    /// empty id, they get one the same way.
+    ///
+    /// Interim: the id is minted here and written by a later call
+    /// (`save_password`), outside this lock, so it is not reserved in between.
+    /// It goes once saving a host creates the host's password item itself.
+    pub fn new_item_id(&self, vault_id: String, label: String) -> Result<String, FfiError> {
+        self.with_state(|state| mint_item_id(&state.storage, &vault_id, &label, "item"))
     }
 
     /// Attaches an OpenSSH user certificate to the key `key_item_id` (stored as
@@ -4570,18 +4570,24 @@ impl Core {
     /// carries hostnames, ticket ids and the occasional token, and keeping a
     /// library of them in plaintext beside an encrypted vault would be an odd
     /// place to stop.
-    pub fn save_snippet(&self, vault_id: String, snippet: Snippet) -> Result<(), FfiError> {
-        if snippet.snippet_id.is_empty() {
-            return Err(FfiError::other("snippet_id must not be empty"));
-        }
+    ///
+    /// An empty `snippet_id` saves a NEW snippet under an id the core mints
+    /// from its label (`slug(label)-<millis>`, see `item_ids`). Returns the
+    /// snippet's id.
+    pub fn save_snippet(&self, vault_id: String, snippet: Snippet) -> Result<String, FfiError> {
         if snippet.command.is_empty() {
             return Err(FfiError::other("a snippet with no command is not useful"));
         }
         self.with_state_mut(|state| {
+            let snippet_id = if snippet.snippet_id.is_empty() {
+                mint_item_id(&state.storage, &vault_id, &snippet.label, "snippet")?
+            } else {
+                snippet.snippet_id
+            };
             ensure_item_type(
                 &state.storage,
                 &vault_id,
-                snippet.snippet_id.as_bytes(),
+                snippet_id.as_bytes(),
                 ITEM_TYPE_SNIPPET,
             )?;
             let stored = StoredSnippet {
@@ -4598,9 +4604,9 @@ impl Core {
             )
             .map_err(FfiError::other)?;
             vault
-                .put_item(snippet.snippet_id.as_bytes(), ITEM_TYPE_SNIPPET, &json)
+                .put_item(snippet_id.as_bytes(), ITEM_TYPE_SNIPPET, &json)
                 .map_err(map_vault_err)?;
-            Ok(())
+            Ok(snippet_id)
         })
     }
 
@@ -4782,25 +4788,33 @@ impl Core {
 
     /// Saves/updates a host group (an item of type "group"). Only references to
     /// profiles/groups; no secrets inside. Rejects self-membership, self-
-    /// parenthood and an empty `group_id`; `ensure_item_type` guards against cross-type
-    /// overwriting.
-    pub fn save_group(&self, vault_id: String, group: ServerGroup) -> Result<(), FfiError> {
-        if group.group_id.is_empty() {
-            return Err(FfiError::other("group_id must not be empty"));
-        }
-        if group.member_ids.contains(&group.group_id) {
-            return Err(FfiError::other("a group cannot be a member of itself"));
-        }
-        if group.parent_id.as_deref() == Some(group.group_id.as_str()) {
-            return Err(FfiError::other("a group cannot be its own parent"));
+    /// parenthood; `ensure_item_type` guards against cross-type overwriting.
+    ///
+    /// An empty `group_id` saves a NEW group under an id the core mints from
+    /// its label (`slug(label)-<millis>`, see `item_ids`) — nothing can name a
+    /// group that has no id yet, so the self checks apply to an existing one.
+    /// Returns the group's id.
+    pub fn save_group(&self, vault_id: String, group: ServerGroup) -> Result<String, FfiError> {
+        if !group.group_id.is_empty() {
+            if group.member_ids.contains(&group.group_id) {
+                return Err(FfiError::other("a group cannot be a member of itself"));
+            }
+            if group.parent_id.as_deref() == Some(group.group_id.as_str()) {
+                return Err(FfiError::other("a group cannot be its own parent"));
+            }
         }
         let color = appearance_id(group.color)?;
         let icon = appearance_id(group.icon)?;
         self.with_state_mut(|state| {
+            let group_id = if group.group_id.is_empty() {
+                mint_item_id(&state.storage, &vault_id, &group.label, "group")?
+            } else {
+                group.group_id
+            };
             ensure_item_type(
                 &state.storage,
                 &vault_id,
-                group.group_id.as_bytes(),
+                group_id.as_bytes(),
                 ITEM_TYPE_GROUP,
             )?;
             let vault = Vault::open(
@@ -4818,16 +4832,16 @@ impl Core {
                 // Forward-compat: carry over the unknown fields of the existing group.
                 extra: preserved_extra::<StoredGroup>(
                     &vault,
-                    group.group_id.as_bytes(),
+                    group_id.as_bytes(),
                     ITEM_TYPE_GROUP,
                     |sg| sg.extra,
                 ),
             };
             let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
             vault
-                .put_item(group.group_id.as_bytes(), ITEM_TYPE_GROUP, &json)
+                .put_item(group_id.as_bytes(), ITEM_TYPE_GROUP, &json)
                 .map_err(map_vault_err)?;
-            Ok(())
+            Ok(group_id)
         })
     }
 
@@ -5193,11 +5207,15 @@ impl Core {
     /// of type "connection" in the vault). The secret itself is not embedded in the profile: for
     /// password authentication only a reference to the password item is stored; a jump host
     /// with an inline password (`AuthMethod::Password`) cannot be saved — an error.
+    ///
+    /// An empty `profile_id` saves a NEW host under an id the core mints from
+    /// its label (`slug(label)-<millis>`, see `item_ids`). Returns the
+    /// profile's id.
     pub fn save_connection(
         &self,
         vault_id: String,
         profile: ConnectionProfile,
-    ) -> Result<(), FfiError> {
+    ) -> Result<String, FfiError> {
         self.with_state_mut(|state| {
             let ConnectionProfile {
                 profile_id,
@@ -5217,9 +5235,11 @@ impl Core {
                 color,
                 icon,
             } = profile;
-            if profile_id.is_empty() {
-                return Err(FfiError::other("profile_id must not be empty"));
-            }
+            let profile_id = if profile_id.is_empty() {
+                mint_item_id(&state.storage, &vault_id, &label, "host")?
+            } else {
+                profile_id
+            };
             let color = appearance_id(color)?;
             let icon = appearance_id(icon)?;
             // Empty uid = creating a new profile → mint an immutable id. A non-empty one
@@ -5286,7 +5306,7 @@ impl Core {
             vault
                 .put_item(profile_id.as_bytes(), ITEM_TYPE_CONNECTION, &json)
                 .map_err(map_vault_err)?;
-            Ok(())
+            Ok(profile_id)
         })
     }
 
@@ -5363,70 +5383,18 @@ impl Core {
     /// Saves (creates or updates) a personal identity. Into the item content
     /// only `StoredIdentity` is written (username + references to a key/password item),
     /// the secret itself is not embedded. `identity_id` is the item_id in the vault.
+    ///
+    /// Creates the identity or REPLACES the one already at `identity_id` (the
+    /// edit path); [`Self::create_identity`] is the create-only twin.
     pub fn save_identity(&self, vault_id: String, identity: Identity) -> Result<(), FfiError> {
-        self.with_state_mut(|state| {
-        let Identity {
-            identity_id,
-            label,
-            user,
-            key_item_id,
-            password_item_id,
-        } = identity;
-        if identity_id.is_empty() {
-            return Err(FfiError::other("identity_id must not be empty"));
-        }
-        // Privacy invariant (moved here from set_personal_vault): an identity must live
-        // in a PRIVATE (single-member) vault — otherwise it syncs to a shared vault's
-        // other members (leaked private cred). Refuse a shared/multi-member vault.
-        let vid = resolve_vid(&state.storage, &vault_id);
-        let owner_ed = state.keyset.signing.verifying.to_bytes().to_vec();
-        let members = match state
-            .storage
-            .latest_membership_epoch(&vid)
-            .map_err(FfiError::other)?
-        {
-            Some(latest) => verify_chain_to_epoch(&state.storage, &vid, latest, &owner_ed)
-                .map_err(map_vault_err)?
-                .members()
-                .len(),
-            None => 0, // local / not-yet-shared vault → single-member
-        };
-        if members > 1 {
-            return Err(FfiError::other(
-                "cannot store an identity in a shared (multi-member) vault — it would leak to the other members",
-            ));
-        }
-        let mut stored = StoredIdentity {
-            label,
-            user,
-            key_item_id,
-            password_item_id,
-            extra: BTreeMap::new(),
-        };
-        ensure_item_type(
-            &state.storage,
-            &vault_id,
-            identity_id.as_bytes(),
-            ITEM_TYPE_IDENTITY,
-        )?;
-        let vault = Vault::open(
-            &state.storage,
-            &state.keyset,
-            &resolve_vid(&state.storage, &vault_id),
-        )
-        .map_err(FfiError::other)?;
-        stored.extra = preserved_extra::<StoredIdentity>(
-            &vault,
-            identity_id.as_bytes(),
-            ITEM_TYPE_IDENTITY,
-            |si| si.extra,
-        );
-        let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
-        vault
-            .put_item(identity_id.as_bytes(), ITEM_TYPE_IDENTITY, &json)
-            .map_err(map_vault_err)?;
-        Ok(())
-        })
+        self.store_identity(&vault_id, identity, false)
+    }
+
+    /// Saves a NEW personal identity, like [`Self::save_identity`], but never
+    /// replaces anything: [`FfiError::AlreadyExists`] when a live item of any
+    /// type already holds `identity_id`.
+    pub fn create_identity(&self, vault_id: String, identity: Identity) -> Result<(), FfiError> {
+        self.store_identity(&vault_id, identity, true)
     }
 
     /// Returns a single identity by id.
@@ -6842,6 +6810,169 @@ fn create_vault_with_items(
         storage.set_vault_tenant(vault.vault_id(), tenant)?;
     }
     Ok(())
+}
+
+impl Core {
+    /// The body of [`Core::save_identity`] / [`Core::create_identity`].
+    fn store_identity(
+        &self,
+        vault_id: &str,
+        identity: Identity,
+        create_only: bool,
+    ) -> Result<(), FfiError> {
+        self.with_state_mut(|state| {
+        let Identity {
+            identity_id,
+            label,
+            user,
+            key_item_id,
+            password_item_id,
+        } = identity;
+        if identity_id.is_empty() {
+            return Err(FfiError::other("identity_id must not be empty"));
+        }
+        if create_only {
+            refuse_taken(&state.storage, vault_id, identity_id.as_bytes())?;
+        }
+        // Privacy invariant (moved here from set_personal_vault): an identity must live
+        // in a PRIVATE (single-member) vault — otherwise it syncs to a shared vault's
+        // other members (leaked private cred). Refuse a shared/multi-member vault.
+        let vid = resolve_vid(&state.storage, vault_id);
+        let owner_ed = state.keyset.signing.verifying.to_bytes().to_vec();
+        let members = match state
+            .storage
+            .latest_membership_epoch(&vid)
+            .map_err(FfiError::other)?
+        {
+            Some(latest) => verify_chain_to_epoch(&state.storage, &vid, latest, &owner_ed)
+                .map_err(map_vault_err)?
+                .members()
+                .len(),
+            None => 0, // local / not-yet-shared vault → single-member
+        };
+        if members > 1 {
+            return Err(FfiError::other(
+                "cannot store an identity in a shared (multi-member) vault — it would leak to the other members",
+            ));
+        }
+        let mut stored = StoredIdentity {
+            label,
+            user,
+            key_item_id,
+            password_item_id,
+            extra: BTreeMap::new(),
+        };
+        ensure_item_type(
+            &state.storage,
+            vault_id,
+            identity_id.as_bytes(),
+            ITEM_TYPE_IDENTITY,
+        )?;
+        let vault = Vault::open(
+            &state.storage,
+            &state.keyset,
+            &resolve_vid(&state.storage, vault_id),
+        )
+        .map_err(FfiError::other)?;
+        stored.extra = preserved_extra::<StoredIdentity>(
+            &vault,
+            identity_id.as_bytes(),
+            ITEM_TYPE_IDENTITY,
+            |si| si.extra,
+        );
+        let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
+        vault
+            .put_item(identity_id.as_bytes(), ITEM_TYPE_IDENTITY, &json)
+            .map_err(map_vault_err)?;
+        Ok(())
+        })
+    }
+
+    /// The body of [`Core::generate_ssh_key`] / [`Core::create_ssh_key`].
+    fn store_generated_key(
+        &self,
+        vault_id: &str,
+        item_id: &str,
+        create_only: bool,
+    ) -> Result<String, FfiError> {
+        self.with_state_mut(|state| {
+            if create_only {
+                refuse_taken(&state.storage, vault_id, item_id.as_bytes())?;
+            }
+            let vault = Vault::open(
+                &state.storage,
+                &state.keyset,
+                &resolve_vid(&state.storage, vault_id),
+            )
+            .map_err(FfiError::other)?;
+            let public = store_new_ssh_key(&state.storage, &vault, vault_id, item_id)?;
+            // The key material was replaced under the same id → unload the previous private key from
+            // the agent (namespaced), otherwise whatever signs straight from the agent by id — a
+            // forwarded agent in a live session — keeps signing with the OLD key. (A connect
+            // reloads the key from the item anyway, see load_key_into_agent.)
+            state.agent.remove(&agent_key_id(vault_id, item_id));
+            Ok(public)
+        })
+    }
+
+    /// The body of [`Core::import_ssh_key`] / [`Core::create_imported_ssh_key`].
+    fn store_imported_key(
+        &self,
+        vault_id: &str,
+        item_id: &str,
+        openssh_private: String,
+        passphrase: Option<String>,
+        create_only: bool,
+    ) -> Result<String, FfiError> {
+        // We keep the private key and password in Zeroizing — zeroized on exit.
+        let openssh_private = Zeroizing::new(openssh_private);
+        let passphrase = passphrase.map(Zeroizing::new);
+        self.with_state_mut(|state| {
+            if create_only {
+                refuse_taken(&state.storage, vault_id, item_id.as_bytes())?;
+            }
+            // We accept not only the OpenSSH container but also classic PEM
+            // (PKCS#1 `BEGIN RSA PRIVATE KEY`, SEC1 `BEGIN EC PRIVATE KEY`,
+            // PKCS#8 `BEGIN PRIVATE KEY`, including password-encrypted ones): we normalize to
+            // a canonical OpenSSH private key. Without a password for an encrypted key
+            // `PassphraseRequired` is returned — the UI will prompt for one and retry.
+            let normalized = unissh_ssh_agent::normalize_private_key_with_passphrase(
+                &openssh_private,
+                passphrase.as_deref().map(String::as_str),
+            )
+            .map_err(map_key_import_err)?;
+            // validate and extract the public key via a temporary agent
+            let mut tmp = InMemoryAgent::new();
+            tmp.add_from_openssh(b"tmp".to_vec(), normalized.as_bytes())
+                .map_err(FfiError::ssh)?;
+            let public = tmp
+                .public_key(b"tmp")
+                .ok_or_else(|| FfiError::ssh("no public key"))?
+                .to_openssh()
+                .map_err(FfiError::ssh)?;
+            ensure_item_type(
+                &state.storage,
+                vault_id,
+                item_id.as_bytes(),
+                ITEM_TYPE_SSH_KEY,
+            )?;
+            let vault = Vault::open(
+                &state.storage,
+                &state.keyset,
+                &resolve_vid(&state.storage, vault_id),
+            )
+            .map_err(FfiError::other)?;
+            vault
+                .put_item(item_id.as_bytes(), ITEM_TYPE_SSH_KEY, normalized.as_bytes())
+                .map_err(map_vault_err)?;
+            // The key material was replaced under the same id → unload the previous private key from
+            // the agent (namespaced), otherwise whatever signs straight from the agent by id — a
+            // forwarded agent in a live session — keeps signing with the OLD key. (A connect
+            // reloads the key from the item anyway, see load_key_into_agent.)
+            state.agent.remove(&agent_key_id(vault_id, item_id));
+            Ok(public)
+        })
+    }
 }
 
 impl Core {
@@ -8338,6 +8469,21 @@ fn map_vault_err(e: unissh_vault::VaultError) -> FfiError {
         unissh_vault::VaultError::AlreadyExists => FfiError::AlreadyExists,
         unissh_vault::VaultError::ReadOnly => FfiError::ReadOnlyVault,
         other => FfiError::other(other),
+    }
+}
+
+/// Mapping of key-import errors: the two a client asks the user about (a
+/// missing or a wrong passphrase) are variants of their own, so no client
+/// matches message text.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "only the variants the UI treats specially are singled out; every other error maps generically by design"
+)]
+fn map_key_import_err(e: unissh_ssh_agent::AgentError) -> FfiError {
+    match e {
+        unissh_ssh_agent::AgentError::Encrypted => FfiError::PassphraseRequired,
+        unissh_ssh_agent::AgentError::WrongPassphrase => FfiError::WrongPassphrase,
+        other => FfiError::ssh(other),
     }
 }
 

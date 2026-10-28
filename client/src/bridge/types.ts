@@ -506,6 +506,8 @@ export type ApiErrorKind =
   | "invalidCredentials"
   | "notFound"
   | "alreadyExists"
+  | "passphraseRequired"
+  | "wrongPassphrase"
   | "alreadyCloud"
   | "readOnlyVault"
   | "noServer"
@@ -583,6 +585,10 @@ export function apiErrorMessage(e: unknown): string {
         return i18n.t("error.notFound");
       case "alreadyExists":
         return i18n.t("error.alreadyExists");
+      case "passphraseRequired":
+        return i18n.t("error.passphraseRequired");
+      case "wrongPassphrase":
+        return i18n.t("error.wrongPassphrase");
       case "alreadyCloud":
         return i18n.t("error.alreadyCloud");
       case "readOnlyVault":
@@ -614,6 +620,18 @@ export interface KeyRotationLink {
   candidateId: string;
   /** Started on another device: only abandon is possible here, not finish. */
   startedElsewhere: boolean;
+}
+
+/** How a host uses a key or password item. */
+export type KeyUseRole = "login" | "inlineHop" | "referencedHop" | "proxyPassword";
+
+/** What in a vault uses one key or password item — the core's single answer
+ *  (`key_usage`, #169), shared with the CLI. Ids and labels only. */
+export interface KeyUsage {
+  /** Hosts using it, each once, with every way it does. */
+  hosts: { profileId: string; label: string; roles: KeyUseRole[] }[];
+  /** Identities referencing it as their key or password. */
+  identities: { identityId: string; label: string }[];
 }
 
 export interface ServerStatus {
