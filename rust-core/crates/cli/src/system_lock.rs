@@ -53,8 +53,10 @@ mod linux {
     use zbus::connection::Builder;
     use zbus::message::Type;
     use zbus::names::{InterfaceName, MemberName, UniqueName};
-    use zbus::zvariant::{ObjectPath, OwnedFd, OwnedObjectPath, OwnedValue};
-    use zbus::{Connection, MatchRule, Message, MessageStream};
+    use zbus::{
+        Connection, MatchRule, Message, MessageStream, ObjectPath, OwnedFd, OwnedObjectPath,
+        OwnedVariant,
+    };
 
     /// Follows logind until the bus goes away.
     ///
@@ -63,11 +65,11 @@ mod linux {
     /// on it. `watch` only listens (its rules added before its stream opens,
     /// nothing asked after); `calls` only asks, never streams, and times out.
     pub async fn watch(broker: &Broker) -> zbus::Result<()> {
-        let calls = Builder::system()?
+        let calls = Builder::system()
             .method_timeout(CALL_TIMEOUT)
             .build()
             .await?;
-        let watch = Builder::system()?
+        let watch = Builder::system()
             .method_timeout(CALL_TIMEOUT)
             .build()
             .await?;
@@ -193,7 +195,7 @@ mod linux {
     fn changed_locked_hint(message: &Message) -> Option<bool> {
         let (interface, mut changed, _) = message
             .body()
-            .deserialize::<(String, HashMap<String, OwnedValue>, Vec<String>)>()
+            .deserialize::<(String, HashMap<String, OwnedVariant>, Vec<String>)>()
             .ok()?;
         if interface != SESSION {
             return None;
@@ -208,32 +210,32 @@ mod linux {
             watch,
             MatchRule::builder()
                 .msg_type(Type::Signal)
-                .sender("org.freedesktop.DBus")?
-                .interface("org.freedesktop.DBus")?
-                .member("NameOwnerChanged")?
-                .add_arg(LOGIND)?
-                .build(),
+                .sender("org.freedesktop.DBus")
+                .interface("org.freedesktop.DBus")
+                .member("NameOwnerChanged")
+                .add_arg(LOGIND)
+                .build()?,
         )
         .await?;
         add_match(
             watch,
             MatchRule::builder()
                 .msg_type(Type::Signal)
-                .sender(LOGIND)?
-                .path(MANAGER_PATH)?
-                .interface(MANAGER)?
-                .member("PrepareForSleep")?
-                .build(),
+                .sender(LOGIND)
+                .path(MANAGER_PATH)
+                .interface(MANAGER)
+                .member("PrepareForSleep")
+                .build()?,
         )
         .await?;
         if let Some(path) = session {
             for interface in [SESSION, PROPERTIES] {
                 let rule = MatchRule::builder()
                     .msg_type(Type::Signal)
-                    .sender(LOGIND)?
-                    .path(path.as_ref())?
-                    .interface(interface)?
-                    .build();
+                    .sender(LOGIND)
+                    .path(path.as_str())
+                    .interface(interface)
+                    .build()?;
                 if let Err(e) = add_match(watch, rule).await {
                     log::warn!("system lock: no session lock signals ({e})");
                 }
@@ -288,7 +290,7 @@ mod linux {
 
     /// Whether the session's lock screen is up, as the desktop told logind.
     async fn locked_hint(calls: &Connection, session: &OwnedObjectPath) -> zbus::Result<bool> {
-        let value: OwnedValue = calls
+        let value: OwnedVariant = calls
             .call_method(
                 Some(LOGIND),
                 session.as_str(),
@@ -299,7 +301,7 @@ mod linux {
             .await?
             .body()
             .deserialize()?;
-        Ok(bool::try_from(value)?)
+        bool::try_from(value)
     }
 
     /// [`take_sleep_inhibitor`], or `None` and a warning.
@@ -403,7 +405,7 @@ mod linux {
             .await?
             .body()
             .deserialize()?;
-        let user: OwnedValue = session_property(calls, &path, "User").await?;
+        let user: OwnedVariant = session_property(calls, &path, "User").await?;
         let (user, _) = <(u32, OwnedObjectPath)>::try_from(user)?;
         let state = String::try_from(session_property(calls, &path, "State").await?)?;
         if named_session_is_ours(user, &state, own_uid()) {
@@ -420,7 +422,7 @@ mod linux {
         calls: &Connection,
         path: &OwnedObjectPath,
         name: &str,
-    ) -> zbus::Result<OwnedValue> {
+    ) -> zbus::Result<OwnedVariant> {
         calls
             .call_method(
                 Some(LOGIND),
@@ -473,7 +475,7 @@ mod linux {
                     .await?
                     .body()
                     .deserialize()?;
-                let value: OwnedValue = calls
+                let value: OwnedVariant = calls
                     .call_method(
                         Some(LOGIND),
                         user.as_str(),
