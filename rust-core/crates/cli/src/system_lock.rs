@@ -45,8 +45,9 @@ mod linux {
 
     use futures_util::StreamExt;
     use unissh_automation::logind::{
-        display_session, locked_after_wake, Header, Heard, Logind, SessionLookup, WakeCheck,
-        CALL_TIMEOUT, LOGIND, MANAGER, MANAGER_PATH, PROPERTIES, SESSION, SESSION_LOOKUPS, USER,
+        display_session, locked_after_wake, named_session_is_ours, session_id, session_sources,
+        Header, Heard, Logind, SessionLookup, SessionSource, WakeCheck, CALL_TIMEOUT, LOGIND,
+        MANAGER, MANAGER_PATH, PROPERTIES, SESSION, USER,
     };
     use unissh_automation::Broker;
     use zbus::connection::Builder;
@@ -336,20 +337,108 @@ mod linux {
             .deserialize()
     }
 
-    /// This process's logind session object: the first of [`SESSION_LOOKUPS`]
-    /// to find one, or the last failure.
+    /// This process's logind session object: the first of [`session_sources`]
+    /// to find one, or the last failure. A warning names the session when it
+    /// is only the user's display session (inside tmux it may be another
+    /// terminal's), when `$XDG_SESSION_ID` named none of ours, and when the
+    /// named session is not the display session (an ssh login, say, which a
+    /// lock of the graphical desktop does not lock).
     async fn session_path(calls: &Connection) -> zbus::Result<OwnedObjectPath> {
+        let xdg_session_id = std::env::var("XDG_SESSION_ID")
+            .ok()
+            .filter(|id| !id.is_empty());
         let mut failed = None;
-        for lookup in SESSION_LOOKUPS {
-            match look_up_session(calls, lookup).await {
-                Ok(path) => return Ok(path),
+        for source in session_sources(xdg_session_id.as_deref()) {
+            let found = match source {
+                SessionSource::Environment(id) => named_session(calls, id).await,
+                SessionSource::Lookup(lookup) => look_up_session(calls, lookup).await,
+            };
+            match found {
+                Ok(path) => {
+                    let id = session_id(path.as_str());
+                    if let SessionSource::Environment(_) = source {
+                        warn_unless_display(calls, &id, &path).await;
+                    } else if source.is_fallback() || xdg_session_id.is_some() {
+                        let env = if xdg_session_id.is_some() {
+                            "names no session of yours"
+                        } else {
+                            "is not set"
+                        };
+                        log::warn!(
+                            "system lock: $XDG_SESSION_ID {env}; following logind session {id} \
+                             (see `loginctl`); a lock of any other session does not pause access",
+                        );
+                    }
+                    return Ok(path);
+                }
                 Err(e) => {
-                    log::debug!("system lock: session lookup {lookup:?} failed ({e})");
+                    log::debug!("system lock: session lookup {source:?} failed ({e})");
                     failed = Some(e);
                 }
             }
         }
         Err(failed.unwrap_or_else(|| zbus::Error::Failure("no session lookup".into())))
+    }
+
+    /// A warning when the session `$XDG_SESSION_ID` names (`id` at `path`) is
+    /// not the user's display session, naming both: locking the desktop then
+    /// does not lock it. No display session (a server, a text console) is no
+    /// warning.
+    async fn warn_unless_display(calls: &Connection, id: &str, path: &OwnedObjectPath) {
+        match look_up_session(calls, SessionLookup::UserDisplay).await {
+            Ok(display) if display != *path => log::warn!(
+                "system lock: following logind session {id} ($XDG_SESSION_ID), not your \
+                 graphical session {}; locking the graphical session does not pause access \
+                 unless session {id} locks too",
+                session_id(display.as_str()),
+            ),
+            Ok(_) => {}
+            Err(e) => log::debug!("system lock: no display session to compare with ({e})"),
+        }
+    }
+
+    /// The session `$XDG_SESSION_ID` names, if it is this user's and not
+    /// closing ([`named_session_is_ours`]); any other is a failed lookup.
+    async fn named_session(calls: &Connection, id: &str) -> zbus::Result<OwnedObjectPath> {
+        let path: OwnedObjectPath = calls
+            .call_method(Some(LOGIND), MANAGER_PATH, Some(MANAGER), "GetSession", &id)
+            .await?
+            .body()
+            .deserialize()?;
+        let user: OwnedValue = session_property(calls, &path, "User").await?;
+        let (user, _) = <(u32, OwnedObjectPath)>::try_from(user)?;
+        let state = String::try_from(session_property(calls, &path, "State").await?)?;
+        if named_session_is_ours(user, &state, own_uid()) {
+            Ok(path)
+        } else {
+            Err(zbus::Error::Failure(format!(
+                "session {id} is user {user}'s, {state}, not ours"
+            )))
+        }
+    }
+
+    /// A property of the session at `path`.
+    async fn session_property(
+        calls: &Connection,
+        path: &OwnedObjectPath,
+        name: &str,
+    ) -> zbus::Result<OwnedValue> {
+        calls
+            .call_method(
+                Some(LOGIND),
+                path.as_str(),
+                Some(PROPERTIES),
+                "Get",
+                &(SESSION, name),
+            )
+            .await?
+            .body()
+            .deserialize()
+    }
+
+    /// This process's uid.
+    fn own_uid() -> u32 {
+        rustix::process::getuid().as_raw()
     }
 
     async fn look_up_session(
@@ -380,7 +469,7 @@ mod linux {
                 .body()
                 .deserialize(),
             SessionLookup::UserDisplay => {
-                let uid = rustix::process::getuid().as_raw();
+                let uid = own_uid();
                 let user: OwnedObjectPath = calls
                     .call_method(Some(LOGIND), MANAGER_PATH, Some(MANAGER), "GetUser", &uid)
                     .await?
