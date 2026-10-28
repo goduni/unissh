@@ -26,6 +26,7 @@ import type {
   InstanceStatus,
   InviteInfo,
   KeyRotationLink,
+  KeyUsage,
   JoinPreview,
   SpaceInfo,
   DirectoryEntry,
@@ -195,6 +196,9 @@ export const abandonKeyRotation = (vaultId: string, candidateId: string) =>
 /** Rotations in progress on this device (device-local links, live candidates only). */
 export const listKeyRotations = (vaultId: string) =>
   invoke<KeyRotationLink[]>("list_key_rotations", { vaultId });
+/** What in the vault uses a key or password item (hosts by role, identities). */
+export const keyUsage = (vaultId: string, itemId: string) =>
+  invoke<KeyUsage>("key_usage", { vaultId, itemId });
 export const renameItem = (vaultId: string, itemId: string, newItemId: string) =>
   afterMut(vaultId, invoke<void>("rename_item", { vaultId, itemId, newItemId }));
 export const deleteItem = (vaultId: string, itemId: string) =>

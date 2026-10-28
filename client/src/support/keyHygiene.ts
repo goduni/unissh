@@ -1,14 +1,9 @@
-// Key hygiene: which hosts use a vault key, and whether the key is old enough to
-// deserve a nudge. Pure — the Secrets view feeds it the store's hosts and items.
+// Key hygiene: how many things use a vault key or password, and whether a key
+// is old enough to deserve a nudge. What uses an item is the core's answer
+// (`api.keyUsage`, shared with the CLI); `keyMatcher` stays for the rotation
+// planner until that moves into the core too.
 
-import type { ConnectionProfile, JumpHost } from "@/bridge/types";
-
-export interface KeyUsage {
-  /** Hosts that log in with the key themselves. */
-  direct: ConnectionProfile[];
-  /** Hosts that reach their target through a jump hop authenticated by the key. */
-  jump: ConnectionProfile[];
-}
+import type { ConnectionProfile, JumpHost, KeyUsage } from "@/bridge/types";
 
 /** Predicates for "does this log in with key `keyItemId` of vault `vaultId`".
  *  A hop is either inline (its own auth) or a reference to a saved profile
@@ -33,27 +28,9 @@ export function keyMatcher(hosts: readonly ConnectionProfile[], vaultId: string,
   return { usesKey, hopUsesKey, refProfile };
 }
 
-/** Hosts of vault `vaultId` (the list's own vault) using its key `keyItemId`,
- *  split by how (see `keyMatcher`). A host appears at most once per list; one
- *  that logs in with the key AND hops with it is in both. */
-export function keyUsage(
-  hosts: readonly ConnectionProfile[],
-  vaultId: string,
-  keyItemId: string,
-): KeyUsage {
-  const { usesKey, hopUsesKey } = keyMatcher(hosts, vaultId, keyItemId);
-  const direct: ConnectionProfile[] = [];
-  const jump: ConnectionProfile[] = [];
-  for (const h of hosts) {
-    if (usesKey(h)) direct.push(h);
-    if (h.jumps.some(hopUsesKey)) jump.push(h);
-  }
-  return { direct, jump };
-}
-
-/** Distinct hosts in a usage — what "used by N hosts" counts. */
+/** What "used by N" counts: distinct hosts plus identities. */
 export function keyUsageCount(u: KeyUsage): number {
-  return new Set([...u.direct, ...u.jump].map((h) => h.profileId)).size;
+  return u.hosts.length + u.identities.length;
 }
 
 /** Out-of-the-box age (days) past which a key is marked old. */

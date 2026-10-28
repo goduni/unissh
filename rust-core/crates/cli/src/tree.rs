@@ -505,18 +505,17 @@ pub fn download_tree(
         let to = local_path(local, rel);
         let shown = to.display().to_string();
         let leg = Leg::new(&board);
-        let outcome = if !force && fs::symlink_metadata(&to).is_ok() {
-            Err(exists(&shown))
+        // A failed download is named by the remote file it reads, as a failed
+        // upload is by the remote file it writes; a local refusal by its path.
+        let (named, outcome) = if !force && fs::symlink_metadata(&to).is_ok() {
+            let refused = exists(&shown);
+            (shown, Err(refused))
         } else {
-            download(
-                sftp,
-                remote_path(remote, rel),
-                &to,
-                *size,
-                Some(leg.observer()),
-            )
+            let from = remote_path(remote, rel);
+            let outcome = download(sftp, from.clone(), &to, *size, Some(leg.observer()));
+            (from, outcome)
         };
-        board.settle(&shown, outcome, leg.sent());
+        board.settle(&named, outcome, leg.sent());
     });
     board.finish(tree.skipped.len(), &local.display().to_string())
 }

@@ -74,17 +74,19 @@ starts with `0.`:
 - `unissh cp -r` copies a directory tree to or from a host, several files at
   once over one SFTP connection (`--parallel`, 4 by default). Symbolic links
   inside the tree are skipped and named, not followed; a file that fails is
-  reported, the rest still copy, and the command exits non-zero.
+  reported (a download by its remote path), the rest still copy, and the
+  command exits non-zero. Downloaded files are owner-only (0600) on Unix.
 - `unissh tunnel <host>` forwards ports as `ssh -N` does: `-L`, `-R` and `-D`
   (SOCKS5), any number of each, through the core's forwards. A forward listens
   on `127.0.0.1` unless an address is given, and SOCKS listens on loopback only.
   It prints a line per forward once it listens, fails as a whole if one cannot
   open, and closes them cleanly on Ctrl-C or SIGTERM.
 - `unissh run` runs one command on many hosts, as the app's Fleet does: by tag,
-  by group (nested groups included) or by name, a bounded number at a time with
-  a per-host deadline, each output line led by the host's label (or `--json`),
-  a summary at the end and a non-zero exit when any host failed; `--dry-run`
-  shows the plan without connecting. `{{name}}` parameters in the command are
+  by group (with the hosts of groups listed as its members, but not of its
+  subgroups) or by name, a bounded number at a time with a per-host deadline,
+  each output line led by the host's label (or `--json`), a summary at the end
+  and a non-zero exit when any host failed; `--dry-run` shows the plan without
+  connecting. `{{name}}` parameters in the command are
   filled as the app's Fleet fills them (`--set name=value`, else asked on the
   terminal). `unissh snippets list` and `unissh snippets run` run saved
   snippets the same way.
@@ -109,9 +111,12 @@ starts with `0.`:
   its foreground. Granting, adding and rotating integrations print what they
   will do, then take the master password typed on the terminal as the
   confirmation, and run only in a terminal's foreground. On Linux it pauses on
-  a logind session lock, `LockedHint` or sleep. An agent with a shell as you can
-  do whatever the vaults allow with a password file, and can catch a typed
-  password: the CLI's grants cannot constrain it. In the core, the MCP crate
+  a logind session lock, `LockedHint` or sleep, following the session
+  `$XDG_SESSION_ID` names when it is your own (so a tmux pane follows the login
+  it was started in), and naming the session in a warning when it had to fall
+  back to your graphical session or follows another one. An agent with a shell
+  as you can do whatever the vaults allow with a password file, and can catch a
+  typed password: the CLI's grants cannot constrain it. In the core, the MCP crate
   gains a stdio transport (`serve_stdio`, rmcp `transport-io`), and the broker
   gains `pending_approvals`, `is_pending`, `approval_unavailable`,
   `set_manual_approval_available`, `made_recordings`, `PromptFactory::can_ask`,
@@ -185,6 +190,12 @@ starts with `0.`:
   silently; the app, `unissh keys generate|import` and `unissh identities add`
   now say the name is taken and change nothing. The check happens as the item
   is written, so a change synced from another device cannot slip in between.
+- The app and `unissh` now agree on what still uses a key or password (#169):
+  a host's own login, an inline jump hop, a jump hop to a saved host that logs
+  in with it, a proxy password, and identities. Before, the app missed
+  identities and proxy passwords and `unissh secrets rm` missed jump hops to
+  saved hosts. The key list shows identities beside hosts, and deleting a
+  password now warns when something still uses it.
 - The admin panel's sign-in says that the password is optional: it is the
   account's master password from the UniSSH app (or the one set when the
   instance was set up); an account without one signs in with it empty.

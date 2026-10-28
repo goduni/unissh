@@ -40,7 +40,8 @@ pub const DEFAULT_TIMEOUT_SECS: u32 = 30;
 pub enum Selection {
     /// The hosts carrying every one of these tags (any case).
     Tags(Vec<String>),
-    /// The hosts of a group, nested groups included.
+    /// The hosts of a group, and of the groups listed as its members (not
+    /// of its subgroups: groups whose parent it is).
     Group(String),
     /// These hosts, named as `unissh ssh` names them.
     Hosts(Vec<String>),
@@ -103,8 +104,10 @@ fn same_host(a: &Host, b: &Host) -> bool {
     a.vault_id == b.vault_id && a.profile.profile_id == b.profile.profile_id
 }
 
-/// The hosts of the group `name`, expanded by the core (nested groups, with
-/// cycles broken) without connecting anywhere.
+/// The hosts of the group `name`, expanded by the core (groups listed as
+/// members, with cycles broken) without connecting anywhere. A subgroup (a
+/// group whose parent is `name`) is not a member: the app's Fleet runs a
+/// group's member hosts only, and leaves its subgroups' hosts out too.
 fn group_hosts<'h>(core: &Core, all: &'h [Host], name: &str) -> Res<Vec<&'h Host>> {
     let groups = hosts::load_groups(core)?;
     let group = hosts::find_named(&groups, name)?;

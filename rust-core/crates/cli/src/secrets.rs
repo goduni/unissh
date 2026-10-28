@@ -13,9 +13,8 @@ use std::time::{Duration, UNIX_EPOCH};
 use clap::{Args, Subcommand};
 use serde_json::{json, Value};
 use unissh_ffi::{
-    AuthMethod, Core, FfiError, Identity, ItemInfo, KeyRotationLink, ProfileAuth, ProxyPassword,
-    VaultInfo, ITEM_TYPE_IDENTITY as IDENTITY, ITEM_TYPE_NOTE as NOTE,
-    ITEM_TYPE_PASSWORD as PASSWORD, ITEM_TYPE_SSH_KEY as SSH_KEY,
+    Core, FfiError, Identity, ItemInfo, KeyRotationLink, VaultInfo, ITEM_TYPE_IDENTITY as IDENTITY,
+    ITEM_TYPE_NOTE as NOTE, ITEM_TYPE_PASSWORD as PASSWORD, ITEM_TYPE_SSH_KEY as SSH_KEY,
 };
 use zeroize::Zeroizing;
 
@@ -25,7 +24,7 @@ use crate::failure::{Failure, Res};
 use crate::home::read_private;
 use crate::hosts::{self, Named};
 use crate::manage::ago;
-use crate::tty::{confirm, one_line};
+use crate::tty::{confirm, goes_on, one_line};
 
 /// Which secrets a lookup is after: the item types, and what one is called.
 pub trait Sort {
@@ -448,14 +447,19 @@ fn describe<S>(core: &Core, entry: &Entry<S>) -> Res<()> {
 /// the vault, and stdout may well be a file.
 fn reveal<S>(core: &Core, entry: &Entry<S>, version: Option<u64>, yes: bool) -> Res<()> {
     let (vault_id, item_id) = (entry.vault_id.clone(), entry.info.item_id.clone());
-    if entry.info.item_type == SSH_KEY && version.is_none() {
-        confirm(
+    // Declining is an answer, not a failure: nothing is shown and it exits 0.
+    if entry.info.item_type == SSH_KEY
+        && version.is_none()
+        && !goes_on(
             yes,
             &format!(
                 "The private key \"{}\" will be printed unencrypted. Keep it somewhere safe.\n",
                 one_line(&item_id)
             ),
-        )?;
+        )?
+    {
+        eprintln!("Not shown.");
+        return Ok(());
     }
     let text = Zeroizing::new(match (entry.info.item_type, version) {
         (PASSWORD, None) => core.get_password(vault_id, item_id)?,
@@ -514,10 +518,13 @@ fn remove<S>(device: &Device, offline: bool, entry: &Entry<S>, yes: bool) -> Res
             ));
         }
     } else {
-        let uses = uses_of(core, vault_id, id)?;
-        if uses > 0 {
+        // The core's one answer (#169): hosts by login, inline or referenced
+        // hop and proxy, plus identities.
+        let usage = core.key_usage(vault_id.clone(), id.clone())?;
+        if usage.count() > 0 {
             warning.push_str(&format!(
-                "It is used by {uses} host(s) or identities. Deleting it will break their login.\n"
+                "It is used by {}. Deleting it will break their login.\n",
+                used_by(usage.hosts.len(), usage.identities.len())
             ));
         }
     }
@@ -540,46 +547,20 @@ fn remove<S>(device: &Device, offline: bool, entry: &Entry<S>, yes: bool) -> Res
     )
 }
 
-/// How many hosts (their login, a jump hop, a proxy) and identities in the
-/// vault refer to the key or password `id`.
-fn uses_of(core: &Core, vault_id: &str, id: &str) -> Res<usize> {
-    let refers = |auth: &AuthMethod| match auth {
-        AuthMethod::Agent { key_item_id, .. } => key_item_id == id,
-        AuthMethod::VaultPassword {
-            password_item_id, ..
-        } => password_item_id == id,
-        AuthMethod::Password { .. } | AuthMethod::SystemAgent { .. } => false,
-    };
-    let hosts = core
-        .list_connections(vault_id.to_owned())?
-        .into_iter()
-        .filter(|p| {
-            let own = match &p.auth {
-                ProfileAuth::Key { key_item_id } => key_item_id == id,
-                ProfileAuth::VaultPassword { password_item_id } => password_item_id == id,
-                ProfileAuth::PromptPassword
-                | ProfileAuth::SystemAgent { .. }
-                | ProfileAuth::Personal => false,
-            };
-            let hop = p
-                .jumps
-                .iter()
-                .any(|j| j.hop_ref.is_none() && refers(&j.auth));
-            let proxy = p.proxy.as_ref().is_some_and(|x| {
-                matches!(&x.password, Some(ProxyPassword::Vault { password_item_id, .. })
-                    if password_item_id == id)
-            });
-            own || hop || proxy
-        })
-        .count();
-    let identities = core
-        .list_identities(vault_id.to_owned())?
-        .into_iter()
-        .filter(|i| {
-            i.key_item_id.as_deref() == Some(id) || i.password_item_id.as_deref() == Some(id)
-        })
-        .count();
-    Ok(hosts.saturating_add(identities))
+/// "2 hosts and 1 identity": what uses a secret, hosts and identities apart.
+fn used_by(hosts: usize, identities: usize) -> String {
+    let host = (hosts > 0).then(|| match hosts {
+        1 => "1 host".to_owned(),
+        n => format!("{n} hosts"),
+    });
+    let identity = (identities > 0).then(|| match identities {
+        1 => "1 identity".to_owned(),
+        n => format!("{n} identities"),
+    });
+    host.into_iter()
+        .chain(identity)
+        .collect::<Vec<_>>()
+        .join(" and ")
 }
 
 // ---------- unissh keys ----------
@@ -1226,4 +1207,17 @@ fn required_user(user: &str) -> Res<String> {
 /// The identity `query` names, in any vault — for linking one to a host.
 pub fn find_identity(core: &Core, query: &str) -> Res<IdentityEntry> {
     take_identity(load_identities(core, None)?, query)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::used_by;
+
+    /// The delete warning names hosts and identities apart, each pluralised.
+    #[test]
+    fn the_delete_warning_counts_hosts_and_identities_apart() {
+        assert_eq!(used_by(1, 0), "1 host");
+        assert_eq!(used_by(0, 2), "2 identities");
+        assert_eq!(used_by(3, 1), "3 hosts and 1 identity");
+    }
 }

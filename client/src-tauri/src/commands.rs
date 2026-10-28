@@ -863,6 +863,19 @@ pub async fn list_key_rotations(
     Ok(links.into_iter().map(Into::into).collect())
 }
 
+/// What in a vault uses a key or password item: hosts (own login, inline or
+/// referenced jump hop, proxy password) and identities (#169).
+#[tauri::command]
+pub async fn key_usage(
+    vault_id: String,
+    item_id: String,
+    state: State<'_, AppState>,
+) -> ApiResult<dto::KeyUsage> {
+    let core = state.core.clone();
+    let usage = blocking(move || core.key_usage(vault_id, item_id)).await?;
+    Ok(usage.into())
+}
+
 #[tauri::command]
 pub async fn rename_item(
     vault_id: String,
