@@ -10,7 +10,6 @@
 use std::fmt::Write as _;
 use std::io;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::{Args, ValueEnum};
 use unissh_ffi::{Core, FfiError, FfiSyncTarget, VaultInfo};
@@ -181,42 +180,6 @@ pub fn list(text: &str) -> Vec<String> {
 pub fn clearable(text: &str) -> Option<String> {
     let text = text.trim();
     (!text.is_empty()).then(|| text.to_owned())
-}
-
-/// An item id for something new labelled `label`, made the way the app makes
-/// one: a readable slug of the label and the time in milliseconds, so two
-/// devices creating "web" at once do not collide.
-pub fn mint_id(label: &str, fallback: &str) -> String {
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis());
-    format!("{}-{millis}", slug(label, fallback))
-}
-
-/// `label` lowercased, every run of other characters one dash, at most 40
-/// characters; `fallback` when nothing is left.
-pub fn slug(label: &str, fallback: &str) -> String {
-    let mut out = String::new();
-    let mut gap = false;
-    for c in label.chars().flat_map(char::to_lowercase) {
-        if c.is_ascii_lowercase() || c.is_ascii_digit() {
-            if gap && !out.is_empty() {
-                out.push('-');
-            }
-            gap = false;
-            out.push(c);
-        } else {
-            gap = true;
-        }
-    }
-    // Only ASCII went in, so any length is a character boundary.
-    out.truncate(40);
-    let out = out.trim_end_matches('-');
-    if out.is_empty() {
-        fallback.to_owned()
-    } else {
-        out.to_owned()
-    }
 }
 
 /// Where a secret that is being stored comes from: the terminal unless the
@@ -410,7 +373,7 @@ pub fn commit(device: &Device, vault_id: &str, offline: bool, done: &str) -> Res
 
 #[cfg(test)]
 mod tests {
-    use super::{choose_vault, list, read_secret, slug, take, STDIN_READ};
+    use super::{choose_vault, list, read_secret, take, STDIN_READ};
     use crate::hosts::Named;
     use std::io::Read as _;
     use unissh_ffi::{FfiSyncTarget, VaultInfo};
@@ -466,15 +429,6 @@ mod tests {
     fn a_list_flag_reads_as_a_clean_list_and_empty_clears() {
         assert_eq!(list(" prod, web ,,prod"), ["prod", "web"]);
         assert!(list("").is_empty());
-    }
-
-    /// Ids look like the app's: `web-server-<millis>`, and a label of only
-    /// punctuation falls back.
-    #[test]
-    fn a_slug_keeps_letters_and_digits_with_single_dashes() {
-        assert_eq!(slug("  Web Server #2 ", "host"), "web-server-2");
-        assert_eq!(slug("!!!", "host"), "host");
-        assert_eq!(slug(&"a".repeat(50), "host").len(), 40);
     }
 
     /// An item whose id is exactly what was typed is the one meant, though

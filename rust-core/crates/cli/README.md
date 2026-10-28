@@ -67,8 +67,9 @@ unissh snippets run restart web db --set service=nginx
 unissh known-hosts list|trust|forget
 unissh recordings list|play|export|rm   # see Recordings below
 unissh hosts add|edit|rm, groups, secrets, keys, identities, snippets add   # see Editing the vaults
-unissh sync [--retry-refused] | status | logout
+unissh vaults list | trust <id>  # trust a teammate's shared vault (see Shared vaults)
 unissh vaults discard-unpushable Team   # drop changes the server won't take; see below
+unissh sync [--retry-refused] | status | logout
 unissh mcp                     # an MCP server for a local AI agent (see below)
 ```
 
@@ -102,8 +103,10 @@ A copy without a master password unlocks again with its kept Secret Key alone.
 
 `unissh run` runs one command on many hosts, as the app's Fleet does: the hosts
 with a tag (`--tag`, repeated for hosts with every one), the hosts of a group
-(`--group`, nested groups included), or hosts by name. Each host connects as
-`unissh ssh` would connect to it, up to `--parallel` (8) at a time, and the
+(`--group`, with the hosts of groups listed as its members, but not those of
+its subgroups: groups whose parent it is, as the app's Fleet leaves them out
+too), or hosts by name. Each host connects as `unissh ssh` would connect to
+it, up to `--parallel` (8) at a time, and the
 command then has `--timeout` (30) seconds to finish; 0 means no limit. Each
 line of output is led by the host's label (`web | ...`), stdout to stdout and
 stderr to stderr, as each host finishes, and a summary line ends the run.
@@ -127,8 +130,9 @@ A password prompt reads a key at a time with the terminal's signals off: Ctrl-C
 cancels it and puts the terminal back. `unissh ssh host -- cmd | head` ends when
 the reader does, with status 141 as `ssh` would. `unissh cp` downloads into a
 temporary file beside the destination and renames it into place when the copy is
-complete, so a failed copy leaves an existing file as it was. An upload, as with
-`scp`, writes the remote file in place.
+complete, so a failed copy leaves an existing file as it was. A downloaded file
+is owner-only (0600) on Unix, whatever its mode on the host: `chmod` it if others
+need it, or to run it. An upload, as with `scp`, writes the remote file in place.
 
 `unissh cp -r` copies a directory: into the destination when that is an
 existing directory, else as the destination. Each file goes as a single-file
@@ -138,8 +142,9 @@ file that exists is replaced only with `--force`. Symbolic links inside the tree
 are not followed, and they and anything else that is not a regular file or a
 directory (sockets, pipes, devices) are named as skipped; the app's SFTP pane
 copies links as links, the CLI does not copy them at all. A file that fails is
-named and the copy goes on; the command then exits 1. Unlike `scp`, a download
-creates the destination's missing parent directories. A remote name this system
+named (a download by its remote path) and the copy goes on; the command then
+exits 1. Unlike `scp`, a download creates the destination's missing parent
+directories. A remote name this system
 cannot hold (on Windows, one with `\` or `:`) is skipped, and on macOS and
 Windows so is a name that differs from another in its directory only in case.
 A copy stopped with Ctrl-C can leave `.unissh-part` files behind.
@@ -158,6 +163,32 @@ the ones already open. The tunnels stay up until Ctrl-C or SIGTERM, then close
 cleanly; a second Ctrl-C while they close quits at once (status 130). A hang-up
 ends the process as usual, without the clean close, and under `nohup` the tunnels
 stay up. A connection that drops is not reopened.
+
+### Shared vaults
+
+A vault a teammate shares with this account is verified against its owner's key,
+and this machine learns that key only from you: the server is never trusted to say
+who owns a vault. Until you trust the owner, the vault stays on the server, and
+`unissh sync` says how many wait:
+
+```bash
+unissh vaults list                 # the vaults here, and shared ones waiting for trust
+unissh vaults trust 3f2a9c1e       # by id or the start of it
+unissh vaults trust 3f2a9c1e --fingerprint "1a2b 3c4d …"   # the fingerprint the owner gave you
+```
+
+`trust` shows the vault and the name the server's directory gives its owner, marked
+unverified, and asks for the owner's fingerprint. Ask the owner for it over a channel
+you trust (they find it in `unissh status`, or in the app) and type or paste it: the
+vault is trusted only if it is the fingerprint of the key that created the vault. A
+fingerprint that does not match stops with a warning: someone may be posing as the
+owner. If you have none, press Enter: the creator key's fingerprint is shown, and
+typing `yes` after comparing it with the owner's digit by digit trusts it. That is the
+weaker check — typing theirs is better. `--fingerprint` takes a fingerprint only,
+never `yes`. Once trusted, the owner is pinned on this machine for good and the vault
+is fetched (if the fetch is cut short, run `trust` again: it goes straight to the
+fetch). A server that later names a different owner for it is refused, and
+`vaults list` and `sync` warn about it.
 
 ### Recordings
 
@@ -239,6 +270,9 @@ unissh secrets show <name> [--reveal [--yes]]                   # --reveal print
 unissh secrets rm <name>
 unissh keys generate <name> | import <name> <file|-> | public <name> | certificate <name> <file|->
 unissh keys rotate <name>                                       # a new pair in place
+unissh keys rotation begin <name>                               # a new key beside it
+unissh keys rotation run <name> [--host H]... [--json]          # install + prove it per machine
+unissh keys rotation finish <name> [--yes [--allow-lockout]]    # drop the old key, commit the new
 unissh keys rotation list | abandon <name>
 unissh identities list | add <name> --user U [--key K] | edit <name> | rm <name>
 unissh snippets add [--label L] [--command C | --stdin]         # else $EDITOR
@@ -270,7 +304,8 @@ terminal (a password twice), read from stdin with `--stdin`, or from an owner-on
 file with `--from-file`. `secrets show` prints only what an item is; with
 `--reveal` it prints the password, the note or the private key, and nothing else.
 A private key is printed only after you confirm the app's export warning on the
-terminal. `--yes` skips the question, and without a terminal it is required.
+terminal; answering no prints "Not shown." and exits 0. `--yes` skips the
+question, and without a terminal it is required.
 `keys public` prints a public key freely. `keys import` asks for a passphrase on
 the terminal when the key has one.
 
@@ -285,8 +320,38 @@ what is missing and fails. Do not run `add` again then: finish the host with
 
 Deleting asks first on the terminal; `--yes` skips the question. `keys rotate`
 replaces a key at once, which locks out every host that has only the old public
-key. The app's guided rotation moves each machine over first; the rotations it
-begins can be listed and abandoned here.
+key. The guided rotation moves each machine over first, as the app's rotation
+dialog does (the plan and the steps are the same, from the core):
+
+- `keys rotation begin` lists the machines that have to learn a new key —
+  each host that logs in with the key and each jump host that does, over its
+  route — the hosts that follow them, and the hosts it leaves alone (personal
+  logins, system agent keys, passwords). Then it creates the new key beside
+  the old one. A key no host logs in with is refused: `keys rotate` it.
+- `keys rotation run` installs the new public key on each machine (logged in
+  with the old key) and proves a key-only login with the new one, a line per
+  step as it lands and a table at the end. It removes nothing, so run it again,
+  for some machines with `--host`, until every machine passes; it exits
+  non-zero while one does not. A machine behind a jump host that uses the key
+  goes after that jump host, through it with the new key once it works there.
+- `keys rotation finish` checks the new key on every machine again and says
+  which machines a finish would lock out — those it does not log in on, and
+  those reached through a jump host it does not log in on — then asks. With
+  `--yes` it refuses such a lockout unless `--allow-lockout` is given too. It
+  removes the old key's line only where the new key logged in, checks that the
+  old key is then refused, and makes the new key the key's current version
+  (the old one stays in this device's history; a certificate on the key is
+  removed). It exits non-zero when a machine is left locked out or still
+  accepting the old key.
+
+`run` and `finish` log in with both keys, so they go only to machines whose
+host key this device has pinned: connect once first (`unissh ssh <host>`; for a
+jump host, the host behind it). A changed host key fails as on every connect.
+
+Ctrl-C stops a run or finish: steps in flight finish, nothing new starts, and a
+finish stopped before its last step changes no key. It names the machines it
+already took the old key off: they take only the new key until you finish. A rotation begun on another
+device can only be abandoned here.
 ## MCP server
 
 `unissh mcp` is the desktop app's MCP server (`docs/desktop-mcp.md`) in a terminal:
@@ -339,8 +404,10 @@ unissh mcp --http [--port 8765]                      # loopback HTTP, in a termi
   asked about there, on `/dev/tty`: the exact command, working directory,
   environment and stdin in escaped string notation, the host, and the application
   asking. Only a typed `yes` allows it; anything else denies, and an unanswered
-  question expires after two minutes, as in the app. Sign-in prompts of the hosts
-  an agent connects to are asked on the same terminal, one question at a time.
+  question expires after two minutes, as in the app. The prompt says by when, in
+  UTC, and how long that is ("answer by 14:32:05 UTC, within 2 min"). Sign-in
+  prompts of the hosts an agent connects to are asked on the same terminal, one
+  question at a time.
 - **Grants** mirror the desktop's access editor: hosts (named as for `unissh ssh`,
   across vaults), an expiry (`--for 30m|8h|7d`, default none), confirmation or
   `--trusted`, the longest a command may run (`--command-limit`, 1m–24h, default
@@ -372,7 +439,17 @@ unissh mcp --http [--port 8765]                      # loopback HTTP, in a termi
   cancelled, and the saved grants resume on unlock, or on a wake while the session is
   not locked. Only logind is heard: a signal from any other process is ignored. A
   desktop that locks without telling logind does not pause it, and on macOS and
-  Windows nothing is observed. Without logind it logs a warning at start.
+  Windows nothing is observed. Without logind it logs a warning at start. The
+  session it follows is the one `$XDG_SESSION_ID` names, when that is a session of
+  your own user that is not closing; else the one logind gives for the process;
+  failing that, the user's graphical session. A warning names the session it
+  follows when it is that graphical session (a guess), when `$XDG_SESSION_ID`
+  named none of yours, and when the named session is not your graphical session:
+  an ssh login, or a tmux server started from one, may never lock, and locking
+  the desktop does not lock it. Inside tmux, a pane keeps the `$XDG_SESSION_ID`
+  of the login the tmux server started in, so it follows that session, not the
+  terminal you attach from later: to follow another session, start `unissh mcp`
+  with `XDG_SESSION_ID` set to its id (see `loginctl`).
 - **Lifetime.** The vaults are unlocked for the life of the process (the interactive
   list's idle lock does not apply). It stops when the agent closes stdin, or on
   Ctrl-C, SIGTERM or SIGHUP; access is revoked before the transport stops, recorded
@@ -410,8 +487,8 @@ machine that can no longer reach it; revoke the device from another one afterwar
 
 Agent forwarding (each signature needs an approval prompt, which a raw terminal
 cannot show), the saved-password offer at `sudo` prompts, running a host's
-startup snippets, auto-reconnect, creating or sharing vaults, the guided key
-rotation (begin and finish it in the app), claiming an instance, SSO sign-in,
+startup snippets, auto-reconnect, creating or sharing vaults, claiming an
+instance, SSO sign-in,
 and more than one server per machine. Interactive use needs a Unix terminal.
 
 Sessions are recorded when the host asks for it, as in the app, and the recording

@@ -13,7 +13,8 @@ use reqwest::blocking::{RequestBuilder, Response};
 use reqwest::StatusCode;
 use serde_json::{json, Value};
 use unissh_ffi::{
-    Core, FfiDiscardReport, FfiError, FfiSyncReport, FfiSyncTransport, SyncDeltaItem,
+    Core, FfiDiscardReport, FfiError, FfiSyncReport, FfiSyncTransport, FfiTrustOutcome,
+    SharedVaultInfo, SyncDeltaItem, VaultPage,
 };
 
 use crate::client::{self, Reauth};
@@ -159,14 +160,11 @@ impl HttpSyncTransport {
     /// memory whole.
     ///
     /// Unlike `delta_since`, a page that cannot be read — a transport error, a
-    /// non-2xx, bad JSON, or "more follows" without a usable cursor — is an
-    /// error: the targeted pull and the discard must not take a cut-short set
-    /// for the whole vault.
-    pub fn vault_delta_page(
-        &self,
-        vault_id_hex: &str,
-        cursor: u64,
-    ) -> Result<(Vec<Vec<u8>>, Option<u64>), FfiError> {
+    /// non-2xx, bad JSON, an object that is not base64, or "more follows"
+    /// without a usable cursor — is an error: the targeted pull and the
+    /// share-accept inspection must not take a cut-short set for the whole
+    /// vault.
+    pub fn vault_delta_page(&self, vault_id_hex: &str, cursor: u64) -> Result<VaultPage, FfiError> {
         let failed = |why: String| FfiError::Other {
             msg: format!("the server's objects for this vault could not be read: {why}"),
         };
@@ -184,8 +182,9 @@ impl HttpSyncTransport {
             .map_err(|e| failed(format!("bad JSON: {e}")))?;
         let objects = items_of(&v)
             .filter_map(|item| item.get("object").and_then(Value::as_str))
-            .filter_map(|obj_b64| client::unb64(obj_b64).ok())
-            .collect();
+            .map(client::unb64)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| failed(format!("an object on the page is not base64 ({e})")))?;
         let next = next_page(&v, cursor);
         let more = v.get("has_more").and_then(Value::as_bool).unwrap_or(false);
         if more && next.is_none() {
@@ -196,42 +195,21 @@ impl HttpSyncTransport {
         Ok((objects, next))
     }
 
-    /// **Pulls ONE vault** (hex id) into `core`, page by page
-    /// ([`Self::vault_delta_page`] → `Core::apply_pulled_vault`, born-bound to
-    /// `tenant_b64`), without moving the pull cursor; the report is the sum
-    /// over the pages. What the app's per-vault "Pull" (`server_pull_vault`)
-    /// runs. A page that cannot be read is an error saying the pull was cut
-    /// short (what the earlier pages applied stays applied).
+    /// **Pulls ONE vault** (by hex id) onto this device: its objects page by
+    /// page through the core's verify-before-apply, born-bound to `tenant_b64`,
+    /// WITHOUT moving the pull cursor (see [`Core::pull_vault_paged`]). The
+    /// recovery for a vault an earlier sync rejected — a teammate's vault
+    /// before its owner was pinned — and the app's "Pull from server". A page
+    /// that cannot be read is an error saying the pull was cut short.
     pub fn pull_vault(
         &self,
         core: &Core,
         tenant_b64: &str,
         vault_id_hex: &str,
     ) -> Result<FfiSyncReport, FfiError> {
-        let mut total = core.apply_pulled_vault(tenant_b64.to_owned(), Vec::new())?;
-        let mut cursor = 0_u64;
-        loop {
-            let (objects, next) =
-                self.vault_delta_page(vault_id_hex, cursor)
-                    .map_err(|e| FfiError::Other {
-                        msg: format!(
-                            "the pull of this vault was cut short after {} object(s) were \
-                             applied: {e}",
-                            total.applied
-                        ),
-                    })?;
-            if !objects.is_empty() {
-                let page = core.apply_pulled_vault(tenant_b64.to_owned(), objects)?;
-                total.applied = total.applied.saturating_add(page.applied);
-                total.skipped_stale = total.skipped_stale.saturating_add(page.skipped_stale);
-                total.conflicts = total.conflicts.saturating_add(page.conflicts);
-                total.rejected = total.rejected.saturating_add(page.rejected);
-            }
-            match next {
-                Some(next) => cursor = next,
-                None => return Ok(total),
-            }
-        }
+        core.pull_vault_paged(tenant_b64, |cursor| {
+            self.vault_delta_page(vault_id_hex, cursor)
+        })
     }
 
     /// Every object of ONE vault as the server has it (all the pages of
@@ -271,6 +249,35 @@ impl HttpSyncTransport {
             vault_id_hex.to_owned(),
             server_copy,
         )
+    }
+
+    /// Inspects a vault shared with this account before its owner is trusted
+    /// (see [`Core::inspect_shared_vault_paged`]): the vault's objects are read
+    /// page by page and only its membership is kept. `Ok(None)`: this account
+    /// created the vault and it needs no trust. Writes nothing.
+    pub fn inspect_vault(
+        &self,
+        core: &Core,
+        vault_id_hex: &str,
+    ) -> Result<Option<SharedVaultInfo>, FfiError> {
+        core.inspect_shared_vault_paged(vault_id_hex, |cursor| {
+            self.vault_delta_page(vault_id_hex, cursor)
+        })
+    }
+
+    /// Trusts the owner of a vault shared with this account: the core
+    /// inspects the vault's membership read from the server, compares
+    /// `expected_fingerprint` and pins in one step (see
+    /// [`Core::trust_shared_vault_paged`]). Pull the vault after.
+    pub fn trust_vault(
+        &self,
+        core: &Core,
+        vault_id_hex: &str,
+        expected_fingerprint: &str,
+    ) -> Result<FfiTrustOutcome, FfiError> {
+        core.trust_shared_vault_paged(vault_id_hex, expected_fingerprint, |cursor| {
+            self.vault_delta_page(vault_id_hex, cursor)
+        })
     }
 }
 
@@ -556,6 +563,19 @@ mod tests {
             matches!(&err, FfiError::Other { msg } if msg == "sync push http 403"),
             "{err:?}"
         );
+    }
+
+    /// An object that does not decode fails the whole page instead of being
+    /// dropped: a vault page with a hole in it is not the vault.
+    #[test]
+    fn a_vault_page_with_an_object_that_is_not_base64_is_an_error() {
+        let (base, _) = serve(vec![(
+            "200 OK",
+            r#"{"items":[{"object":"AAAA"},{"object":"not base64!"}],"has_more":false}"#,
+        )]);
+        let transport = HttpSyncTransport::with_reauth(base, "token".to_owned(), None);
+
+        assert!(transport.vault_delta_page(&"ab".repeat(16), 0).is_err());
     }
 
     #[test]

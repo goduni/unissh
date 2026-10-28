@@ -2905,15 +2905,12 @@ fn group_validation_and_clobber() {
     core.generate_ssh_key("v".to_owned(), "id".to_owned())
         .unwrap();
 
-    // self-membership / self-parenting / empty id → error
+    // self-membership / self-parenting → error
     assert!(core
         .save_group("v".to_owned(), group("g", &["g"], None))
         .is_err());
     assert!(core
         .save_group("v".to_owned(), group("g", &[], Some("g")))
-        .is_err());
-    assert!(core
-        .save_group("v".to_owned(), group("", &[], None))
         .is_err());
 
     // cross-type clobber: a group with the id of an existing key → AlreadyExists, key intact
@@ -4379,18 +4376,7 @@ fn snippet_crud_round_trip() {
     assert_eq!(list[1].command, "sudo journalctl -fu app");
     assert_eq!(list[1].tags, vec!["ops".to_owned()]);
 
-    // Empty id and empty command are refused rather than stored as junk.
-    assert!(core
-        .save_snippet(
-            "v".to_owned(),
-            unissh_ffi::Snippet {
-                snippet_id: String::new(),
-                label: "x".to_owned(),
-                command: "echo".to_owned(),
-                tags: vec![],
-            },
-        )
-        .is_err());
+    // An empty command is refused rather than stored as junk.
     assert!(core
         .save_snippet(
             "v".to_owned(),

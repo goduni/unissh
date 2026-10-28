@@ -214,6 +214,10 @@ fn account_pubkeys(
 
 #[test]
 #[ignore = "needs `cargo build -p unissh-server` + free TCP ports"]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end story: claim, invite, join, grant, and sync on two devices"
+)]
 fn live_e2e_claim_invite_join_and_two_device_sync() {
     let Some(srv) = spawn_server() else {
         return; // skipped (binary absent)
@@ -316,26 +320,56 @@ fn live_e2e_claim_invite_join_and_two_device_sync() {
     );
 
     // ── B (the granted member) pulls the shared vault ──────────────────────────
-    // B first pins A as the vault's genesis owner (the TOFU share-accept step), so the
-    // untrusted-DB authority checks verify A's objects against the RIGHT anchor rather
-    // than defaulting to B's own keyset (which would reject them).
-    core_b
-        .pin_vault_genesis_owner(vid.clone(), a_ed_hex)
-        .expect("B pins A as the shared vault's genesis owner");
+    // B's first sync meets A's objects with no owner pinned: they verify against B's
+    // own keyset, fail, and move B's pull cursor past them.
     let transport_b: Arc<dyn unissh_ffi::FfiSyncTransport> = Arc::new(HttpSyncTransport::new(
         base.clone(),
         session_b.access_token.clone(),
     ));
-    let report_b = core_b
+    let first_b = core_b
         .sync_now(transport_b, space.clone(), unissh_ffi::FfiSyncMode::Full)
         .expect("B sync_now should succeed");
+    assert!(
+        first_b.rejected >= 1,
+        "A's vault is rejected until B trusts its owner: {first_b:?}"
+    );
+    // The share-accept step: B inspects the vault (the server's catalog lists it,
+    // the verified chain names A), compares A's fingerprint with the one A reads
+    // out from its own device, pins A, then pulls the vault by itself.
+    let pending =
+        unissh_cloud::shared::pending_shared_vaults(&core_b, base, &session_b.access_token)
+            .expect("B lists the vaults waiting for trust");
+    let waiting = pending
+        .vaults
+        .iter()
+        .find(|p| p.vault_id.eq_ignore_ascii_case(&vid))
+        .expect("the shared vault waits for B's trust");
+    let info = waiting.inspected.as_ref().expect("its chain verifies");
+    assert_eq!(info.owner_ed25519_hex, a_ed_hex, "the genesis author is A");
+    assert_eq!(
+        info.fingerprint,
+        core_a.own_fingerprint().unwrap(),
+        "what A reads out from its own device"
+    );
+    let transport_b = HttpSyncTransport::new(base.clone(), session_b.access_token.clone());
+    let a_fingerprint = core_a.own_fingerprint().unwrap();
+    assert_eq!(
+        transport_b
+            .trust_vault(&core_b, &waiting.vault_id, &a_fingerprint)
+            .expect("B trusts A by the fingerprint A gave"),
+        unissh_ffi::FfiTrustOutcome::Trusted,
+        "B pins A as the shared vault's genesis owner"
+    );
+    let report_b = transport_b
+        .pull_vault(&core_b, &space, &vid)
+        .expect("B pulls the shared vault");
     // The membership grant makes B's server-side delta include the shared vault's
     // objects (server delta visibility is grant-scoped at the latest epoch), and B
     // accepts them after pinning A. This proves the full invite → join → grant →
-    // cross-account visibility chain over the real server.
+    // trust → cross-account visibility chain over the real server.
     assert!(
-        report_b.applied >= 1,
-        "B should receive & accept A's shared-vault objects after the grant: {report_b:?}"
+        report_b.applied >= 1 && report_b.rejected == 0,
+        "B should receive & accept A's shared-vault objects after the pin: {report_b:?}"
     );
     // DECISIVE: B — a DISTINCT account, not a sibling device of A — decrypts the shared
     // secret through the ordinary FFI read surface using ITS OWN keyset. B's grant wraps

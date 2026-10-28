@@ -108,6 +108,8 @@ impl From<FfiError> for Failure {
             | FfiError::PublickeyOnlyNeedsKey
             | FfiError::KeyRefused
             | FfiError::KeyAcceptedMoreAuthRequired
+            | FfiError::PassphraseRequired
+            | FfiError::WrongPassphrase
             | FfiError::Ssh { .. }
             | FfiError::Other { .. } => e.to_string(),
         };

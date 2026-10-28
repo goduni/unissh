@@ -13,9 +13,8 @@ use std::time::{Duration, UNIX_EPOCH};
 use clap::{Args, Subcommand};
 use serde_json::{json, Value};
 use unissh_ffi::{
-    AuthMethod, Core, FfiError, Identity, ItemInfo, KeyRotationLink, ProfileAuth, ProxyPassword,
-    VaultInfo, ITEM_TYPE_IDENTITY as IDENTITY, ITEM_TYPE_NOTE as NOTE,
-    ITEM_TYPE_PASSWORD as PASSWORD, ITEM_TYPE_SSH_KEY as SSH_KEY,
+    Core, FfiError, Identity, ItemInfo, VaultInfo, ITEM_TYPE_IDENTITY as IDENTITY,
+    ITEM_TYPE_NOTE as NOTE, ITEM_TYPE_PASSWORD as PASSWORD, ITEM_TYPE_SSH_KEY as SSH_KEY,
 };
 use zeroize::Zeroizing;
 
@@ -25,7 +24,8 @@ use crate::failure::{Failure, Res};
 use crate::home::read_private;
 use crate::hosts::{self, Named};
 use crate::manage::ago;
-use crate::tty::{confirm, one_line};
+use crate::rotation::{self, RotationAction};
+use crate::tty::{confirm, goes_on, one_line};
 
 /// Which secrets a lookup is after: the item types, and what one is called.
 pub trait Sort {
@@ -152,24 +152,22 @@ pub fn find_in<S: Sort>(core: &Core, vault_id: &str, query: &str) -> Res<String>
 }
 
 /// The secret of sort `S` that `query` names, in the scope `vault` sets.
-fn find_one<S: Sort>(core: &Core, vault: &VaultArg, query: &str) -> Res<Entry<S>> {
+pub fn find_one<S: Sort>(core: &Core, vault: &VaultArg, query: &str) -> Res<Entry<S>> {
     find::<S>(core, vault.scope(core)?.as_deref(), query)
 }
 
-/// Refuses `name` when anything already has that id in the vault: the core
-/// would overwrite a key's private material in place.
-fn refuse_taken(core: &Core, vault_id: &str, vault_name: &str, name: &str) -> Res<()> {
-    if core
-        .list_items(vault_id.to_owned())?
-        .iter()
-        .any(|i| i.item_id == name)
-    {
-        return Err(Failure::msg(format!(
+/// What a create-only write of `name` to vault `vault_name` came to: the
+/// core refuses an id something already has (checked as it writes, so no
+/// other device's change slips in between), said here in the user's words.
+fn created<T>(vault_name: &str, name: &str, result: Result<T, FfiError>) -> Res<T> {
+    match result {
+        Err(FfiError::AlreadyExists) => Err(Failure::msg(format!(
             "\"{name}\" already exists in vault \"{}\"",
             one_line(vault_name)
-        )));
+        ))),
+        Ok(done) => Ok(done),
+        Err(e) => stored(vault_name, Err(e)),
     }
-    Ok(())
 }
 
 /// A name for a new item: not empty, one line.
@@ -450,14 +448,19 @@ fn describe<S>(core: &Core, entry: &Entry<S>) -> Res<()> {
 /// the vault, and stdout may well be a file.
 fn reveal<S>(core: &Core, entry: &Entry<S>, version: Option<u64>, yes: bool) -> Res<()> {
     let (vault_id, item_id) = (entry.vault_id.clone(), entry.info.item_id.clone());
-    if entry.info.item_type == SSH_KEY && version.is_none() {
-        confirm(
+    // Declining is an answer, not a failure: nothing is shown and it exits 0.
+    if entry.info.item_type == SSH_KEY
+        && version.is_none()
+        && !goes_on(
             yes,
             &format!(
                 "The private key \"{}\" will be printed unencrypted. Keep it somewhere safe.\n",
                 one_line(&item_id)
             ),
-        )?;
+        )?
+    {
+        eprintln!("Not shown.");
+        return Ok(());
     }
     let text = Zeroizing::new(match (entry.info.item_type, version) {
         (PASSWORD, None) => core.get_password(vault_id, item_id)?,
@@ -516,10 +519,13 @@ fn remove<S>(device: &Device, offline: bool, entry: &Entry<S>, yes: bool) -> Res
             ));
         }
     } else {
-        let uses = uses_of(core, vault_id, id)?;
-        if uses > 0 {
+        // The core's one answer (#169): hosts by login, inline or referenced
+        // hop and proxy, plus identities.
+        let usage = core.key_usage(vault_id.clone(), id.clone())?;
+        if usage.count() > 0 {
             warning.push_str(&format!(
-                "It is used by {uses} host(s) or identities. Deleting it will break their login.\n"
+                "It is used by {}. Deleting it will break their login.\n",
+                used_by(usage.hosts.len(), usage.identities.len())
             ));
         }
     }
@@ -542,46 +548,20 @@ fn remove<S>(device: &Device, offline: bool, entry: &Entry<S>, yes: bool) -> Res
     )
 }
 
-/// How many hosts (their login, a jump hop, a proxy) and identities in the
-/// vault refer to the key or password `id`.
-fn uses_of(core: &Core, vault_id: &str, id: &str) -> Res<usize> {
-    let refers = |auth: &AuthMethod| match auth {
-        AuthMethod::Agent { key_item_id, .. } => key_item_id == id,
-        AuthMethod::VaultPassword {
-            password_item_id, ..
-        } => password_item_id == id,
-        AuthMethod::Password { .. } | AuthMethod::SystemAgent { .. } => false,
-    };
-    let hosts = core
-        .list_connections(vault_id.to_owned())?
-        .into_iter()
-        .filter(|p| {
-            let own = match &p.auth {
-                ProfileAuth::Key { key_item_id } => key_item_id == id,
-                ProfileAuth::VaultPassword { password_item_id } => password_item_id == id,
-                ProfileAuth::PromptPassword
-                | ProfileAuth::SystemAgent { .. }
-                | ProfileAuth::Personal => false,
-            };
-            let hop = p
-                .jumps
-                .iter()
-                .any(|j| j.hop_ref.is_none() && refers(&j.auth));
-            let proxy = p.proxy.as_ref().is_some_and(|x| {
-                matches!(&x.password, Some(ProxyPassword::Vault { password_item_id, .. })
-                    if password_item_id == id)
-            });
-            own || hop || proxy
-        })
-        .count();
-    let identities = core
-        .list_identities(vault_id.to_owned())?
-        .into_iter()
-        .filter(|i| {
-            i.key_item_id.as_deref() == Some(id) || i.password_item_id.as_deref() == Some(id)
-        })
-        .count();
-    Ok(hosts.saturating_add(identities))
+/// "2 hosts and 1 identity": what uses a secret, hosts and identities apart.
+fn used_by(hosts: usize, identities: usize) -> String {
+    let host = (hosts > 0).then(|| match hosts {
+        1 => "1 host".to_owned(),
+        n => format!("{n} hosts"),
+    });
+    let identity = (identities > 0).then(|| match identities {
+        1 => "1 identity".to_owned(),
+        n => format!("{n} identities"),
+    });
+    host.into_iter()
+        .chain(identity)
+        .collect::<Vec<_>>()
+        .join(" and ")
 }
 
 // ---------- unissh keys ----------
@@ -638,37 +618,13 @@ pub enum KeysAction {
         #[arg(long)]
         yes: bool,
     },
-    /// Staged rotations begun in the app, which moves each machine over and
-    /// finishes them: list them, or abandon one.
+    /// A guided rotation, as the app's Start rotation: begin a new key beside
+    /// this one, move each machine over to it, then finish (or abandon).
     #[command(subcommand)]
     Rotation(RotationAction),
     /// Delete a key.
     Rm {
         /// The key's name (or vault/name).
-        name: String,
-        #[command(flatten)]
-        vault: VaultArg,
-        /// Do not ask for confirmation.
-        #[arg(long)]
-        yes: bool,
-    },
-}
-
-/// `unissh keys rotation`.
-#[derive(Subcommand)]
-pub enum RotationAction {
-    /// List the rotations in progress.
-    List {
-        #[command(flatten)]
-        vault: VaultArg,
-        /// Print JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Abandon a rotation: delete its candidate key; the original is not
-    /// changed.
-    Abandon {
-        /// The original key's name, or its candidate's.
         name: String,
         #[command(flatten)]
         vault: VaultArg,
@@ -685,10 +641,10 @@ pub fn keys(device: &Device, offline: bool, action: KeysAction) -> Res<()> {
         KeysAction::Generate { name, vault } => {
             let name = new_name(&name)?;
             let target = vault.pick(core, None)?;
-            refuse_taken(core, &target.vault_id, &target.name, &name)?;
-            let public = stored(
+            let public = created(
                 &target.name,
-                core.generate_ssh_key(target.vault_id.clone(), name.clone()),
+                &name,
+                core.create_ssh_key(target.vault_id.clone(), name.clone()),
             )?;
             println!("{}", public.trim_end());
             commit(
@@ -701,7 +657,6 @@ pub fn keys(device: &Device, offline: bool, action: KeysAction) -> Res<()> {
         KeysAction::Import { name, file, vault } => {
             let name = new_name(&name)?;
             let target = vault.pick(core, None)?;
-            refuse_taken(core, &target.vault_id, &target.name, &name)?;
             let private = read_input(&file, true)?;
             let public = import(core, &target, &name, &private)?;
             println!("{}", public.trim_end());
@@ -748,10 +703,7 @@ pub fn keys(device: &Device, offline: bool, action: KeysAction) -> Res<()> {
             let key = find_one::<Key>(core, &vault, &name)?;
             rotate(device, offline, &key, yes)
         }
-        KeysAction::Rotation(RotationAction::List { vault, json }) => rotations(core, &vault, json),
-        KeysAction::Rotation(RotationAction::Abandon { name, vault, yes }) => {
-            abandon(device, offline, &vault, &name, yes)
-        }
+        KeysAction::Rotation(action) => rotation::rotation(device, offline, action),
         KeysAction::Rm { name, vault, yes } => {
             let key = find_one::<Key>(core, &vault, &name)?;
             remove(device, offline, &key, yes)
@@ -781,29 +733,20 @@ fn read_input(file: &Path, private: bool) -> Res<Zeroizing<String>> {
     text.ok_or_else(|| Failure::msg(format!("{} does not exist", file.display())))
 }
 
-/// Imports `private` as key `name` into `target`, asking for its passphrase
-/// when the core says it needs one — the app's flow, with the terminal as
-/// its dialog.
+/// Imports `private` as the new key `name` into `target`, asking for its
+/// passphrase when the core says it needs one — the app's flow, with the
+/// terminal as its dialog.
 fn import(core: &Core, target: &VaultInfo, name: &str, private: &str) -> Res<String> {
     let attempt = |passphrase: Option<String>| {
-        stored(
-            &target.name,
-            core.import_ssh_key(
-                target.vault_id.clone(),
-                name.to_owned(),
-                private.to_owned(),
-                passphrase,
-            ),
+        core.create_imported_ssh_key(
+            target.vault_id.clone(),
+            name.to_owned(),
+            private.to_owned(),
+            passphrase,
         )
     };
-    match core.import_ssh_key(
-        target.vault_id.clone(),
-        name.to_owned(),
-        private.to_owned(),
-        None,
-    ) {
-        Ok(public) => Ok(public),
-        Err(e) if needs_passphrase(&e) => {
+    let result = match attempt(None) {
+        Err(FfiError::PassphraseRequired) => {
             let passphrase = ask_secret(
                 &format!("Passphrase for {}: ", one_line(name)),
                 "the key's passphrase",
@@ -811,15 +754,10 @@ fn import(core: &Core, target: &VaultInfo, name: &str, private: &str) -> Res<Str
             )?;
             attempt(Some((*passphrase).clone()))
         }
-        Err(e) => stored(&target.name, Err(e)),
-    }
-}
-
-/// Whether the core refused a key for want of its passphrase (its messages
-/// are stable English, which is what the app matches as well).
-fn needs_passphrase(e: &FfiError) -> bool {
-    let text = e.to_string().to_lowercase();
-    text.contains("passphrase is required") || text.contains("passphrase-protected")
+        Ok(public) => Ok(public),
+        Err(e) => Err(e),
+    };
+    created(&target.name, name, result)
 }
 
 /// `unissh keys rotate`: the app's "Replace key", not its guided rotation.
@@ -832,8 +770,9 @@ fn rotate(device: &Device, offline: bool, key: &Entry<Key>, yes: bool) -> Res<()
         .any(|l| &l.key_id == id || &l.candidate_id == id);
     if staged {
         return Err(Failure::msg(format!(
-            "a staged rotation of \"{}\" is in progress: finish it in the app, or \
-             `unissh keys rotation abandon \"{}\"`",
+            "a staged rotation of \"{}\" is in progress: `unissh keys rotation finish \"{}\"`, \
+             or `unissh keys rotation abandon \"{}\"`",
+            one_line(id),
             one_line(id),
             one_line(id)
         )));
@@ -841,7 +780,7 @@ fn rotate(device: &Device, offline: bool, key: &Entry<Key>, yes: bool) -> Res<()
     let mut warning = format!(
         "A new keypair replaces \"{}\" immediately and the old private key is discarded.\n\
          Every host that trusts only the old public key will refuse logins until you\n\
-         install the new one. To switch without a lockout, use Start rotation in the app.\n",
+         install the new one. To switch without a lockout: `unissh keys rotation begin`.\n",
         one_line(id)
     );
     if key.info.has_certificate {
@@ -858,123 +797,6 @@ fn rotate(device: &Device, offline: bool, key: &Entry<Key>, yes: bool) -> Res<()
         &key.vault_id,
         offline,
         &format!("Replaced key {}", one_line(id)),
-    )
-}
-
-/// A rotation and the vault it is in.
-struct Rotation {
-    vault_id: String,
-    vault_name: String,
-    link: KeyRotationLink,
-}
-
-fn load_rotations(core: &Core, vault: &VaultArg) -> Res<Vec<Rotation>> {
-    let scope = vault.scope(core)?;
-    hosts::per_vault(
-        core,
-        |vault_id| {
-            if edit::in_scope(scope.as_deref(), &vault_id) {
-                core.list_key_rotations(vault_id)
-            } else {
-                Ok(Vec::new())
-            }
-        },
-        |vault_id, vault_name, link| Rotation {
-            vault_id: vault_id.to_owned(),
-            vault_name: vault_name.to_owned(),
-            link,
-        },
-    )
-}
-
-const fn started(link: &KeyRotationLink) -> &'static str {
-    if link.started_elsewhere {
-        "started on another device"
-    } else {
-        "started here"
-    }
-}
-
-fn rotations(core: &Core, vault: &VaultArg, json: bool) -> Res<()> {
-    let all = load_rotations(core, vault)?;
-    if json {
-        return print_json(&Value::Array(
-            all.iter()
-                .map(|r| {
-                    json!({
-                        "vault": r.vault_name,
-                        "key": r.link.key_id,
-                        "candidate": r.link.candidate_id,
-                        "started_elsewhere": r.link.started_elsewhere,
-                    })
-                })
-                .collect(),
-        ));
-    }
-    if all.is_empty() {
-        eprintln!("unissh: no key rotation is in progress");
-        return Ok(());
-    }
-    let rows: Vec<Vec<String>> = all
-        .iter()
-        .map(|r| {
-            vec![
-                r.link.key_id.clone(),
-                format!("→ {}", r.link.candidate_id),
-                r.vault_name.clone(),
-                started(&r.link).to_owned(),
-            ]
-        })
-        .collect();
-    print!("{}", columns(&rows));
-    Ok(())
-}
-
-fn abandon(device: &Device, offline: bool, vault: &VaultArg, name: &str, yes: bool) -> Res<()> {
-    let all = load_rotations(&device.core, vault)?;
-    let matching: Vec<&Rotation> = all
-        .iter()
-        .filter(|r| r.link.key_id == name || r.link.candidate_id == name)
-        .collect();
-    let rotation = match matching.as_slice() {
-        [one] => *one,
-        [] => {
-            return Err(Failure::msg(format!(
-                "no rotation of \"{name}\" is in progress (`unissh keys rotation list`)"
-            )))
-        }
-        _ => {
-            return Err(Failure::msg(format!(
-                "\"{name}\" is being rotated in several vaults; choose one with --vault"
-            )))
-        }
-    };
-    let link = &rotation.link;
-    let (key, candidate) = (one_line(&link.key_id), one_line(&link.candidate_id));
-    let warning = if link.started_elsewhere {
-        format!(
-            "The candidate key \"{candidate}\" (started on another device) will be deleted.\n\
-             \"{key}\" is not changed.\n"
-        )
-    } else {
-        format!(
-            "The candidate key \"{candidate}\" will be deleted. \"{key}\" is not changed.\n\
-             Any machine where the rotation already removed the old key accepts only\n\
-             \"{candidate}\": deleting it locks you out of that machine.\n"
-        )
-    };
-    confirm(yes, &warning)?;
-    stored(
-        &rotation.vault_name,
-        device
-            .core
-            .abandon_key_rotation(rotation.vault_id.clone(), link.candidate_id.clone()),
-    )?;
-    commit(
-        device,
-        &rotation.vault_id,
-        offline,
-        &format!("Abandoned the rotation of {key}"),
     )
 }
 
@@ -1175,7 +997,6 @@ pub fn identities(device: &Device, offline: bool, action: IdentitiesAction) -> R
             let user = required_user(&user)?;
             let personal = core.get_personal_vault().ok().flatten();
             let target = vault.pick(core, personal.as_deref())?;
-            refuse_taken(core, &target.vault_id, &target.name, &name)?;
             let mut identity = Identity {
                 identity_id: name.clone(),
                 label: name.clone(),
@@ -1184,9 +1005,10 @@ pub fn identities(device: &Device, offline: bool, action: IdentitiesAction) -> R
                 password_item_id: None,
             };
             credential.apply(core, &target.vault_id, &mut identity)?;
-            stored(
+            created(
                 &target.name,
-                core.save_identity(target.vault_id.clone(), identity),
+                &name,
+                core.create_identity(target.vault_id.clone(), identity),
             )?;
             commit(
                 device,
@@ -1247,20 +1069,13 @@ pub fn find_identity(core: &Core, query: &str) -> Res<IdentityEntry> {
 
 #[cfg(test)]
 mod tests {
-    use super::needs_passphrase;
-    use unissh_ffi::FfiError;
+    use super::used_by;
 
-    /// The core's wording for a key that needs its passphrase is what makes
-    /// the import ask for one; any other failure is reported as it is.
+    /// The delete warning names hosts and identities apart, each pluralised.
     #[test]
-    fn only_a_missing_passphrase_makes_the_import_ask_for_one() {
-        let other = |msg: &str| FfiError::Other {
-            msg: msg.to_owned(),
-        };
-        assert!(needs_passphrase(&other(
-            "a passphrase is required to decrypt"
-        )));
-        assert!(needs_passphrase(&other("key is passphrase-protected")));
-        assert!(!needs_passphrase(&other("incorrect passphrase")));
+    fn the_delete_warning_counts_hosts_and_identities_apart() {
+        assert_eq!(used_by(1, 0), "1 host");
+        assert_eq!(used_by(0, 2), "2 identities");
+        assert_eq!(used_by(3, 1), "3 hosts and 1 identity");
     }
 }

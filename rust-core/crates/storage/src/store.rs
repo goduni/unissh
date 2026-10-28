@@ -726,6 +726,20 @@ impl Storage {
     /// the `vault` layer (`Vault::purge_vault`) on a verified signal; storage
     /// only deletes.
     pub fn purge_vault_data(&self, vault_id: &[u8]) -> Result<(), StorageError> {
+        self.purge(vault_id, true)
+    }
+
+    /// [`Self::purge_vault_data`] that KEEPS the vault's trust anchor (the
+    /// pinned genesis owner). For dropping a local copy so that the server's
+    /// copy is pulled anew ("Restore deleted"): the vault comes back, and a
+    /// teammate's vault must come back under the owner the user confirmed,
+    /// not wait for a fresh confirmation — or be offered a different owner.
+    /// A verified revoke uses [`Self::purge_vault_data`], which drops it.
+    pub fn purge_vault_data_keeping_trust(&self, vault_id: &[u8]) -> Result<(), StorageError> {
+        self.purge(vault_id, false)
+    }
+
+    fn purge(&self, vault_id: &[u8], drop_trust_anchor: bool) -> Result<(), StorageError> {
         self.transaction(|| {
             self.conn.execute(
                 "DELETE FROM item_history WHERE vault_id = ?1",
@@ -745,10 +759,12 @@ impl Storage {
                 "DELETE FROM vault_epoch_floor WHERE vault_id = ?1",
                 params![vault_id],
             )?;
-            self.conn.execute(
-                "DELETE FROM vault_trust_anchor WHERE vault_id = ?1",
-                params![vault_id],
-            )?;
+            if drop_trust_anchor {
+                self.conn.execute(
+                    "DELETE FROM vault_trust_anchor WHERE vault_id = ?1",
+                    params![vault_id],
+                )?;
+            }
             self.conn
                 .execute("DELETE FROM vaults WHERE vault_id = ?1", params![vault_id])?;
             self.conn.execute(
