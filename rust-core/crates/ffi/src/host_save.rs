@@ -5,21 +5,25 @@
 //! ([`HostRule`]), then writes it with what goes with it, all under one state
 //! lock:
 //!
-//! - a password typed for the host, stored as a vault secret under an id
-//!   minted here, together with the host in one storage transaction;
+//! - a password typed for the host, stored as a vault secret, together with
+//!   the host in one storage transaction. When the host already logs in with
+//!   a stored password that nothing else uses, the typed one is a new version
+//!   of that same secret (the old one stays in its history); otherwise it is
+//!   a new secret, and the one shared with something else is left alone. A
+//!   save never deletes a password;
 //! - the host's group: a host is in one group at most, so going into one
 //!   takes it out of every other (a new group is created by the save), in
 //!   the same transaction;
 //! - for a personal host, the binding of the member's identity, pinned to
 //!   where the host now points (the identity given, else the one already
-//!   linked to it);
-//! - the password the host used before, removed when a typed one replaced it
-//!   and nothing else in the vault uses it.
+//!   linked to it). The pin follows the save only when it still names where
+//!   the host pointed before it: a pin someone else's change already left
+//!   behind stays, so the connect keeps refusing the redirect.
 //!
 //! The password, the host and its groups are written all or nothing. The
-//! binding lives in another vault and the old password is only tidied away,
-//! so either failing leaves the host saved, and the result says what is
-//! missing ([`HostSaved::unfinished`]); it is never left out silently.
+//! binding lives in another vault, so its failing leaves the host saved, and
+//! the result says what is missing ([`HostSaved::unfinished`]); it is never
+//! left out silently.
 
 use std::fmt;
 
@@ -29,9 +33,9 @@ use crate::item_ids::mint_item_id;
 use crate::key_usage::usage_in;
 use crate::{
     binding_in, binding_vault_in, groups_in, identities_in, personal_destination, profiles_in,
-    put_binding, put_connection, put_group, put_password, remove_item, resolve_vid, AuthMethod,
+    put_binding, put_connection, put_group, put_password, resolve_vid, AuthMethod,
     ConnectionProfile, Core, CoreState, FfiError, IdentityBinding, JumpHost, ProfileAuth,
-    ServerGroup,
+    ServerGroup, ITEM_TYPE_PASSWORD,
 };
 
 /// A rule a host save broke. Nothing is written when one is broken.
@@ -46,7 +50,8 @@ pub enum HostRule {
     UserRequired,
     /// A jump hop given by address has no address.
     HopAddressRequired,
-    /// A jump hop references a saved host of another vault.
+    /// A jump hop references a saved host of another vault. The connect
+    /// refuses such a hop too.
     HopOtherVault,
     /// A jump hop references a saved host the vault does not have.
     HopNotFound,
@@ -70,7 +75,6 @@ pub enum HostRule {
     /// The identity to link is not in the vault named for it.
     IdentityNotFound,
 }
-
 impl HostRule {
     /// A stable camelCase code for the rule, for a client to choose its own
     /// words by (the app's translations key on it).
@@ -155,19 +159,22 @@ pub struct IdentityLink {
 /// A host to save, with what goes with it.
 pub struct HostSave {
     /// The host. An empty `profile_id` is a new host, whose id the core mints
-    /// (`slug(label)-<millis>`); an empty `uid` on an existing host keeps the
-    /// one it has. Jump hops that reference a saved host are stored in the
-    /// placeholder shape the connect expects (their inline fields are
-    /// ignored). The username template is kept for a personal login only.
+    /// (`slug(label)-<millis>`). The uid is the core's: an existing host keeps
+    /// its own whatever is sent, and a new host always gets a fresh one. Jump
+    /// hops that reference a saved host are stored in the placeholder shape
+    /// the connect expects (their inline fields are ignored, their vault is
+    /// the host's). The username template is kept for a personal login only.
     pub profile: ConnectionProfile,
-    /// A password typed for the host: stored as a new vault secret that the
-    /// host then logs in with. The host's `auth` must be `VaultPassword`; its
-    /// `password_item_id` is replaced by the new secret's id.
+    /// A password typed for the host, which then logs in with it. The host's
+    /// `auth` must be `VaultPassword`. When the host already logs in with a
+    /// stored password nothing else uses, the typed one becomes that secret's
+    /// new version (the previous one stays in its history); otherwise it is
+    /// stored as a new secret and the host's `password_item_id` names it.
     pub new_password: Option<Zeroizing<String>>,
     /// The group the host is in.
     pub group: HostGroup,
     /// For a personal host: the identity to link. `None` re-pins the identity
-    /// already linked to an existing host, if any.
+    /// already linked to an existing host, if any, from a private vault.
     pub identity: Option<IdentityLink>,
 }
 
@@ -180,12 +187,14 @@ pub enum HostSaveGap {
         /// Why.
         message: String,
     },
-    /// The password the host used before, replaced by the one typed, could
-    /// not be removed: it is still in the vault, used by nothing.
-    OldPasswordKept {
-        /// The old password's item id.
-        password_item_id: String,
-        /// Why.
+    /// The identity is still pinned to an older address: the host was
+    /// pointed elsewhere before this save (by another change, maybe someone
+    /// else's), so the save did not move the pin, and connecting with the
+    /// identity is refused as redirected until it is linked again.
+    IdentityPinKept {
+        /// Where the identity is still pinned.
+        pinned: String,
+        /// Plain words for the person saving.
         message: String,
     },
 }
@@ -197,7 +206,8 @@ pub struct HostSaved {
     pub profile_id: String,
     /// The host's immutable uid (minted for a new host).
     pub uid: String,
-    /// The secret stored for a password typed for the host.
+    /// The secret a typed password was stored in: the host's own one (a new
+    /// version of it) or a new one.
     pub password_item_id: Option<String>,
     /// The group the host is now in, when the save placed it in one (a new
     /// group's minted id included).
@@ -205,9 +215,9 @@ pub struct HostSaved {
     /// Whether an identity is linked to the host and pinned to where it
     /// points now.
     pub identity_linked: bool,
-    /// The password the host used before, removed because a typed one
-    /// replaced it and nothing else used it.
-    pub removed_password_item_id: Option<String>,
+    /// The vault an identity binding was written to (it changed too, so a
+    /// client syncs it), when the save wrote one.
+    pub binding_vault_id: Option<String>,
     /// What the save could not finish; empty when everything was saved.
     pub unfinished: Vec<HostSaveGap>,
 }
@@ -220,14 +230,20 @@ struct Written {
     group_id: Option<String>,
 }
 
+/// The identity to link, with the binding it already has (if any).
+struct Link {
+    to: IdentityLink,
+    existing: Option<IdentityBinding>,
+}
+
 impl Core {
     /// Saves a host the way the app's editor and `unissh hosts add|edit` do:
     /// checks it ([`HostRule`]; [`FfiError::InvalidHost`] and nothing written
-    /// when one is broken), then stores it with its new password and its
-    /// group in one transaction, links or re-pins a personal identity, and
-    /// removes the password a typed one replaced. See the module docs.
+    /// when one is broken), then stores it with its typed password and its
+    /// group in one transaction, and links or re-pins a personal identity.
+    /// See the module docs.
     pub fn save_host(&self, vault_id: &str, save: HostSave) -> Result<HostSaved, FfiError> {
-        self.with_state_mut(|state| save_locked(state, vault_id, save))
+        self.with_state(|state| save_locked(state, vault_id, save))
     }
 }
 
@@ -246,11 +262,19 @@ const fn can_be_a_hop(auth: &ProfileAuth) -> bool {
     }
 }
 
-fn save_locked(
-    state: &mut CoreState,
-    vault_id: &str,
-    save: HostSave,
-) -> Result<HostSaved, FfiError> {
+/// Where a host points, as an identity binding pins it: the connect renders
+/// the same string from the stored host.
+fn destination(p: &ConnectionProfile) -> String {
+    personal_destination(
+        &p.host,
+        p.port,
+        p.username_template.as_deref(),
+        &p.jumps,
+        p.proxy.as_ref(),
+    )
+}
+
+fn save_locked(state: &CoreState, vault_id: &str, save: HostSave) -> Result<HostSaved, FfiError> {
     let HostSave {
         mut profile,
         new_password,
@@ -262,89 +286,118 @@ fn save_locked(
         .iter()
         .find(|h| !profile.profile_id.is_empty() && h.profile_id == profile.profile_id)
         .cloned();
-    if profile.uid.is_empty() {
-        profile.uid = before.as_ref().map(|b| b.uid.clone()).unwrap_or_default();
-    }
+    // The uid is immutable: bindings and hops find the host by it. An edit
+    // keeps the host's own; a new host gets a fresh one from the write.
+    profile.uid = before.as_ref().map(|b| b.uid.clone()).unwrap_or_default();
     tidy(&mut profile);
     check_fields(&profile)?;
     check_new_password(&profile, new_password.as_deref().map(String::as_str))?;
     check_hops(state, vault_id, &mut profile, &hosts)?;
     let group = checked_group(state, vault_id, group, before.is_none())?;
-    let link = link_to_pin(state, vault_id, &profile, identity)?;
+    let link = link_to_pin(state, vault_id, &profile, before.is_some(), identity)?;
+    let pin = destination(&profile);
+    let pinned_before = before.as_ref().map(destination);
+    let own_password = if new_password.is_some() {
+        own_password_item(state, vault_id, before.as_ref(), &hosts)?
+    } else {
+        None
+    };
+    let written = state.storage.transaction(|| {
+        write_host(
+            state,
+            vault_id,
+            profile,
+            new_password
+                .as_deref()
+                .map(|p| (p.as_str(), own_password.as_deref())),
+            &group,
+        )
+    })?;
 
-    // Where a personal host points, for its binding's pin: the connect
-    // renders the same string from the stored host.
-    let pin = personal_destination(
-        &profile.host,
-        profile.port,
-        profile.username_template.as_deref(),
-        &profile.jumps,
-        profile.proxy.as_ref(),
-    );
-    // The password a typed one replaces, to tidy away once the host is saved.
-    let replaced = match &before {
-        Some(ConnectionProfile {
-            auth: ProfileAuth::VaultPassword { password_item_id },
-            ..
-        }) if new_password.is_some() && !password_item_id.is_empty() => {
-            Some(password_item_id.clone())
-        }
-        Some(_) | None => None,
-    };
-    let written = {
-        let shared = &*state;
-        shared.storage.transaction(|| {
-            write_host(
-                shared,
-                vault_id,
-                profile,
-                new_password.as_deref().map(String::as_str),
-                &group,
-            )
-        })?
-    };
-
-    let mut unfinished = Vec::new();
-    let mut identity_linked = false;
-    if let Some(link) = link {
-        let binding = IdentityBinding {
-            team_vault_id: vault_id.to_owned(),
-            profile_uid: written.uid.clone(),
-            identity_item_id: link.identity_id,
-            destination_pin: pin,
-        };
-        // Saving the host is the user's explicit word on where it points, so
-        // the pin follows it (as the editors always did).
-        match put_binding(state, &link.vault_id, binding, true) {
-            Ok(()) => identity_linked = true,
-            Err(e) => unfinished.push(HostSaveGap::IdentityNotLinked {
-                message: e.to_string(),
-            }),
-        }
-    }
-    let removed_password_item_id = match replaced {
-        Some(old) => match remove_if_unused(state, vault_id, &old) {
-            Ok(true) => Some(old),
-            Ok(false) => None,
-            Err(e) => {
-                unfinished.push(HostSaveGap::OldPasswordKept {
-                    password_item_id: old,
-                    message: e.to_string(),
-                });
-                None
-            }
-        },
-        None => None,
-    };
+    let linked = link.map_or_else(Linked::default, |link| {
+        pin_identity(
+            state,
+            vault_id,
+            &written.uid,
+            link,
+            &pin,
+            pinned_before.as_deref(),
+        )
+    });
     Ok(HostSaved {
         profile_id: written.profile_id,
         uid: written.uid,
         password_item_id: written.password_item_id,
         group_id: written.group_id,
-        identity_linked,
-        removed_password_item_id,
-        unfinished,
+        identity_linked: linked.linked,
+        binding_vault_id: linked.binding_vault_id,
+        unfinished: linked.gap.into_iter().collect(),
     })
+}
+
+/// What linking the identity did.
+#[derive(Default)]
+struct Linked {
+    /// Linked and pinned to where the host points now.
+    linked: bool,
+    /// The vault the binding was written to, when it was.
+    binding_vault_id: Option<String>,
+    /// What it could not do.
+    gap: Option<HostSaveGap>,
+}
+
+/// Links `link`'s identity to the saved host `uid`, pinned to `pin` (where
+/// the host points now). Saving the host is the user's word on where it
+/// points, so the pin follows it, but only from where the host pointed before
+/// this save (`pinned_before`). A pin that already differs was left behind
+/// by an earlier change of the host (a team member's, maybe): moving it here
+/// would wave that redirect through, so it stays, and the gap says so.
+fn pin_identity(
+    state: &CoreState,
+    vault_id: &str,
+    uid: &str,
+    link: Link,
+    pin: &str,
+    pinned_before: Option<&str>,
+) -> Linked {
+    let Link { to, existing } = link;
+    let kept = existing
+        .as_ref()
+        .map(|b| b.destination_pin.clone())
+        .filter(|was| pinned_before.is_some_and(|then| then != was.as_str()));
+    let new_pin = kept.clone().unwrap_or_else(|| pin.to_owned());
+    let unchanged = existing
+        .as_ref()
+        .is_some_and(|b| b.identity_item_id == to.identity_id && b.destination_pin == new_pin);
+    let mut out = Linked::default();
+    if !unchanged {
+        let binding = IdentityBinding {
+            team_vault_id: vault_id.to_owned(),
+            profile_uid: uid.to_owned(),
+            identity_item_id: to.identity_id,
+            destination_pin: new_pin,
+        };
+        if let Err(e) = put_binding(state, &to.vault_id, binding, true) {
+            out.gap = Some(HostSaveGap::IdentityNotLinked {
+                message: e.to_string(),
+            });
+            return out;
+        }
+        out.binding_vault_id = Some(to.vault_id);
+    }
+    let still_pinned = kept.filter(|k| k != pin);
+    out.linked = still_pinned.is_none();
+    if let Some(pinned) = still_pinned {
+        out.gap = Some(HostSaveGap::IdentityPinKept {
+            message: format!(
+                "your identity is still pinned to {pinned}, not to {pin}: the host had \
+                 been pointed elsewhere before this save, so connecting with your \
+                 identity is refused as redirected until you link it again"
+            ),
+            pinned,
+        });
+    }
+    out
 }
 
 /// Trims what the editors trim, and keeps the username template for a
@@ -398,11 +451,11 @@ fn check_new_password(
     Ok(())
 }
 
-/// The hop rules. A hop given by address needs one. A hop referencing a
-/// saved host must name another host of the same vault, by its uid, that logs
-/// in with a key, a stored password or the system ssh-agent; it is stored in
-/// the placeholder shape (no inline fields), as the connect resolves it from
-/// the referenced host.
+/// The hop rules. A hop given by address needs one (stored trimmed). A hop
+/// referencing a saved host must name another host of the same vault, by its
+/// uid, that logs in with a key, a stored password or the system ssh-agent;
+/// it is stored in the placeholder shape (no inline fields, the host's own
+/// vault id), as the connect resolves it from the referenced host.
 fn check_hops(
     state: &CoreState,
     vault_id: &str,
@@ -411,8 +464,9 @@ fn check_hops(
 ) -> Result<(), FfiError> {
     let vid = resolve_vid(&state.storage, vault_id);
     for hop in &mut profile.jumps {
-        let Some(hop_ref) = hop.hop_ref.clone() else {
-            if hop.host.trim().is_empty() {
+        let Some(mut hop_ref) = hop.hop_ref.clone() else {
+            hop.host = hop.host.trim().to_owned();
+            if hop.host.is_empty() {
                 return Err(refused(HostRule::HopAddressRequired));
             }
             continue;
@@ -431,6 +485,7 @@ fn check_hops(
         if !can_be_a_hop(&target.auth) {
             return Err(refused(HostRule::HopNoCredential));
         }
+        vault_id.clone_into(&mut hop_ref.vault_id);
         *hop = JumpHost {
             host: String::new(),
             port: 22,
@@ -480,59 +535,125 @@ fn checked_group(
     }
 }
 
-/// The identity to pin to a personal host: the one given (which must exist
-/// and needs a personal login), else the one already linked to an existing
-/// personal host.
+/// The identity to pin to a personal host, with the binding it already has:
+/// the one given (which must exist and needs a personal login), else the one
+/// already linked to an existing personal host from a private vault (only a
+/// single-member vault holds a member's own identities).
 fn link_to_pin(
     state: &CoreState,
     vault_id: &str,
     profile: &ConnectionProfile,
+    editing: bool,
     given: Option<IdentityLink>,
-) -> Result<Option<IdentityLink>, FfiError> {
+) -> Result<Option<Link>, FfiError> {
     let personal = matches!(profile.auth, ProfileAuth::Personal);
-    if let Some(link) = given {
+    if let Some(to) = given {
         if !personal {
             return Err(refused(HostRule::IdentityNeedsPersonalLogin));
         }
-        let found = identities_in(state, &link.vault_id)
-            .is_ok_and(|ids| ids.iter().any(|i| i.identity_id == link.identity_id));
+        let found = identities_in(state, &to.vault_id)
+            .is_ok_and(|ids| ids.iter().any(|i| i.identity_id == to.identity_id));
         if !found {
             return Err(refused(HostRule::IdentityNotFound));
         }
-        return Ok(Some(link));
+        let existing = if editing {
+            binding_in(state, &to.vault_id, vault_id, &profile.uid)?
+        } else {
+            None
+        };
+        return Ok(Some(Link { to, existing }));
     }
-    if !personal || profile.uid.is_empty() {
+    if !personal || !editing {
         return Ok(None);
     }
-    let Some(binding_vault) = binding_vault_in(state, vault_id, &profile.uid)? else {
+    let Some(binding_vault) = binding_vault_in(state, vault_id, &profile.uid, true)? else {
         return Ok(None);
     };
     Ok(
-        binding_in(state, &binding_vault, vault_id, &profile.uid)?.map(|b| IdentityLink {
-            vault_id: binding_vault,
-            identity_id: b.identity_item_id,
+        binding_in(state, &binding_vault, vault_id, &profile.uid)?.map(|b| Link {
+            to: IdentityLink {
+                vault_id: binding_vault,
+                identity_id: b.identity_item_id.clone(),
+            },
+            existing: Some(b),
         }),
     )
 }
 
+/// The stored password a typed one becomes the new version of: the one the
+/// host logs in with, when it is a live password item nothing else in the
+/// vault uses (no other host, hop, proxy or identity). `None` means a new
+/// secret: a password shared with something else is left as it is.
+fn own_password_item(
+    state: &CoreState,
+    vault_id: &str,
+    before: Option<&ConnectionProfile>,
+    hosts: &[ConnectionProfile],
+) -> Result<Option<String>, FfiError> {
+    let Some(ConnectionProfile {
+        profile_id,
+        auth: ProfileAuth::VaultPassword { password_item_id },
+        ..
+    }) = before
+    else {
+        return Ok(None);
+    };
+    if password_item_id.is_empty() {
+        return Ok(None);
+    }
+    let vid = resolve_vid(&state.storage, vault_id);
+    let live = state
+        .storage
+        .get_item(&vid, password_item_id.as_bytes())
+        .map_err(FfiError::other)?
+        .is_some_and(|i| i.item_type == ITEM_TYPE_PASSWORD && !i.tombstone);
+    if !live {
+        return Ok(None);
+    }
+    // The host itself is left out: its own login is what is being changed,
+    // and a hop naming it follows its credential anyway.
+    let others: Vec<ConnectionProfile> = hosts
+        .iter()
+        .filter(|h| h.profile_id != *profile_id)
+        .cloned()
+        .collect();
+    let identities = identities_in(state, vault_id)?;
+    let storage = &state.storage;
+    let used = usage_in(
+        password_item_id,
+        |v| resolve_vid(storage, v) == vid,
+        &others,
+        &identities,
+    )
+    .count();
+    Ok((used == 0).then(|| password_item_id.clone()))
+}
+
 /// The writes that go together, inside the storage transaction: the typed
-/// password, the host, its groups.
+/// password (with the host's own secret to write it into, if any), the host,
+/// its groups.
 fn write_host(
     state: &CoreState,
     vault_id: &str,
     mut profile: ConnectionProfile,
-    new_password: Option<&str>,
+    new_password: Option<(&str, Option<&str>)>,
     group: &HostGroup,
 ) -> Result<Written, FfiError> {
     let password_item_id = match new_password {
-        Some(password) => {
-            // Written before the host, so the host's own minted id steps past it.
-            let id = mint_item_id(
-                &state.storage,
-                vault_id,
-                &format!("{} pw", profile.label),
-                "item",
-            )?;
+        Some((password, own)) => {
+            let id = match own {
+                // A new version of the host's own secret: the one it replaces
+                // stays in the item's history.
+                Some(own) => own.to_owned(),
+                // Written before the host, so the host's own minted id steps
+                // past it.
+                None => mint_item_id(
+                    &state.storage,
+                    vault_id,
+                    &format!("{} pw", profile.label),
+                    "item",
+                )?,
+            };
             put_password(state, vault_id, &id, password)?;
             profile.auth = ProfileAuth::VaultPassword {
                 password_item_id: id.clone(),
@@ -590,22 +711,6 @@ fn place_in_group(
     Ok(target)
 }
 
-/// Removes the password item `old` a typed password replaced, unless
-/// something in the vault still uses it (another host, a hop, a proxy, an
-/// identity). Whether it was removed.
-fn remove_if_unused(state: &mut CoreState, vault_id: &str, old: &str) -> Result<bool, FfiError> {
-    let hosts = profiles_in(state, vault_id)?;
-    let identities = identities_in(state, vault_id)?;
-    let vid = resolve_vid(&state.storage, vault_id);
-    let storage = &state.storage;
-    let used = usage_in(old, |v| resolve_vid(storage, v) == vid, &hosts, &identities).count();
-    if used > 0 {
-        return Ok(false);
-    }
-    remove_item(state, vault_id, old)?;
-    Ok(true)
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -614,8 +719,9 @@ mod tests {
 
     use super::{HostGroup, HostRule, HostSave, HostSaveGap, IdentityLink};
     use crate::{
-        binding_item_id, AuthMethod, BindingResolution, ConnectionProfile, Core, FfiError, HopRef,
-        Identity, JumpHost, ProfileAuth, ServerGroup, ITEM_TYPE_PASSWORD,
+        binding_item_id, resolve_vid, AuthMethod, BindingResolution, ConnectionProfile, Core,
+        FfiError, HopRef, Identity, JumpHost, ProfileAuth, ServerGroup, Vault, ITEM_TYPE_GROUP,
+        ITEM_TYPE_PASSWORD,
     };
 
     /// A core with vault `v` (the hosts) and vault `p` (an identity `me`).
@@ -773,6 +879,38 @@ mod tests {
         .unwrap()
     }
 
+    /// The host `id` of vault `v`, as stored.
+    fn stored(core: &Core, id: &str) -> ConnectionProfile {
+        core.get_connection("v".into(), id.to_owned()).unwrap()
+    }
+
+    /// Edits host `id` with `group`.
+    fn regroup(core: &Core, id: &str, group: HostGroup) -> super::HostSaved {
+        let save = HostSave {
+            group,
+            ..plain(stored(core, id))
+        };
+        core.save_host("v", save).unwrap()
+    }
+
+    /// A personal host `web` linked to identity `me`: its (profile id, uid).
+    fn linked(core: &Core) -> (String, String) {
+        let save = HostSave {
+            identity: me(),
+            ..plain(host("web", ProfileAuth::Personal))
+        };
+        let s = core.save_host("v", save).unwrap();
+        assert!(s.identity_linked, "not linked");
+        (s.profile_id, s.uid)
+    }
+
+    /// What the binding of host `uid` resolves to at `address`.
+    fn binding_at(core: &Core, uid: &str, address: &str) -> BindingResolution {
+        let now = core.personal_destination(address.into(), 22, None, vec![], None);
+        core.resolve_host_binding("p".into(), "v".into(), uid.into(), now)
+            .unwrap()
+    }
+
     #[test]
     fn a_host_without_a_label_is_refused() {
         let (core, _dir) = core();
@@ -788,14 +926,20 @@ mod tests {
         assert_eq!(refusal(&core, plain(p)), HostRule::AddressRequired);
     }
 
-    /// A user is needed unless the login is personal (the identity names it).
     #[test]
-    fn a_host_without_a_user_is_refused_unless_it_logs_in_personally() {
+    fn a_host_without_a_user_is_refused() {
         let (core, _dir) = core();
         let mut p = host("web", key());
         p.user = String::new();
-        assert_eq!(refusal(&core, plain(p.clone())), HostRule::UserRequired);
-        p.auth = ProfileAuth::Personal;
+        assert_eq!(refusal(&core, plain(p)), HostRule::UserRequired);
+    }
+
+    /// A personal login needs no user: the identity names it.
+    #[test]
+    fn a_personal_host_needs_no_user() {
+        let (core, _dir) = core();
+        let mut p = host("web", ProfileAuth::Personal);
+        p.user = String::new();
         assert!(core.save_host("v", plain(p)).is_ok(), "personal refused");
     }
 
@@ -813,6 +957,26 @@ mod tests {
             hop_ref: None,
         };
         assert_eq!(refusal(&core, with_hop(hop)), HostRule::HopAddressRequired);
+    }
+
+    #[test]
+    fn a_hop_given_by_address_is_stored_trimmed() {
+        let (core, _dir) = core();
+        let hop = JumpHost {
+            host: " bastion.example ".into(),
+            port: 22,
+            user: "ops".into(),
+            auth: AuthMethod::Agent {
+                vault_id: "v".into(),
+                key_item_id: "k".into(),
+            },
+            hop_ref: None,
+        };
+        let s = core.save_host("v", with_hop(hop)).unwrap();
+        assert_eq!(
+            stored(&core, &s.profile_id).jumps[0].host,
+            "bastion.example"
+        );
     }
 
     #[test]
@@ -834,7 +998,7 @@ mod tests {
     fn a_host_cannot_be_its_own_hop() {
         let (core, _dir) = core();
         let (id, uid) = saved(&core, "web", key());
-        let mut p = core.get_connection("v".into(), id).unwrap();
+        let mut p = stored(&core, &id);
         p.jumps = vec![ref_hop("v", &uid)];
         assert_eq!(refusal(&core, plain(p)), HostRule::HopSelf);
     }
@@ -865,8 +1029,7 @@ mod tests {
         for auth in [key(), password, agent] {
             let (_, uid) = saved(&core, "bastion", auth);
             let s = core.save_host("v", with_hop(ref_hop("v", &uid))).unwrap();
-            let p = core.get_connection("v".into(), s.profile_id).unwrap();
-            let hop = p.jumps[0].clone();
+            let hop = stored(&core, &s.profile_id).jumps[0].clone();
             assert_eq!(
                 (hop.host.as_str(), hop.port, hop.user.as_str()),
                 ("", 22, "")
@@ -877,6 +1040,28 @@ mod tests {
             );
             assert_eq!(hop.hop_ref.unwrap().profile_uid, uid);
         }
+    }
+
+    /// A hop naming the host's vault by another spelling of its id is stored
+    /// under the host's own vault id.
+    #[test]
+    fn a_hop_is_stored_under_the_hosts_vault_id() {
+        let (core, _dir) = core();
+        let cloud = core
+            .create_cloud_vault("C".into(), "dGVuYW50".into())
+            .unwrap();
+        let bastion = core
+            .save_host(&cloud, plain(host("bastion", key())))
+            .unwrap();
+        let mut p = host("web", key());
+        p.jumps = vec![ref_hop(&cloud.to_uppercase(), &bastion.uid)];
+        let s = core.save_host(&cloud, plain(p)).unwrap();
+        let hop = core
+            .get_connection(cloud.clone(), s.profile_id)
+            .unwrap()
+            .jumps[0]
+            .clone();
+        assert_eq!(hop.hop_ref.unwrap().vault_id, cloud);
     }
 
     #[test]
@@ -945,60 +1130,95 @@ mod tests {
         assert!(s.profile_id.starts_with("web-box-"), "id {}", s.profile_id);
         assert!(!s.uid.is_empty(), "no uid");
         assert!(s.unfinished.is_empty(), "unfinished");
-        let stored = core.get_connection("v".into(), s.profile_id).unwrap();
-        assert_eq!(stored.uid, s.uid);
+        assert_eq!(stored(&core, &s.profile_id).uid, s.uid);
     }
 
-    /// An edit that leaves the uid out keeps the one the host has, so its
-    /// binding and the hops naming it still find it.
+    /// A uid sent with a new host is not taken: bindings and hops naming
+    /// that uid belong to another host.
     #[test]
-    fn an_edit_without_a_uid_keeps_the_hosts_uid() {
+    fn a_new_host_never_takes_the_uid_it_was_sent_with() {
+        let (core, _dir) = core();
+        let mut p = host("web", key());
+        p.uid = "someone-elses".into();
+        assert_ne!(core.save_host("v", plain(p)).unwrap().uid, "someone-elses");
+    }
+
+    /// An edit keeps the host's uid whatever it sends, so its binding and the
+    /// hops naming it still find it.
+    #[test]
+    fn an_edit_keeps_the_hosts_uid() {
         let (core, _dir) = core();
         let (id, uid) = saved(&core, "web", key());
-        let mut p = core.get_connection("v".into(), id).unwrap();
-        p.uid = String::new();
+        let mut p = stored(&core, &id);
+        p.uid = "another".into();
         assert_eq!(core.save_host("v", plain(p)).unwrap().uid, uid);
+        assert_eq!(stored(&core, &id).uid, uid);
     }
 
     #[test]
-    fn the_username_template_is_kept_for_a_personal_login_only() {
+    fn the_username_template_is_dropped_for_a_non_personal_login() {
         let (core, _dir) = core();
         let mut p = host("web", key());
         p.username_template = Some("%u:web".into());
-        let s = core.save_host("v", plain(p.clone())).unwrap();
-        let stored = core.get_connection("v".into(), s.profile_id).unwrap();
-        assert!(stored.username_template.is_none(), "template kept");
-        p.auth = ProfileAuth::Personal;
         let s = core.save_host("v", plain(p)).unwrap();
-        let stored = core.get_connection("v".into(), s.profile_id).unwrap();
-        assert_eq!(stored.username_template.as_deref(), Some("%u:web"));
+        assert!(stored(&core, &s.profile_id).username_template.is_none());
     }
 
-    /// The typed password is stored and logged in with; a later one replaces
-    /// it, and the replaced one goes, as nothing else uses it.
     #[test]
-    fn a_typed_password_is_stored_and_the_one_it_replaces_removed() {
+    fn the_username_template_is_kept_for_a_personal_login() {
+        let (core, _dir) = core();
+        let mut p = host("web", ProfileAuth::Personal);
+        p.username_template = Some("%u:web".into());
+        let s = core.save_host("v", plain(p)).unwrap();
+        let template = stored(&core, &s.profile_id).username_template;
+        assert_eq!(template.as_deref(), Some("%u:web"));
+    }
+
+    /// A password typed for a new host is stored and logged in with.
+    #[test]
+    fn a_typed_password_is_stored_and_logged_in_with() {
+        let (core, _dir) = core();
+        let s = core
+            .save_host("v", typed(host("web", stored_password()), "first"))
+            .unwrap();
+        let id = s.password_item_id.unwrap();
+        assert_eq!(core.get_password("v".into(), id.clone()).unwrap(), "first");
+        assert!(
+            matches!(&stored(&core, &s.profile_id).auth, ProfileAuth::VaultPassword { password_item_id } if *password_item_id == id),
+            "host does not log in with the typed password"
+        );
+    }
+
+    /// A new password for a host whose stored one nothing else uses is a new
+    /// version of that same secret: the old one stays in its history.
+    #[test]
+    fn a_typed_password_is_a_new_version_of_the_hosts_own_one() {
         let (core, _dir) = core();
         let s = core
             .save_host("v", typed(host("web", stored_password()), "first"))
             .unwrap();
         let first = s.password_item_id.unwrap();
-        let read = core.get_password("v".into(), first.clone()).unwrap();
-        assert_eq!(read, "first");
-        let edit = core.get_connection("v".into(), s.profile_id).unwrap();
-        let s = core.save_host("v", typed(edit, "second")).unwrap();
-        let second = s.password_item_id.unwrap();
-        assert_eq!(s.removed_password_item_id.as_deref(), Some(first.as_str()));
-        assert_eq!(passwords(&core), vec![second.clone()]);
-        let stored = core.get_connection("v".into(), s.profile_id).unwrap();
-        assert!(
-            matches!(&stored.auth, ProfileAuth::VaultPassword { password_item_id } if *password_item_id == second),
-            "host does not log in with the new password"
+        let s = core
+            .save_host("v", typed(stored(&core, &s.profile_id), "second"))
+            .unwrap();
+        assert_eq!(s.password_item_id.as_deref(), Some(first.as_str()));
+        assert_eq!(
+            core.get_password("v".into(), first.clone()).unwrap(),
+            "second"
         );
+        let versions = core.list_item_versions("v".into(), first.clone()).unwrap();
+        assert_eq!(versions.len(), 2, "versions {versions:?}");
+        let oldest = versions.iter().copied().min().unwrap();
+        let old = core
+            .get_password_version("v".into(), first, oldest)
+            .unwrap();
+        assert_eq!(old, "first");
     }
 
+    /// A password the host shares with something else is left alone; the
+    /// typed one is a new secret for this host.
     #[test]
-    fn a_replaced_password_still_used_elsewhere_is_kept() {
+    fn a_shared_password_is_untouched_and_the_host_gets_a_new_one() {
         let (core, _dir) = core();
         core.save_password("v".into(), "shared".into(), "pw".into())
             .unwrap();
@@ -1007,10 +1227,23 @@ mod tests {
         };
         saved(&core, "db", shared());
         let (id, _) = saved(&core, "web", shared());
-        let edit = core.get_connection("v".into(), id).unwrap();
-        let s = core.save_host("v", typed(edit, "new")).unwrap();
-        assert!(s.removed_password_item_id.is_none(), "removed");
-        assert!(passwords(&core).contains(&"shared".to_owned()), "gone");
+        let s = core
+            .save_host("v", typed(stored(&core, &id), "new"))
+            .unwrap();
+        let new = s.password_item_id.unwrap();
+        assert_ne!(new, "shared");
+        assert_eq!(
+            core.get_password("v".into(), "shared".into()).unwrap(),
+            "pw"
+        );
+        let versions = core
+            .list_item_versions("v".into(), "shared".into())
+            .unwrap();
+        assert_eq!(versions.len(), 1, "shared password rewritten");
+        assert!(
+            matches!(&stored(&core, &id).auth, ProfileAuth::VaultPassword { password_item_id } if *password_item_id == new),
+            "host does not log in with its new password"
+        );
     }
 
     /// The typed password and the host are written together: a host that
@@ -1026,57 +1259,163 @@ mod tests {
         assert!(hosts.is_empty(), "host saved");
     }
 
-    /// A host is in one group: going into one takes it out of the others; a
-    /// new group is created by the save; "ungrouped" takes it out of all;
-    /// "unchanged" leaves them.
+    /// The group write is part of the same transaction: when it fails, the
+    /// host and its typed password are not stored either.
     #[test]
-    fn a_host_is_in_one_group() {
+    fn a_failed_group_write_stores_neither_host_nor_password() {
+        let (core, _dir) = core();
+        // A group listing itself, as synced data could: writing it back is
+        // refused, so placing a host in it fails.
+        core.with_state_mut(|st| {
+            let vault = Vault::open(&st.storage, &st.keyset, &resolve_vid(&st.storage, "v"))
+                .map_err(FfiError::other)?;
+            vault
+                .put_item(
+                    b"loop",
+                    ITEM_TYPE_GROUP,
+                    br#"{"label":"Loop","member_ids":["loop"],"color":null}"#,
+                )
+                .map_err(FfiError::other)?;
+            Ok(())
+        })
+        .unwrap();
+        let save = HostSave {
+            group: HostGroup::Existing {
+                group_id: "loop".into(),
+            },
+            ..typed(host("web", stored_password()), "secret")
+        };
+        assert!(core.save_host("v", save).is_err(), "saved");
+        assert!(
+            core.list_connections("v".into()).unwrap().is_empty(),
+            "host saved"
+        );
+        assert!(passwords(&core).is_empty(), "password left behind");
+    }
+
+    #[test]
+    fn going_into_a_group_takes_the_host_out_of_the_others() {
+        let (core, _dir) = core();
+        let (id, _) = saved(&core, "web", key());
+        group(&core, "A", &[&id]);
+        let b = group(&core, "B", &[]);
+        let s = regroup(
+            &core,
+            &id,
+            HostGroup::Existing {
+                group_id: b.clone(),
+            },
+        );
+        assert_eq!(s.group_id.as_deref(), Some(b.as_str()));
+        assert_eq!(groups_of(&core, &id), vec!["B".to_owned()]);
+    }
+
+    #[test]
+    fn an_unchanged_group_leaves_the_host_where_it_is() {
+        let (core, _dir) = core();
+        let (id, _) = saved(&core, "web", key());
+        group(&core, "A", &[&id]);
+        regroup(&core, &id, HostGroup::Unchanged);
+        assert_eq!(groups_of(&core, &id), vec!["A".to_owned()]);
+    }
+
+    #[test]
+    fn a_new_group_is_created_with_the_host_alone_in_it() {
         let (core, _dir) = core();
         let (id, _) = saved(&core, "web", key());
         let a = group(&core, "A", &[&id]);
-        let b = group(&core, "B", &[]);
-        let edit = |group: HostGroup| {
-            let p = core.get_connection("v".into(), id.clone()).unwrap();
-            core.save_host("v", HostSave { group, ..plain(p) }).unwrap()
-        };
-        let s = edit(HostGroup::Existing {
-            group_id: b.clone(),
-        });
-        assert_eq!(s.group_id.as_deref(), Some(b.as_str()));
-        assert_eq!(groups_of(&core, &id), vec!["B".to_owned()]);
-        edit(HostGroup::Unchanged);
-        assert_eq!(groups_of(&core, &id), vec!["B".to_owned()]);
-        let s = edit(HostGroup::New { label: "C".into() });
+        let s = regroup(&core, &id, HostGroup::New { label: "C".into() });
+        assert!(s.group_id.is_some_and(|g| g != a), "no new group");
         assert_eq!(groups_of(&core, &id), vec!["C".to_owned()]);
-        assert!(s.group_id.is_some_and(|g| g != a && g != b), "no new group");
-        edit(HostGroup::Ungrouped);
+    }
+
+    #[test]
+    fn ungrouped_takes_the_host_out_of_every_group() {
+        let (core, _dir) = core();
+        let (id, _) = saved(&core, "web", key());
+        group(&core, "A", &[&id]);
+        group(&core, "B", &[&id]);
+        regroup(&core, &id, HostGroup::Ungrouped);
         assert!(groups_of(&core, &id).is_empty(), "still grouped");
     }
 
-    /// Saving a personal host links the identity, pinned to where the host
-    /// points; an edit that moves the host re-pins the identity linked.
+    /// A group still listing the id of a deleted host does not claim a new
+    /// host saved under that id.
     #[test]
-    fn a_personal_host_save_pins_and_re_pins_its_identity() {
+    fn a_new_host_drops_a_stale_group_membership() {
         let (core, _dir) = core();
-        let save = HostSave {
-            identity: me(),
-            ..plain(host("web", ProfileAuth::Personal))
-        };
-        let s = core.save_host("v", save).unwrap();
-        assert!(s.identity_linked, "not linked");
-        let mut p = core.get_connection("v".into(), s.profile_id).unwrap();
-        p.host = "moved.example".into();
-        let s = core.save_host("v", plain(p)).unwrap();
-        assert!(s.identity_linked, "not re-pinned");
-        let now = core.personal_destination("moved.example".into(), 22, None, vec![], None);
-        let resolved = core
-            .resolve_host_binding("p".into(), "v".into(), s.uid, now)
-            .unwrap();
+        group(&core, "Old", &["web"]);
+        let mut p = host("web", key());
+        p.profile_id = "web".into();
+        core.save_host("v", plain(p)).unwrap();
+        assert!(groups_of(&core, "web").is_empty(), "stale membership kept");
+    }
+
+    /// Saving a personal host links the identity, pinned to where it points.
+    #[test]
+    fn a_personal_host_save_pins_its_identity() {
+        let (core, _dir) = core();
+        let (_, uid) = linked(&core);
         assert_eq!(
-            resolved,
+            binding_at(&core, &uid, "web.example"),
             BindingResolution::Matched {
                 identity_item_id: "me".into()
             }
+        );
+    }
+
+    /// An edit that moves the host from where its identity is pinned re-pins
+    /// the identity to the new address.
+    #[test]
+    fn moving_a_personal_host_re_pins_its_identity() {
+        let (core, _dir) = core();
+        let (id, uid) = linked(&core);
+        let mut p = stored(&core, &id);
+        p.host = "moved.example".into();
+        let s = core.save_host("v", plain(p)).unwrap();
+        assert!(s.identity_linked, "not re-pinned");
+        assert_eq!(s.binding_vault_id.as_deref(), Some("p"));
+        assert_eq!(
+            binding_at(&core, &uid, "moved.example"),
+            BindingResolution::Matched {
+                identity_item_id: "me".into()
+            }
+        );
+    }
+
+    /// A host someone else already pointed elsewhere keeps its identity's
+    /// pin through the member's next save: the redirect stays refused, and
+    /// the save says so.
+    #[test]
+    fn a_save_does_not_re_pin_an_identity_the_host_was_redirected_from() {
+        let (core, _dir) = core();
+        let (id, uid) = linked(&core);
+        // Another change (synced from the team vault) points the host away.
+        let mut p = stored(&core, &id);
+        p.host = "evil.example".into();
+        core.save_connection("v".into(), p).unwrap();
+        let mut p = stored(&core, &id);
+        p.label = "web box".into();
+        let save = HostSave {
+            identity: me(),
+            ..plain(p)
+        };
+        let s = core.save_host("v", save).unwrap();
+        assert!(!s.identity_linked, "linked to the redirected address");
+        assert!(
+            matches!(
+                s.unfinished.as_slice(),
+                [HostSaveGap::IdentityPinKept { pinned, .. }] if pinned == "web.example:22"
+            ),
+            "gap {:?}",
+            s.unfinished
+        );
+        assert!(
+            matches!(
+                binding_at(&core, &uid, "evil.example"),
+                BindingResolution::Redirected { .. }
+            ),
+            "redirect let through"
         );
     }
 
@@ -1084,13 +1423,11 @@ mod tests {
     #[test]
     fn a_link_that_fails_is_reported_with_the_host_saved() {
         let (core, _dir) = core();
-        let mut p = host("web", key());
-        p.uid = "u1".into();
-        let id = core.save_connection("v".into(), p.clone()).unwrap();
+        let (id, uid) = saved(&core, "web", key());
         // Something else holds the binding's id in the identity's vault.
-        core.save_note("p".into(), binding_item_id("v", "u1"), "n".into())
+        core.save_note("p".into(), binding_item_id("v", &uid), "n".into())
             .unwrap();
-        p.profile_id.clone_from(&id);
+        let mut p = stored(&core, &id);
         p.auth = ProfileAuth::Personal;
         let save = HostSave {
             identity: me(),
@@ -1105,7 +1442,59 @@ mod tests {
             ),
             "gap not reported"
         );
-        let stored = core.get_connection("v".into(), id).unwrap();
-        assert!(matches!(stored.auth, ProfileAuth::Personal), "not saved");
+        assert!(
+            matches!(stored(&core, &id).auth, ProfileAuth::Personal),
+            "not saved"
+        );
+    }
+
+    /// The connect refuses a jump hop naming a saved host of another vault,
+    /// as synced data could: a team vault's host must not borrow a member's
+    /// personal-vault credential for its route.
+    #[test]
+    fn a_connect_refuses_a_hop_into_another_vault() {
+        let (core, _dir) = core();
+        let bastion = core.save_host("p", plain(host("bastion", key()))).unwrap();
+        let mut p = host("web", key());
+        p.jumps = vec![ref_hop("p", &bastion.uid)];
+        // Written past the host rules, as a sync would.
+        let id = core.save_connection("v".into(), p).unwrap();
+        let p = stored(&core, &id);
+        let result = core.ssh_exec(
+            p.host,
+            p.port,
+            p.user,
+            AuthMethod::Password {
+                password: "x".into(),
+            },
+            "true".into(),
+            p.jumps,
+            None,
+        );
+        assert!(
+            matches!(
+                result,
+                Err(FfiError::InvalidHost {
+                    rule: HostRule::HopOtherVault
+                })
+            ),
+            "connected through another vault's host"
+        );
+    }
+
+    /// Resolving such a host for a connect is refused before any dial.
+    #[test]
+    fn resolving_a_host_with_a_hop_into_another_vault_is_refused() {
+        let (core, _dir) = core();
+        let bastion = core.save_host("p", plain(host("bastion", key()))).unwrap();
+        let mut p = host("web", key());
+        p.jumps = vec![ref_hop("p", &bastion.uid)];
+        let id = core.save_connection("v".into(), p).unwrap();
+        assert!(matches!(
+            core.resolve_connection("v".into(), id),
+            Err(FfiError::InvalidHost {
+                rule: HostRule::HopOtherVault
+            })
+        ));
     }
 }

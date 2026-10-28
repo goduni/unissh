@@ -1122,9 +1122,10 @@ pub struct JumpHost {
     /// an inline `Password` is allowed only for a direct connection.
     pub auth: AuthMethod,
     /// Host-chain (B2.2): if set, the hop is a REFERENCE to another saved profile
-    /// (by immutable uid, possibly in a DIFFERENT vault); its host/port/user/auth
+    /// (by immutable uid, in the SAME vault as the host); its host/port/user/auth
     /// are resolved at connect time, and the inline fields above are IGNORED. Lets you
-    /// reuse a bastion profile in chains without duplication.
+    /// reuse a bastion profile in chains without duplication. A reference into
+    /// another vault is refused at connect (`InvalidHost{HopOtherVault}`).
     pub hop_ref: Option<HopRef>,
 }
 
@@ -2352,19 +2353,7 @@ impl Core {
             // resolve_vid accepts both a local (UTF-8) and a cloud (hex) id; decode_vid
             // was hex-only and rejected local vaults.
             let vid = resolve_vid(&state.storage, &vault_id);
-            let owner_ed = state.keyset.signing.verifying.to_bytes().to_vec();
-            let members = match state
-                .storage
-                .latest_membership_epoch(&vid)
-                .map_err(FfiError::other)?
-            {
-                Some(latest) => verify_chain_to_epoch(&state.storage, &vid, latest, &owner_ed)
-                    .map_err(map_vault_err)?
-                    .members()
-                    .len(),
-                None => 0, // a local / not-yet-shared vault — no members
-            };
-            if members > 1 {
+            if vault_member_count(state, &vid)? > 1 {
                 return Err(FfiError::other(
                     "cannot use a shared (multi-member) vault as your personal vault",
                 ));
@@ -5334,7 +5323,7 @@ impl Core {
         team_vault_id: &str,
         profile_uid: &str,
     ) -> Result<Option<String>, FfiError> {
-        self.with_state(|state| binding_vault_in(state, team_vault_id, profile_uid))
+        self.with_state(|state| binding_vault_in(state, team_vault_id, profile_uid, false))
     }
 
     /// Resolves Personal authentication for connecting to a shared host (B4):
@@ -6502,19 +6491,7 @@ impl Core {
         // in a PRIVATE (single-member) vault — otherwise it syncs to a shared vault's
         // other members (leaked private cred). Refuse a shared/multi-member vault.
         let vid = resolve_vid(&state.storage, vault_id);
-        let owner_ed = state.keyset.signing.verifying.to_bytes().to_vec();
-        let members = match state
-            .storage
-            .latest_membership_epoch(&vid)
-            .map_err(FfiError::other)?
-        {
-            Some(latest) => verify_chain_to_epoch(&state.storage, &vid, latest, &owner_ed)
-                .map_err(map_vault_err)?
-                .members()
-                .len(),
-            None => 0, // local / not-yet-shared vault → single-member
-        };
-        if members > 1 {
+        if vault_member_count(state, &vid)? > 1 {
             return Err(FfiError::other(
                 "cannot store an identity in a shared (multi-member) vault — it would leak to the other members",
             ));
@@ -7525,6 +7502,11 @@ fn connect_with_options(
         // port/user/auth are taken from there); a normal hop is inline, as before.
         let (host, port, user, auth) = match &j.hop_ref {
             Some(hr) => {
+                if !hop_ref_in_own_vault(&st.storage, j, hr) {
+                    return Err(FfiError::InvalidHost {
+                        rule: HostRule::HopOtherVault,
+                    });
+                }
                 let prof = resolve_profile_by_uid(st, &hr.vault_id, &hr.profile_uid)?;
                 if idx == 0 {
                     first_hop_proxy = prof.proxy.clone();
@@ -7942,6 +7924,21 @@ impl Core {
         vault_id: &str,
         p: &ConnectionProfile,
     ) -> Result<ResolvedConnection, FfiError> {
+        // A hop of this host may only name a saved host of its own vault (the
+        // connect refuses the rest too; this says so before any dial).
+        let foreign_hop = self.with_state(|st| {
+            let own = resolve_vid(&st.storage, vault_id);
+            Ok(p.jumps.iter().any(|j| {
+                j.hop_ref
+                    .as_ref()
+                    .is_some_and(|r| resolve_vid(&st.storage, &r.vault_id) != own)
+            }))
+        })?;
+        if foreign_hop {
+            return Err(FfiError::InvalidHost {
+                rule: HostRule::HopOtherVault,
+            });
+        }
         let (user, auth) = if matches!(p.auth, ProfileAuth::Personal) {
             let destination = self.personal_destination(
                 p.host.clone(),
@@ -8787,14 +8784,39 @@ fn binding_in(
     Ok(Some(stored.into_binding()))
 }
 
+/// How many members vault `vid` has by its verified membership chain; 0 for a
+/// local or not-yet-shared vault.
+fn vault_member_count(state: &CoreState, vid: &[u8]) -> Result<usize, FfiError> {
+    let owner_ed = state.keyset.signing.verifying.to_bytes().to_vec();
+    match state
+        .storage
+        .latest_membership_epoch(vid)
+        .map_err(FfiError::other)?
+    {
+        Some(latest) => Ok(
+            verify_chain_to_epoch(&state.storage, vid, latest, &owner_ed)
+                .map_err(map_vault_err)?
+                .members()
+                .len(),
+        ),
+        None => Ok(0),
+    }
+}
+
 /// The body of [`Core::find_binding_vault`], on state already locked.
+/// `private_only` skips shared (multi-member) vaults: a member's own
+/// identities, and so their bindings, live in a single-member one.
 fn binding_vault_in(
     state: &CoreState,
     team_vault_id: &str,
     profile_uid: &str,
+    private_only: bool,
 ) -> Result<Option<String>, FfiError> {
     let item_id = binding_item_id(team_vault_id, profile_uid);
     for rec in state.storage.list_vaults().map_err(FfiError::other)? {
+        if private_only && vault_member_count(state, &rec.vault_id)? > 1 {
+            continue;
+        }
         if let Some(item) = state
             .storage
             .get_item(&rec.vault_id, item_id.as_bytes())
@@ -9091,6 +9113,21 @@ fn stored_to_profile(vault_id: &str, profile_id: String, s: StoredProfile) -> Co
         color: stored_appearance_id(s.color),
         icon: stored_appearance_id(s.icon),
     }
+}
+
+/// Whether reference hop `hop` names a saved host of the connecting host's own
+/// vault. The core stamps that vault on every hop's placeholder auth when it
+/// reads a host ([`stored_to_profile`]), and the editors write the same, so a
+/// reference into any other vault is refused rather than resolved to that
+/// vault's credential: synced data from a team vault must not route a
+/// connection through, and so log in with, a host of a member's personal
+/// vault.
+fn hop_ref_in_own_vault(storage: &Storage, hop: &JumpHost, hop_ref: &HopRef) -> bool {
+    let own = match &hop.auth {
+        AuthMethod::Agent { vault_id, .. } | AuthMethod::VaultPassword { vault_id, .. } => vault_id,
+        AuthMethod::Password { .. } | AuthMethod::SystemAgent { .. } => return false,
+    };
+    resolve_vid(storage, own) == resolve_vid(storage, &hop_ref.vault_id)
 }
 
 /// Resolves a bastion profile by (vault_id, profile_uid) for a host-chain (B2.2):

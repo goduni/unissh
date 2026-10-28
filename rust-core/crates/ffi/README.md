@@ -143,12 +143,16 @@ save_host(vault_id, HostSave{profile, new_password?, group, identity?}) -> HostS
 //   hop is another host of the same vault, found by uid, logging in with Key / VaultPassword /
 //   SystemAgent; a typed password goes with VaultPassword; the group or identity exists) →
 //   FfiError::InvalidHost{rule}, nothing written. Then, under one state lock: the typed password
-//   (id minted), the host and its one group (HostGroup Unchanged|Ungrouped|Existing|New) in one
-//   storage transaction; the identity binding pinned to where the host points (given, or the one
-//   already linked re-pinned); the password a typed one replaced removed if nothing else uses it.
-//   A link or removal that fails leaves the host saved: HostSaved.unfinished lists it.
-//   Referenced hops are stored in the placeholder shape; the username template is kept for a
-//   personal login only.
+//   (a new version of the host's own password item when nothing else uses it, else a new item;
+//   never a delete), the host and its one group (HostGroup Unchanged|Ungrouped|Existing|New) in
+//   one storage transaction; the identity binding pinned to where the host points (given, or the
+//   one already linked from a single-member vault), moved only when its pin still names where
+//   the host pointed before (else kept: HostSaveGap::IdentityPinKept). A link that fails leaves
+//   the host saved: HostSaved.unfinished lists it; HostSaved.binding_vault_id names the vault a
+//   binding was written to. The uid is the core's (kept on edit, minted for a new host).
+//   Referenced hops are stored in the placeholder shape under the host's vault id, inline hop
+//   hosts trimmed; the username template is kept for a personal login only. The connect (and
+//   resolve_connection) refuse a hop_ref into another vault with InvalidHost{HopOtherVault}.
 get_connection(vault_id, profile_id) / delete_connection(vault_id, profile_id)
 import_ssh_config(vault_id, config_text) -> [created_profile_ids]        // pasted text; Include is reported, not followed
 import_ssh_config_at_path(vault_id, path, only?) -> [{alias, origin_file}] // a FILE: Include followed as ssh follows it,
