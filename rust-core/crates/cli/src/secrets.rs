@@ -25,7 +25,7 @@ use crate::failure::{Failure, Res};
 use crate::home::read_private;
 use crate::hosts::{self, Named};
 use crate::manage::ago;
-use crate::tty::{confirm, one_line};
+use crate::tty::{confirm, goes_on, one_line};
 
 /// Which secrets a lookup is after: the item types, and what one is called.
 pub trait Sort {
@@ -450,14 +450,19 @@ fn describe<S>(core: &Core, entry: &Entry<S>) -> Res<()> {
 /// the vault, and stdout may well be a file.
 fn reveal<S>(core: &Core, entry: &Entry<S>, version: Option<u64>, yes: bool) -> Res<()> {
     let (vault_id, item_id) = (entry.vault_id.clone(), entry.info.item_id.clone());
-    if entry.info.item_type == SSH_KEY && version.is_none() {
-        confirm(
+    // Declining is an answer, not a failure: nothing is shown and it exits 0.
+    if entry.info.item_type == SSH_KEY
+        && version.is_none()
+        && !goes_on(
             yes,
             &format!(
                 "The private key \"{}\" will be printed unencrypted. Keep it somewhere safe.\n",
                 one_line(&item_id)
             ),
-        )?;
+        )?
+    {
+        eprintln!("Not shown.");
+        return Ok(());
     }
     let text = Zeroizing::new(match (entry.info.item_type, version) {
         (PASSWORD, None) => core.get_password(vault_id, item_id)?,
