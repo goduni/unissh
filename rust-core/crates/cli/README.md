@@ -67,6 +67,7 @@ unissh snippets run restart web db --set service=nginx
 unissh known-hosts list|trust|forget
 unissh recordings list|play|export|rm   # see Recordings below
 unissh hosts add|edit|rm, groups, secrets, keys, identities, snippets add   # see Editing the vaults
+unissh vaults list | trust <id>  # trust a teammate's shared vault (see Shared vaults)
 unissh sync | status | logout
 unissh mcp                     # an MCP server for a local AI agent (see below)
 ```
@@ -146,6 +147,32 @@ the ones already open. The tunnels stay up until Ctrl-C or SIGTERM, then close
 cleanly; a second Ctrl-C while they close quits at once (status 130). A hang-up
 ends the process as usual, without the clean close, and under `nohup` the tunnels
 stay up. A connection that drops is not reopened.
+
+### Shared vaults
+
+A vault a teammate shares with this account is verified against its owner's key,
+and this machine learns that key only from you: the server is never trusted to say
+who owns a vault. Until you trust the owner, the vault stays on the server, and
+`unissh sync` says how many wait:
+
+```bash
+unissh vaults list                 # the vaults here, and shared ones waiting for trust
+unissh vaults trust 3f2a9c1e       # by id or the start of it
+unissh vaults trust 3f2a9c1e --fingerprint "1a2b 3c4d …"   # the fingerprint the owner gave you
+```
+
+`trust` shows the vault and the name the server's directory gives its owner, marked
+unverified, and asks for the owner's fingerprint. Ask the owner for it over a channel
+you trust (they find it in `unissh status`, or in the app) and type or paste it: the
+vault is trusted only if it is the fingerprint of the key that created the vault. A
+fingerprint that does not match stops with a warning: someone may be posing as the
+owner. If you have none, press Enter: the creator key's fingerprint is shown, and
+typing `yes` after comparing it with the owner's digit by digit trusts it. That is the
+weaker check — typing theirs is better. `--fingerprint` takes a fingerprint only,
+never `yes`. Once trusted, the owner is pinned on this machine for good and the vault
+is fetched (if the fetch is cut short, run `trust` again: it goes straight to the
+fetch). A server that later names a different owner for it is refused, and
+`vaults list` and `sync` warn about it.
 
 ### Recordings
 
