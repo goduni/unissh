@@ -249,14 +249,16 @@ keyring = { version = "3", features = [
 # GNOME/KDE screensaver `ActiveChanged` on the session bus as the fallback for
 # desktops that never tell logind (see src/system_lock/linux.rs).
 #
-# zbus 6, the line the CLI's watcher uses too; keyring (zbus 4) and
-# tauri-plugin-opener (zbus 5) still bring their own. `default-rt` only: zbus's
-# own runtime, driven by each listener thread from inside `zbus::block_on` (zbus
-# 6 has no blocking API), not the app's Tokio, and none of the proxy/service
-# macros, since the watcher only adds match rules, calls and reads a stream.
-# futures-util for the stream's `next`, already in the tree.
-zbus = { version = "6", default-features = false, features = ["default-rt"] }
-futures-util = { version = "0.3", default-features = false }
+# Not a new dependency in practice: `keyring` above already resolves this exact
+# zbus through its async-secret-service backend. The features here say so
+# explicitly — `async-io` because zbus demands exactly one runtime and picking
+# `tokio` would change the one keyring carefully chose (see the note above),
+# `blocking-api` because each listener is a thread parked on a message stream
+# and has no reason to be async.
+zbus = { version = "5", default-features = false, features = [
+    "async-io",
+    "blocking-api",
+] }
 # iOS reuses the same `keyring` code as desktop (Apple Security framework backend).
 [target.'cfg(target_os = "ios")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }
