@@ -479,7 +479,7 @@ export function VerifyOwnerDialog({
             </Field>
             {displayed && (
               <div>
-                <Btn variant="ghost" size="sm" onClick={() => switchPath(true)} disabled={busy}>
+                <Btn variant="ghost" size="sm" wrap style={{ maxWidth: "100%" }} onClick={() => switchPath(true)} disabled={busy}>
                   {t("sharedVaults.noFingerprint")}
                 </Btn>
               </div>
