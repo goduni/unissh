@@ -261,11 +261,11 @@ starts with `0.`:
   it stays on that device, everything else is sent, and the sync status (in
   the app and in `unissh sync`) names it. "Discard unsent changes", next to
   "Pull from server" in the app, and `unissh vaults discard-unpushable
-  <vault>` send those edits once more, delete the ones still refused after
-  asking and bring back the server's copy; other members' such edits are kept
-  and no longer sent, and other changes not sent yet are kept. Only the
-  server's own 403 leaves an item out: any other 403, or one for every
-  request, fails the sync. `unissh sync --retry-refused` sends refused changes
+  <vault>` send those edits once more and, after asking, replace the ones
+  still refused with the server's copy (an item the server does not have is
+  removed; a copy that does not verify replaces nothing); other members' such
+  edits are kept and no longer sent, and other changes not sent yet are kept.
+  Only the server's own 403 leaves an item out: any other 403 fails the sync. `unissh sync --retry-refused` sends refused changes
   again. Bindings: new `FfiSyncReport::unpushable`,
   `Core::discard_unpushable_changes` (`FfiDiscardReport`),
   `FfiError::UploadForbidden` (a sync transport returns it for the server's

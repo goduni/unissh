@@ -777,6 +777,19 @@ overclaiming them would be dishonest:
   refuses any delta or reported cursor below what it has already seen. Together
   these bound a stale restore — but a restore *within* the bound can still
   resurrect a deleted item, which is why a full re-push is safe and expected.
+- **Discarding unsendable edits is a confirmed exception to rollback
+  detection.** An edit by this account that no push can deliver keeps a higher
+  version than the server's copy. One example is a Viewer's edit made before
+  the core refused such writes (#166). To get the server's copy back, the user
+  confirms a discard (`unissh vaults discard-unpushable`, "Discard unsent
+  changes"). The discard deletes exactly those rows past version monotonicity.
+  It sends them once more first and drops only the ones still refused. Then it
+  applies the server's copy, which was fetched in full beforehand, with
+  verify-before-apply. If a copy does not verify, or if the fetched objects do
+  not parse, nothing is dropped. For the dropped items, a server that serves
+  an older version than it holds would go unnoticed, because the user chose
+  the server's word for them. An item the server serves nothing of is removed.
+  Other members' unsendable edits are only stopped from being sent.
 - **Audit: integrity is provable, origin is not.** Client-signed entries are
   authentic (owner Ed25519 signature, verified with associated data
   `(vault_id, "__audit__", 0)`). The log is a server-side **hash chain**, and a

@@ -87,14 +87,15 @@ view, before UniSSH refused such edits, or one the server refuses on its own —
 no longer holds up the rest of a sync: it stays on this machine, everything else
 is sent, and every sync names it by vault, kind and id. `unissh vaults
 discard-unpushable <vault>` sends those changes once more and, after asking
-(`--yes` skips the question), deletes the ones made by this account that the
-server still refuses and puts back the server's copy of each item; an item the
-server never had is gone. Other members' changes this machine cannot send are
-kept and no longer sent. Other changes not sent yet are kept. A 403 that is not
-the server's own refusal, or one for every request, fails the sync instead:
-nothing is left out on its word. `unissh sync --retry-refused` sends again the
-changes the server refused before (too large, or not permitted) — for a raised
-limit, or a refusal that was not about the change. A Viewer's edit is refused
+(`--yes` skips the question), replaces each edit by this account that the server
+still refuses with the server's copy; an item the server does not have is
+removed. If the server's copy of an item does not verify, nothing is replaced.
+Other members' changes this machine cannot send are kept and no longer sent.
+Other changes not sent yet are kept. A 403 that is not the server's own refusal
+fails the sync instead: nothing is left out on its word. `unissh sync
+--retry-refused` sends again the changes the server refused before (too large,
+or not permitted) — for a raised limit, or a refusal that was not about the
+change. A Viewer's edit is refused
 again at any role: it was written at an epoch where the account could only view.
 
 The interactive list locks the instance after 15 minutes without input and asks
