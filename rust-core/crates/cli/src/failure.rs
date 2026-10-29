@@ -102,6 +102,7 @@ impl From<FfiError> for Failure {
             | FfiError::ReadOnlyVault
             | FfiError::NoServer
             | FfiError::PayloadTooLarge { .. }
+            | FfiError::UploadForbidden { .. }
             | FfiError::RotationInProgress { .. }
             | FfiError::RotationPartlyFinished { .. }
             | FfiError::PublickeyOnlyNeedsKey

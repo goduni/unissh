@@ -569,6 +569,7 @@ pub fn run() {
             cloud::commands::server_pull_vault,
             cloud::commands::server_pending_shared_vaults,
             cloud::commands::server_trust_shared_vault,
+            cloud::commands::server_discard_unpushable,
             cloud::commands::server_bind_and_push_vault,
             cloud::commands::server_move_vault_to_server,
             // cloud membership / sharing

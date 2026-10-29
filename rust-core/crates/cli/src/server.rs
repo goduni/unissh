@@ -13,11 +13,15 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use unissh_cloud::client::http;
 use unissh_cloud::identity;
 use unissh_cloud::transport::HttpSyncTransport;
-use unissh_ffi::{Core, FfiSyncMode, FfiSyncReport, FfiSyncTransport};
+use unissh_ffi::{
+    Core, FfiDiscardReport, FfiSyncMode, FfiSyncReport, FfiSyncTransport, FfiUnpushableItem,
+    FfiUnpushableReason,
+};
 
 use crate::device::Device;
 use crate::failure::{best_effort, Failure, Res};
 use crate::home::Link;
+use crate::tty::one_line;
 
 /// How old the local copy may get before a command that reads hosts syncs first.
 pub const STALE_AFTER: Duration = Duration::from_secs(5 * 60);
@@ -115,6 +119,17 @@ pub fn sync(device: &Device) -> Res<FfiSyncReport> {
     sync_locked(device)
 }
 
+/// [`sync`] that first forgets which changes the server refused, so that they
+/// are sent again (`unissh sync --retry-refused`): for a server whose limit
+/// was raised, or a refusal that was not about the change after all.
+pub fn sync_retrying_refused(device: &Device) -> Res<FfiSyncReport> {
+    let _one_at_a_time = device.home.sync_lock()?;
+    let access = device.access()?;
+    let space = space_of(device, &access);
+    device.core.retry_refused_uploads(space)?;
+    sync_locked(device)
+}
+
 /// [`sync`], with the sync lock already held.
 fn sync_locked(device: &Device) -> Res<FfiSyncReport> {
     let access = device.access()?;
@@ -124,6 +139,21 @@ fn sync_locked(device: &Device) -> Res<FfiSyncReport> {
     let report = device.core.sync_now(transport, space, FfiSyncMode::Full)?;
     device.home.mark_synced()?;
     Ok(report)
+}
+
+/// Drops this account's edits in vault `vault_id` (hex, as `list_vaults` names
+/// it) that no push can deliver and puts back the server's copy (#166): the
+/// vault is read from the server first, and the core pushes again before it
+/// drops anything, so only a refusal confirmed now drops an edit (see
+/// `HttpSyncTransport::discard_unpushable_and_pull`). The core must be
+/// unlocked.
+pub fn discard_unpushable(device: &Device, vault_id: &str) -> Res<FfiDiscardReport> {
+    let _one_at_a_time = device.home.sync_lock()?;
+    let access = device.access()?;
+    let space = space_of(device, &access);
+    HttpSyncTransport::new(device.link.base_url.clone(), access)
+        .discard_unpushable_and_pull(&device.core, &space, vault_id)
+        .map_err(Failure::from)
 }
 
 /// The space this device's cloud vaults are bound in — the account's first,
@@ -217,10 +247,23 @@ pub fn push_recording(device: &Device) {
 /// sync. A sync that cannot reach the server is a warning — the change goes
 /// with the next one. A server that refuses the change is a failure: the
 /// change stays on this machine only, and the user must hear that rather than
-/// believe it went through. (A Viewer's write never gets here: the core
-/// refuses it before storing anything, `FfiError::ReadOnlyVault`. A refusal
-/// here means the server knows of a role or policy this device does not yet.)
-pub fn push_after_write(device: &Device, cloud: bool, offline: bool, done: &str) -> Res<()> {
+/// believe it went through. The push leaves an item it cannot deliver out and
+/// goes on with the rest (#166), so a refusal comes back two ways: the sync
+/// fails (a refusal of the request), or it succeeds and names, among the
+/// edits it could not send, one of this account's in `vault_id` that was not
+/// left out before the write ([`Device::note_left_out`], taken when the
+/// command started, after its stale sync): as a rule the write just made, so
+/// the failure says an edit in this vault could not be sent. Edits left out before it say
+/// nothing about it. Either fails the command. (A Viewer's write never gets here: the core refuses it before
+/// storing anything, `FfiError::ReadOnlyVault`. A refusal here means the
+/// server knows of a role or policy this device does not yet.)
+pub fn push_after_write(
+    device: &Device,
+    vault_id: &str,
+    cloud: bool,
+    offline: bool,
+    done: &str,
+) -> Res<()> {
     if !cloud {
         println!("{done}.");
         return Ok(());
@@ -230,19 +273,72 @@ pub fn push_after_write(device: &Device, cloud: bool, offline: bool, done: &str)
         return Ok(());
     }
     match sync(device) {
+        Ok(report) if left_out_now(&report, vault_id, &device.left_out_before()) => {
+            warn_about(&report);
+            // An edit by this account in the vault that was not left out when
+            // the command started: the write, as a rule — but an older edit
+            // first sent by this sync looks the same, so the message says what
+            // is known.
+            Err(Failure::msg(format!(
+                "{done} on this machine, but an edit by this account in this vault could not \
+                 be sent: it stays on this machine only (see above)."
+            )))
+        }
         Ok(report) => {
             println!("{done}.");
             warn_about(&report);
             Ok(())
         }
-        Err(e) if is_refusal(&e) => Err(Failure::msg(format!(
-            "{done} on this machine only: the server refused the change ({e}). \
-             This account may not change the vault; the other devices keep what it had."
-        ))),
+        Err(e) if is_refusal(&e) => Err(refused_here(done, &e.to_string())),
         Err(e) => {
             println!("{done} here.");
             eprintln!("unissh: the change is sent with the next sync: {e}");
             Ok(())
+        }
+    }
+}
+
+/// The failure of a write the server will not take: it stays here only.
+fn refused_here(done: &str, why: &str) -> Failure {
+    Failure::msg(format!(
+        "{done} on this machine only: the server refused the change ({why}). \
+         This account may not change the vault; the other devices keep what it had."
+    ))
+}
+
+/// Whether a sync left out an edit by this account in vault `vault_id` that
+/// `before` (what was left out before the write: item id and version) does
+/// not hold — the change just written there, which is not on the server.
+fn left_out_now(report: &FfiSyncReport, vault_id: &str, before: &[LeftOut]) -> bool {
+    report.unpushable.iter().any(|item| {
+        item.mine
+            && item.vault_id == vault_id
+            && !before.iter().any(|b| {
+                b.vault_id == item.vault_id
+                    && b.item_id == item.item_id
+                    && b.version == item.version
+            })
+    })
+}
+
+/// An edit no push delivers, by vault, item and version (see
+/// [`Device::note_left_out`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeftOut {
+    /// The vault, as `list_vaults` names it.
+    pub vault_id: String,
+    /// The item's id.
+    pub item_id: String,
+    /// The version left out.
+    pub version: u64,
+}
+
+impl From<&FfiUnpushableItem> for LeftOut {
+    fn from(item: &FfiUnpushableItem) -> Self {
+        Self {
+            vault_id: item.vault_id.clone(),
+            item_id: item.item_id.clone(),
+            version: item.version,
         }
     }
 }
@@ -287,14 +383,158 @@ pub fn warn_about(report: &FfiSyncReport) {
             report.too_large.len()
         );
     }
+    for line in unpushable_lines(&report.unpushable) {
+        eprintln!("unissh: {line}");
+    }
+}
+
+/// What an item of the core's `item_type` is, in a few words.
+pub const fn kind(item_type: u32) -> &'static str {
+    match item_type {
+        1 => "SSH key",
+        2 => "certificate",
+        3 => "host",
+        4 => "password",
+        5 => "group",
+        6 => "note",
+        7 => "identity",
+        8 => "host binding",
+        9 => "snippet",
+        10 => "recording",
+        _ => "item",
+    }
+}
+
+/// One item no push can deliver, as a list entry: its kind and id (its name
+/// is inside the encrypted content the sync does not read) and why.
+pub fn unpushable_entry(item: &FfiUnpushableItem) -> String {
+    let why = match item.reason {
+        FfiUnpushableReason::NotAuthorized => "this account may not change it",
+        FfiUnpushableReason::ServerRefused => "the server refused it",
+    };
+    format!(
+        "{} {} ({why})",
+        kind(item.item_type),
+        one_line(&item.item_id)
+    )
+}
+
+/// What a sync says about the edits it could not send (#166), one line per
+/// vault: they stay on this machine, nothing else is held up, and how to
+/// replace this account's ones with the server's copy.
+fn unpushable_lines(items: &[FfiUnpushableItem]) -> Vec<String> {
+    let mut vaults: Vec<(&str, &str)> = Vec::new();
+    for item in items {
+        let vault = (item.vault_id.as_str(), item.vault_name.as_str());
+        if !vaults.contains(&vault) {
+            vaults.push(vault);
+        }
+    }
+    vaults
+        .into_iter()
+        .map(|(id, name)| {
+            let here: Vec<&FfiUnpushableItem> = items.iter().filter(|i| i.vault_id == id).collect();
+            let shown = if name.is_empty() { id } else { name };
+            let entries: Vec<String> = here.iter().copied().map(unpushable_entry).collect();
+            let fix = if here.iter().any(|i| i.mine) {
+                format!(
+                    "; `unissh vaults discard-unpushable {id}` replaces this account's \
+                     edits with the server's copy"
+                )
+            } else {
+                String::new()
+            };
+            format!(
+                "{} change(s) in vault \"{}\" cannot be sent and stay on this machine: {}{fix}",
+                here.len(),
+                one_line(shown),
+                entries.join(", ")
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
-    use super::{is_refusal, reuse_for, REUSE};
+    use unissh_ffi::{FfiSyncReport, FfiUnpushableItem, FfiUnpushableReason};
+
+    use super::{is_refusal, left_out_now, reuse_for, unpushable_lines, LeftOut, REUSE};
     use crate::failure::Failure;
+
+    /// A sync names what it could not send by vault, by kind and id, and
+    /// points at the discard only where this account made some of it.
+    #[test]
+    fn unsent_edits_are_listed_per_vault_with_the_way_out() {
+        let item = |vault: &str, id: &str, mine, reason| FfiUnpushableItem {
+            vault_id: vault.to_owned(),
+            vault_name: format!("{vault}-name"),
+            item_id: id.to_owned(),
+            item_type: 3,
+            version: 1,
+            mine,
+            reason,
+        };
+        let lines = unpushable_lines(&[
+            item("aa", "web", true, FfiUnpushableReason::NotAuthorized),
+            item("bb", "db", false, FfiUnpushableReason::ServerRefused),
+        ]);
+        assert_eq!(
+            lines,
+            [
+                "1 change(s) in vault \"aa-name\" cannot be sent and stay on this machine: \
+                 host web (this account may not change it); \
+                 `unissh vaults discard-unpushable aa` replaces this account's edits with the \
+                 server's copy",
+                "1 change(s) in vault \"bb-name\" cannot be sent and stay on this machine: \
+                 host db (the server refused it)",
+            ]
+        );
+    }
+
+    /// The write the sync left out is an edit by this account, in that vault,
+    /// that was not left out before the write: an older left-out edit, a
+    /// teammate's, or another vault's says nothing about it.
+    #[test]
+    fn only_an_edit_left_out_since_the_write_is_the_write_refused() {
+        let item = |vault: &str, version, mine| FfiUnpushableItem {
+            vault_id: vault.to_owned(),
+            vault_name: String::new(),
+            item_id: "web".to_owned(),
+            item_type: 3,
+            version,
+            mine,
+            reason: FfiUnpushableReason::ServerRefused,
+        };
+        let report = |unpushable| FfiSyncReport {
+            applied: 0,
+            skipped_stale: 0,
+            conflicts: 0,
+            rejected: 0,
+            pushed: 0,
+            too_large: Vec::new(),
+            unpushable,
+        };
+        let before = [LeftOut::from(&item("aa", 2, true))];
+
+        assert!(
+            left_out_now(&report(vec![item("aa", 3, true)]), "aa", &before),
+            "the write made version 3, and it was left out"
+        );
+        assert!(
+            !left_out_now(&report(vec![item("aa", 2, true)]), "aa", &before),
+            "left out before the write"
+        );
+        assert!(
+            !left_out_now(&report(vec![item("aa", 3, false)]), "aa", &before),
+            "a teammate's"
+        );
+        assert!(
+            !left_out_now(&report(vec![item("bb", 3, true)]), "aa", &before),
+            "another vault's"
+        );
+    }
 
     /// Half the token's remaining life, never more than the cap and nothing
     /// for one already expired; a server that does not say gets the cap.

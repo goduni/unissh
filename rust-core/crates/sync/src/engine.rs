@@ -5,11 +5,11 @@
 //! after the corresponding seq is processed. Every object goes through
 //! verify-before-apply (Task 7); violations are report entries, not a panic.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
-use unissh_storage::{ItemRecord, Storage, VaultRecord};
+use unissh_storage::{ItemRecord, ItemVersion, Storage, VaultRecord};
 use unissh_vault::{
-    check_item_record, check_vault_record, verify_record_authority, IntegrityFailure,
+    check_item_record, check_vault_record, verify_record_authority, IntegrityFailure, VaultError,
 };
 
 use crate::error::SyncError;
@@ -62,6 +62,13 @@ fn acct_push_cursor_key(tenant: &[u8]) -> String {
 const PUSH_REFUSED_PREFIX: &str = "sync:pushrefused.v1";
 fn push_refused_key(tenant: &[u8]) -> String {
     format!("{PUSH_REFUSED_PREFIX}:{}", hex_lower(tenant))
+}
+
+/// Meta-key prefix for the items a tenant's server refused as not permitted
+/// (see [`sync_push_as`]). Versioned like [`PUSH_REFUSED_PREFIX`].
+const PUSH_FORBIDDEN_PREFIX: &str = "sync:pushforbidden.v1";
+fn push_forbidden_key(tenant: &[u8]) -> String {
+    format!("{PUSH_FORBIDDEN_PREFIX}:{}", hex_lower(tenant))
 }
 
 /// How many objects one push request carries at most. The server default
@@ -194,6 +201,58 @@ pub struct TooLarge {
     pub bytes: u64,
 }
 
+/// Why a push leaves a dirty item out (see [`Unpushable`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnpushableReason {
+    /// The item's author may not write it: by the vault's verified membership
+    /// as this device holds it, the author has no write role at the item's
+    /// epoch (a Viewer's edit, or one by a member since removed). Every other
+    /// member's verify-before-apply would reject it, and so would this
+    /// device's own read path.
+    NotAuthorized,
+    /// The server refused it as not permitted, on its own (HTTP 403).
+    ServerRefused,
+}
+
+/// A dirty item no push can deliver, so it stays on this device only, left
+/// out of every push until it changes (see [`sync_push_as`]). Open metadata,
+/// no content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unpushable {
+    /// The item's vault_id.
+    pub vault_id: Vec<u8>,
+    /// The item's id.
+    pub item_id: Vec<u8>,
+    /// The item's type (open metadata), so it can be named by kind.
+    pub item_type: u32,
+    /// The left-out version of the item.
+    pub version: u64,
+    /// The author of that version.
+    pub author_pubkey: Vec<u8>,
+    /// Why it is left out.
+    pub reason: UnpushableReason,
+}
+
+impl Unpushable {
+    fn new(head: &ItemVersion, reason: UnpushableReason) -> Self {
+        Self {
+            vault_id: head.vault_id.clone(),
+            item_id: head.item_id.clone(),
+            item_type: head.item_type,
+            version: head.version,
+            author_pubkey: head.author_pubkey.clone(),
+            reason,
+        }
+    }
+
+    /// Whether this names `head`'s current version.
+    fn is(&self, head: &ItemVersion) -> bool {
+        self.vault_id == head.vault_id
+            && self.item_id == head.item_id
+            && self.version == head.version
+    }
+}
+
 /// Push report.
 #[derive(Debug, Clone, Default)]
 pub struct PushReport {
@@ -203,6 +262,10 @@ pub struct PushReport {
     /// one and unchanged since (those are not sent again, see [`sync_push`]).
     /// They are NOT on the server; everything else was pushed.
     pub too_large: Vec<TooLarge>,
+    /// Items no push can deliver (see [`Unpushable`]): their author may not
+    /// write them, or the server refused them as not permitted. They are NOT
+    /// on the server; everything else was pushed.
+    pub unpushable: Vec<Unpushable>,
 }
 
 /// Pulls the delta from the untrusted transport and applies verify-before-apply.
@@ -379,9 +442,65 @@ fn vault_anchor(
     vault_id: &[u8],
     ctx: &SyncContext,
 ) -> Result<Vec<u8>, SyncError> {
+    anchor_of(storage, vault_id, &ctx.genesis_owner)
+}
+
+/// [`vault_anchor`] with the local keyset's pubkey `own` in place of the
+/// context.
+fn anchor_of(storage: &Storage, vault_id: &[u8], own: &[u8]) -> Result<Vec<u8>, SyncError> {
     match storage.get_vault_trust_anchor(vault_id)? {
         Some(a) => Ok(a.genesis_owner_pubkey),
-        None => Ok(ctx.genesis_owner.clone()),
+        None => Ok(own.to_vec()),
+    }
+}
+
+/// Whether a dirty item's author may write it, by the same check the receiving
+/// side's verify-before-apply makes ([`process_item`]): the push leaves out
+/// what every other member would reject. Answers are kept per (vault, author,
+/// epoch) — one membership-chain verification each, however many items share
+/// them. Without the account's own pubkey (no anchor known) every item passes.
+struct Authority<'a> {
+    storage: &'a Storage,
+    own: Option<&'a [u8]>,
+    seen: HashMap<(Vec<u8>, Vec<u8>, u64), bool>,
+}
+
+impl<'a> Authority<'a> {
+    fn new(storage: &'a Storage, own: Option<&'a [u8]>) -> Self {
+        Self {
+            storage,
+            own,
+            seen: HashMap::new(),
+        }
+    }
+
+    fn may_write(&mut self, head: &ItemVersion) -> Result<bool, SyncError> {
+        let Some(own) = self.own else {
+            return Ok(true);
+        };
+        let key = (
+            head.vault_id.clone(),
+            head.author_pubkey.clone(),
+            head.key_epoch,
+        );
+        if let Some(known) = self.seen.get(&key) {
+            return Ok(*known);
+        }
+        let anchor = anchor_of(self.storage, &head.vault_id, own)?;
+        let outcome = verify_record_authority(
+            self.storage,
+            &head.vault_id,
+            &head.author_pubkey,
+            head.key_epoch,
+            &anchor,
+        );
+        // Not being able to read the database says nothing about the item.
+        if let Err(e @ VaultError::Storage(_)) = outcome {
+            return Err(e.into());
+        }
+        let allowed = outcome.is_ok();
+        self.seen.insert(key, allowed);
+        Ok(allowed)
     }
 }
 
@@ -608,7 +727,7 @@ fn process_manifest(
             Ok(_) => Ok(true),
             // intentional rollback: we return Err so the transaction rolls back,
             // but this is NOT a fatal sync error — we turn it into a reject outside.
-            Err(_) => Err(SyncError::Vault(unissh_vault::VaultError::AuthorityInvalid)),
+            Err(_) => Err(SyncError::Vault(VaultError::AuthorityInvalid)),
         }
     });
     match res {
@@ -625,7 +744,7 @@ fn process_manifest(
             }
             Ok(())
         }
-        Err(SyncError::Vault(unissh_vault::VaultError::AuthorityInvalid)) => {
+        Err(SyncError::Vault(VaultError::AuthorityInvalid)) => {
             reject(
                 report,
                 seq,
@@ -891,12 +1010,228 @@ fn item_content_eq(a: &ItemRecord, b: &ItemRecord) -> bool {
 /// later one, without being sent again, until the item changes or
 /// [`forget_push_refusals`] is called. Any other object too large for the server
 /// fails the push.
+///
+/// **Not permitted by the server** ([`SyncError::Forbidden`] from the
+/// transport): the server refuses a whole request for one object its write
+/// policy refuses, and does not say which. The request is halved the same way
+/// until the refused object is alone; an item is then left out, reported in
+/// [`PushReport::unpushable`] and remembered like a too-large one. Any other
+/// object the server refuses fails the push. Without this, one Viewer's edit
+/// made before the core refused them failed every push of the device (#166).
+///
+/// This push does not check authorship locally: [`sync_push_as`] does, and
+/// is what a device that knows its account's key uses.
 pub fn sync_push(
     transport: &mut dyn SyncTransport,
     storage: &Storage,
     target_tenant: &[u8],
 ) -> Result<PushReport, SyncError> {
-    run_push(transport, storage, target_tenant, true)
+    run_push(transport, storage, target_tenant, None, true)
+}
+
+/// [`sync_push`] to `ctx.tenant` that first leaves out the dirty items whose
+/// author may not write them ([`UnpushableReason::NotAuthorized`]), by the
+/// check the receiving side makes: the vault's pinned anchor, or
+/// `ctx.genesis_owner` for a vault without one, as in [`sync_pull`]. They are
+/// reported in [`PushReport::unpushable`] on every push until they change or
+/// are discarded ([`discard_unpushable`]); nothing is sent for them, so the
+/// server never sees a request it must refuse for them.
+pub fn sync_push_as(
+    transport: &mut dyn SyncTransport,
+    storage: &Storage,
+    ctx: &SyncContext,
+) -> Result<PushReport, SyncError> {
+    run_push(
+        transport,
+        storage,
+        &ctx.tenant,
+        Some(&ctx.genesis_owner),
+        true,
+    )
+}
+
+/// [`sync_push_vault_data`] with the authorship check of [`sync_push_as`].
+pub fn sync_push_vault_data_as(
+    transport: &mut dyn SyncTransport,
+    storage: &Storage,
+    ctx: &SyncContext,
+) -> Result<PushReport, SyncError> {
+    run_push(
+        transport,
+        storage,
+        &ctx.tenant,
+        Some(&ctx.genesis_owner),
+        false,
+    )
+}
+
+/// The dirty items of every vault bound to a server that no push delivers
+/// ([`Unpushable`]): those whose author may not write them, checked as
+/// [`sync_push_as`] checks them (`own` is the account's pubkey, the anchor of
+/// a vault without a pinned one), and those the vault's server refused and
+/// that are unchanged since. Reads only, and makes no request: what a caller
+/// compares a later push's [`PushReport::unpushable`] against, to tell an edit
+/// it is about to make from the ones already left out.
+pub fn unpushable_items(storage: &Storage, own: &[u8]) -> Result<Vec<Unpushable>, SyncError> {
+    let mut tenants: Vec<Vec<u8>> = Vec::new();
+    for vault in storage.list_vaults()? {
+        if !vault.sync_tenant.is_empty() && !tenants.contains(&vault.sync_tenant) {
+            tenants.push(vault.sync_tenant);
+        }
+    }
+    let mut authority = Authority::new(storage, Some(own));
+    let mut out = Vec::new();
+    for tenant in tenants {
+        let refused = load_forbidden(storage, &push_forbidden_key(&tenant))?;
+        for head in storage.list_dirty_bound_item_versions(&tenant)? {
+            if let Some(r) = refused.iter().find(|r| r.is(&head)) {
+                out.push(r.clone());
+            } else if !authority.may_write(&head)? {
+                out.push(Unpushable::new(&head, UnpushableReason::NotAuthorized));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// What [`discard_unpushable`] did.
+#[derive(Debug, Clone, Default)]
+pub struct Discarded {
+    /// The account's own edits that were dropped: the server's copy of each
+    /// took its place, or, for one the server holds nothing of, the item is
+    /// gone (also in [`Self::removed`]).
+    pub dropped: Vec<Unpushable>,
+    /// The dropped edits whose item the server holds nothing of: removed.
+    pub removed: Vec<Unpushable>,
+    /// Other members' items no longer sent (their dirty flag cleared; the row
+    /// is kept as it is).
+    pub released: Vec<Unpushable>,
+    /// What applying the server's copy of the vault did.
+    pub pulled: SyncReport,
+}
+
+/// **Replaces the account's (`ctx.genesis_owner`) edits in `vault_id` that no
+/// push delivers with the server's copy** (`server_copy`: the vault's objects
+/// as the server has them, raw, every page, fetched by the caller before this
+/// is called — `GET /v1/sync/delta?vault=<id>`).
+///
+/// A user-confirmed exception to rollback protection, for exactly the edits it
+/// drops: it deletes a row past the version monotonicity that would otherwise
+/// keep the local edit above the server's copy forever
+/// ([`Storage::discard_unpushed_item`]), so that the server's (lower) version
+/// can be stored again. Nothing else of the vault moves back.
+///
+/// - `server_copy` is read strictly: an object that does not parse fails this
+///   ([`SyncError::ServerCopyUnreadable`]) before anything changes.
+/// - Nothing is dropped on an old word: the server's remembered refusals for
+///   this vault are forgotten and the vault data is pushed again first (as
+///   [`sync_push_vault_data_as`]), so an edit is dropped only when this push
+///   confirms it cannot be delivered — by the local authorship check, or a
+///   fresh 403 for that item. An edit that goes through now is kept. A push
+///   that fails fails this, and nothing is dropped.
+/// - Then, in one transaction: the account's confirmed edits are deleted,
+///   other members' unsendable items in the vault stop being sent (dirty flag
+///   cleared, row kept), and `server_copy` is applied with verify-before-apply
+///   as [`apply_pulled_objects`] applies it, without moving the pull cursor.
+///   Every dropped item the server's copy holds must come back from it: one
+///   that does not (verification rejected it) rolls the whole transaction back
+///   with [`SyncError::NotRestored`]. A dropped item the server holds nothing
+///   of is removed (its archived versions too, as on any delete) and named in
+///   [`Discarded::removed`].
+/// - The archived versions of a restored item above the server's copy are
+///   the discarded edits' own, and go with them (so the item's next real
+///   versions are archived under those numbers); the ones at or below it
+///   stay. The remembered refusals of the dropped and released items are
+///   forgotten, so a later edit of one of them is sent.
+pub fn discard_unpushable(
+    transport: &mut dyn SyncTransport,
+    storage: &Storage,
+    ctx: &SyncContext,
+    vault_id: &[u8],
+    server_copy: &[Vec<u8>],
+) -> Result<Discarded, SyncError> {
+    let mut pulled: Vec<(u64, SyncObject)> = Vec::with_capacity(server_copy.len());
+    let mut seq = 0_u64;
+    for blob in server_copy {
+        seq = seq.saturating_add(1);
+        let Ok(object) = SyncObject::from_bytes(blob) else {
+            return Err(SyncError::ServerCopyUnreadable);
+        };
+        pulled.push((seq, object));
+    }
+    // The items of the vault the server's copy holds.
+    let mut held: Vec<Vec<u8>> = Vec::new();
+    for (_, object) in &pulled {
+        if let SyncObject::Item(it) = object {
+            if it.vault_id == vault_id {
+                held.push(it.item_id.clone());
+            }
+        }
+    }
+
+    let key = push_forbidden_key(&ctx.tenant);
+    let others: Vec<Unpushable> = load_forbidden(storage, &key)?
+        .into_iter()
+        .filter(|u| u.vault_id != vault_id)
+        .collect();
+    save_forbidden(storage, &key, &others)?;
+    let report = sync_push_vault_data_as(transport, storage, ctx)?;
+    let (mine, theirs): (Vec<Unpushable>, Vec<Unpushable>) = report
+        .unpushable
+        .into_iter()
+        .filter(|u| u.vault_id == vault_id)
+        .partition(|u| u.author_pubkey == ctx.genesis_owner);
+
+    storage.transaction(|| -> Result<Discarded, SyncError> {
+        let mut out = Discarded::default();
+        for u in mine {
+            if storage.discard_unpushed_item(
+                &u.vault_id,
+                &u.item_id,
+                u.version,
+                &u.author_pubkey,
+            )? {
+                out.dropped.push(u);
+            }
+        }
+        for u in theirs {
+            let unchanged = storage
+                .get_item(&u.vault_id, &u.item_id)?
+                .is_some_and(|it| it.version == u.version && it.author_pubkey == u.author_pubkey);
+            if unchanged {
+                storage.clear_item_dirty(&u.vault_id, &u.item_id)?;
+                out.released.push(u);
+            }
+        }
+        out.pulled = apply_pulled_objects(storage, ctx, pulled)?;
+        for u in &out.dropped {
+            if held.contains(&u.item_id) {
+                let Some(restored) = storage.get_item(&u.vault_id, &u.item_id)? else {
+                    return Err(SyncError::NotRestored);
+                };
+                // The archived versions above the server's copy are the
+                // discarded edits' own: they go with them, so that the item's
+                // next real versions, which take those numbers again, are
+                // archived as what they are. The ones at or below it stay.
+                storage.delete_item_history_above(&u.vault_id, &u.item_id, restored.version)?;
+            } else {
+                storage.clear_item_history(&u.vault_id, &u.item_id)?;
+                out.removed.push(u.clone());
+            }
+        }
+        // The refusals remembered for the items dropped or released are
+        // settled: a later edit of one of them is sent like any other.
+        let settled = |r: &Unpushable| {
+            out.dropped
+                .iter()
+                .chain(&out.released)
+                .any(|u| u.vault_id == r.vault_id && u.item_id == r.item_id)
+        };
+        let remembered = load_forbidden(storage, &key)?;
+        let kept: Vec<Unpushable> = remembered.into_iter().filter(|r| !settled(r)).collect();
+        save_forbidden(storage, &key, &kept)?;
+        Ok(out)
+    })
 }
 
 /// [`sync_push`] of the vault data alone: the dirty vault records, items,
@@ -914,25 +1249,30 @@ pub fn sync_push_vault_data(
     storage: &Storage,
     target_tenant: &[u8],
 ) -> Result<PushReport, SyncError> {
-    run_push(transport, storage, target_tenant, false)
+    run_push(transport, storage, target_tenant, None, false)
 }
 
-/// The push behind [`sync_push`] (`account_wide`) and [`sync_push_vault_data`].
+/// The push behind [`sync_push`] (`account_wide`) and [`sync_push_vault_data`];
+/// with `own` (the account's pubkey), behind their `_as` forms.
 fn run_push(
     transport: &mut dyn SyncTransport,
     storage: &Storage,
     target_tenant: &[u8],
+    own: Option<&[u8]>,
     account_wide: bool,
 ) -> Result<PushReport, SyncError> {
     let mut push = Push {
         storage,
+        authority: Authority::new(storage, own),
         refused_key: push_refused_key(target_tenant),
+        forbidden_key: push_forbidden_key(target_tenant),
         acct_key: acct_push_cursor_key(target_tenant),
         audit_key: push_cursor_key(target_tenant),
         before_items: VecDeque::new(),
         items: VecDeque::new(),
         after_items: VecDeque::new(),
         too_large: Vec::new(),
+        unpushable: Vec::new(),
         acct_left: 0,
         acct_version: None,
     };
@@ -944,15 +1284,22 @@ fn run_push(
 
     // Counts only — the pushed objects are encrypted blobs; never log their content.
     let too_large = push.too_large;
-    if !too_large.is_empty() {
+    let unpushable = push.unpushable;
+    if !too_large.is_empty() || !unpushable.is_empty() {
         log::warn!(
-            "sync push: pushed {pushed} object(s); {} item(s) are too large for the server",
-            too_large.len()
+            "sync push: pushed {pushed} object(s); {} item(s) are too large for the server, \
+             {} item(s) cannot be sent as not permitted",
+            too_large.len(),
+            unpushable.len()
         );
     } else if pushed > 0 {
         log::info!("sync push: pushed {pushed} object(s)");
     }
-    Ok(PushReport { pushed, too_large })
+    Ok(PushReport {
+        pushed,
+        too_large,
+        unpushable,
+    })
 }
 
 /// One [`sync_push`] in progress.
@@ -962,8 +1309,12 @@ fn run_push(
 /// are queued by id — see [`Self::take_next`].
 struct Push<'a> {
     storage: &'a Storage,
+    /// Which dirty items' authors may write them.
+    authority: Authority<'a>,
     /// Meta key of the tenant's remembered refusals.
     refused_key: String,
+    /// Meta key of the tenant's remembered not-permitted refusals.
+    forbidden_key: String,
     /// Cursor key of the tenant's pushed account-state version.
     acct_key: String,
     /// Cursor key of the tenant's pushed audit seq.
@@ -976,6 +1327,9 @@ struct Push<'a> {
     after_items: VecDeque<(SyncObject, Sent)>,
     /// Refused items: remembered ones first, then this push's.
     too_large: Vec<TooLarge>,
+    /// Items left out as not permitted: remembered and locally found ones
+    /// first, then the ones the server refuses in this push.
+    unpushable: Vec<Unpushable>,
     /// Queued account states the server has not accepted yet.
     acct_left: usize,
     /// The highest queued account-state version, until the cursor moved to it.
@@ -1019,7 +1373,11 @@ impl Push<'_> {
         // The dirty items are listed by id and version only: a refused item is
         // as large as items get, and this runs on every background sync. The
         // ones to send are loaded when their request is built.
+        // The same goes for an item the server refused as not permitted, and
+        // one whose author may not write it is not sent at all (see
+        // `sync_push_as`): every member would reject it.
         let remembered = load_refused(storage, &self.refused_key)?;
+        let forbidden = load_forbidden(storage, &self.forbidden_key)?;
         for head in storage.list_dirty_bound_item_versions(target_tenant)? {
             let known = remembered.iter().find(|r| {
                 r.vault_id == head.vault_id
@@ -1028,6 +1386,11 @@ impl Push<'_> {
             });
             if let Some(r) = known {
                 self.too_large.push(r.clone());
+            } else if let Some(f) = forbidden.iter().find(|f| f.is(&head)) {
+                self.unpushable.push(f.clone());
+            } else if !self.authority.may_write(&head)? {
+                self.unpushable
+                    .push(Unpushable::new(&head, UnpushableReason::NotAuthorized));
             } else {
                 self.items.push_back((head.vault_id, head.item_id));
             }
@@ -1036,7 +1399,23 @@ impl Push<'_> {
         if self.too_large != remembered {
             save_refused(storage, &self.refused_key, &self.too_large)?;
         }
+        if self.server_refused().ne(forbidden.iter()) {
+            self.save_forbidden()?;
+        }
         Ok(())
+    }
+
+    /// This push's items the server refused as not permitted: remembered ones
+    /// first, then the ones refused now.
+    fn server_refused(&self) -> impl Iterator<Item = &Unpushable> {
+        self.unpushable
+            .iter()
+            .filter(|u| u.reason == UnpushableReason::ServerRefused)
+    }
+
+    fn save_forbidden(&self) -> Result<(), SyncError> {
+        let refused: Vec<Unpushable> = self.server_refused().cloned().collect();
+        save_forbidden(self.storage, &self.forbidden_key, &refused)
     }
 
     /// Collects what the tenant's server is missing of the objects that belong
@@ -1159,13 +1538,16 @@ impl Push<'_> {
                 }
                 // The server's limits are its own (and an older server's are
                 // lower than these requests assume): a refused part is halved
-                // until the object that does not fit is alone.
-                Err(SyncError::PayloadTooLarge) if part.len() > 1 => {
+                // until the object that does not fit is alone. A request
+                // refused as not permitted is refused for one of its objects
+                // the server does not name: it is singled out the same way.
+                Err(SyncError::PayloadTooLarge | SyncError::Forbidden) if part.len() > 1 => {
                     let mid = part.start.saturating_add(part.len() / 2);
                     pending.push(mid..part.end);
                     pending.push(part.start..mid);
                 }
                 Err(SyncError::PayloadTooLarge) => self.refuse(request, part.start)?,
+                Err(SyncError::Forbidden) => self.forbid(request, part.start)?,
                 Err(e) => return Err(e),
             }
         }
@@ -1190,6 +1572,26 @@ impl Push<'_> {
             bytes: *bytes as u64,
         });
         save_refused(self.storage, &self.refused_key, &self.too_large)
+    }
+
+    /// The server does not permit the object at `index` of `request`, even
+    /// alone. As in [`Self::refuse`]: an item is left out, remembered and
+    /// reported; any other object stops the push. (Only the server's own
+    /// `forbidden` refusal reaches here as [`SyncError::Forbidden`]; the server
+    /// refuses a push as a whole for a reason of its own with another status.)
+    fn forbid(&mut self, request: &Outgoing, index: usize) -> Result<(), SyncError> {
+        let Some(SyncObject::Item(it)) = request.objects.get(index) else {
+            return Err(SyncError::Forbidden);
+        };
+        self.unpushable.push(Unpushable {
+            vault_id: it.vault_id.clone(),
+            item_id: it.item_id.clone(),
+            item_type: it.item_type,
+            version: it.version,
+            author_pubkey: it.author_pubkey.clone(),
+            reason: UnpushableReason::ServerRefused,
+        });
+        self.save_forbidden()
     }
 
     /// The transport accepted `part` of `request`: clears its dirty flags and
@@ -1237,9 +1639,17 @@ impl Push<'_> {
 }
 
 /// Makes the next [`sync_push`] to `tenant` send again the items its server
-/// refused as too large — for when the server's limit was raised.
+/// refused — as too large, for when the server's limit was raised, or as not
+/// permitted, for a refusal that was not about the item after all (a
+/// server-side state since cleared). Raising the account's role does not get
+/// an edit through: the server checks the author's role at the epoch the edit
+/// was written at, so a Viewer's edit is refused again however often it is
+/// sent; it is edited again (at the new role) or discarded
+/// ([`discard_unpushable`]). Items whose author may not write them by this
+/// device's own check are not sent either way.
 pub fn forget_push_refusals(storage: &Storage, tenant: &[u8]) -> Result<(), SyncError> {
-    save_refused(storage, &push_refused_key(tenant), &[])
+    save_refused(storage, &push_refused_key(tenant), &[])?;
+    save_forbidden(storage, &push_forbidden_key(tenant), &[])
 }
 
 /// What settles an object once the transport accepted it.
@@ -1327,6 +1737,47 @@ fn save_refused(storage: &Storage, key: &str, refused: &[TooLarge]) -> Result<()
         out.extend_from_slice(&r.item_type.to_be_bytes());
         out.extend_from_slice(&r.version.to_be_bytes());
         out.extend_from_slice(&r.bytes.to_be_bytes());
+    }
+    storage.set_meta(key, &out)?;
+    Ok(())
+}
+
+/// The items remembered as not permitted by a tenant's server; like
+/// [`load_refused`], a value that does not parse counts as empty.
+fn load_forbidden(storage: &Storage, key: &str) -> Result<Vec<Unpushable>, SyncError> {
+    let Some(bytes) = storage.get_meta(key)? else {
+        return Ok(Vec::new());
+    };
+    let mut r = Reader::new(&bytes);
+    let mut out = Vec::new();
+    while !r.is_empty() {
+        match read_forbidden(&mut r) {
+            Ok(e) => out.push(e),
+            Err(_) => return Ok(Vec::new()),
+        }
+    }
+    Ok(out)
+}
+
+fn read_forbidden(r: &mut Reader<'_>) -> Result<Unpushable, SyncError> {
+    Ok(Unpushable {
+        vault_id: r.bytes()?,
+        item_id: r.bytes()?,
+        item_type: r.u32()?,
+        version: r.u64()?,
+        author_pubkey: r.bytes()?,
+        reason: UnpushableReason::ServerRefused,
+    })
+}
+
+fn save_forbidden(storage: &Storage, key: &str, refused: &[Unpushable]) -> Result<(), SyncError> {
+    let mut out = Vec::new();
+    for r in refused {
+        put_bytes(&mut out, &r.vault_id)?;
+        put_bytes(&mut out, &r.item_id)?;
+        out.extend_from_slice(&r.item_type.to_be_bytes());
+        out.extend_from_slice(&r.version.to_be_bytes());
+        put_bytes(&mut out, &r.author_pubkey)?;
     }
     storage.set_meta(key, &out)?;
     Ok(())

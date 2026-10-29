@@ -95,7 +95,7 @@ pub struct VaultRecord {
     pub sync_tenant: Vec<u8>,
 }
 
-/// An item's identity and version without its content — what
+/// An item's identity, version and authorship without its content — what
 /// [`crate::Storage::list_dirty_bound_item_versions`] returns, for a caller that
 /// decides per item whether the (possibly large) record is worth loading.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,6 +106,12 @@ pub struct ItemVersion {
     pub item_id: Vec<u8>,
     /// The item's current version.
     pub version: u64,
+    /// The item's type (open metadata).
+    pub item_type: u32,
+    /// Public key of the current version's author.
+    pub author_pubkey: Vec<u8>,
+    /// Vault key epoch the current version was written at.
+    pub key_epoch: u64,
 }
 
 /// Item record. The unit of sync (spec 9.1). Content (`content_blob`) is ciphertext

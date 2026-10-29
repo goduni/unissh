@@ -276,6 +276,24 @@ starts with `0.`:
     such a vault alone: its expired recordings stay listed.
   - Moving a local vault to a server leaves references to it in a vault you
     can only view as they were.
+- A device that had already made such an edit, before the fix above, syncs
+  again (#166). An edit the server will not take no longer fails every sync.
+  It stays on that device, everything else is sent, and the sync status (in
+  the app and in `unissh sync`) names it.
+  - "Discard unsent changes", next to "Pull from server" in the app, and
+    `unissh vaults discard-unpushable <vault>` replace those edits with the
+    server's copy, after asking. An edit this account may not make is
+    replaced without being sent. One the server refused is sent once more
+    and replaced only if the server refuses it again. An item the server does
+    not have is removed, and a copy that does not verify replaces nothing.
+  - Other members' such edits are kept and no longer sent. Other changes not
+    sent yet are kept.
+  - Only the server's own 403 leaves an item out; any other 403 fails the
+    sync. `unissh sync --retry-refused` sends refused changes again.
+  - Bindings: new `FfiSyncReport::unpushable`,
+    `Core::discard_unpushable_changes` (`FfiDiscardReport`),
+    `Core::unpushable_changes`, and `FfiError::UploadForbidden` (a sync
+    transport returns it for the server's own HTTP 403 `forbidden`).
 
 ### Security
 

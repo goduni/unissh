@@ -21,6 +21,7 @@ import type {
   PersonalAuth,
   ResolvedConnect,
   DbConsistencyReport,
+  DiscardReport,
   DeviceInfo,
   ExecEvent,
   GroupTargetPlan,
@@ -1033,6 +1034,11 @@ export const serverTrustSharedVault = (vaultId: string, expectedFingerprint: str
     expectedFingerprint,
     serverId: serverId ?? null,
   });
+/** Send once more the edits in ONE vault (hex id) that no sync could push, drop this
+ *  account's ones the server still refuses and put the server's copy back; other
+ *  members' ones are no longer sent. Other unsent edits stay. Says how many of each. */
+export const serverDiscardUnpushable = (vaultId: string, serverId?: string) =>
+  invoke<DiscardReport>("server_discard_unpushable", { vaultId, serverId: serverId ?? null });
 /** Bind an already-cloud vault (hex id) to a server, then sync it up (Push). */
 export const serverBindAndPushVault = (vaultId: string, serverId?: string) =>
   invoke<SyncReport>("server_bind_and_push_vault", { vaultId, serverId: serverId ?? null });
