@@ -239,7 +239,7 @@ pub fn push_recording(device: &Device) {
     }
 }
 
-/// After a write to a vault, sends it to the server the way the app does,
+/// After a write to the named vaults, sends it to the server the way the app does,
 /// and says where the change stands: `done` ("Deleted", "Saved") is what
 /// happened here.
 ///
@@ -250,7 +250,7 @@ pub fn push_recording(device: &Device) {
 /// believe it went through. The push leaves an item it cannot deliver out and
 /// goes on with the rest (#166), so a refusal comes back two ways: the sync
 /// fails (a refusal of the request), or it succeeds and names, among the
-/// edits it could not send, one of this account's in `vault_id` that was not
+/// edits it could not send, one of this account's in `vault_ids` that was not
 /// left out before the write ([`Device::note_left_out`], taken when the
 /// command started, after its stale sync): as a rule the write just made, so
 /// the failure says an edit in this vault could not be sent. Edits left out before it say
@@ -259,7 +259,7 @@ pub fn push_recording(device: &Device) {
 /// server knows of a role or policy this device does not yet.)
 pub fn push_after_write(
     device: &Device,
-    vault_id: &str,
+    vault_ids: &[&str],
     cloud: bool,
     offline: bool,
     done: &str,
@@ -273,14 +273,14 @@ pub fn push_after_write(
         return Ok(());
     }
     match sync(device) {
-        Ok(report) if left_out_now(&report, vault_id, &device.left_out_before()) => {
+        Ok(report) if left_out_now(&report, vault_ids, &device.left_out_before()) => {
             warn_about(&report);
             // An edit by this account in the vault that was not left out when
             // the command started: the write, as a rule — but an older edit
             // first sent by this sync looks the same, so the message says what
             // is known.
             Err(Failure::msg(format!(
-                "{done} on this machine, but an edit by this account in this vault could not \
+                "{done} on this machine, but an edit by this account in a changed vault could not \
                  be sent: it stays on this machine only (see above)."
             )))
         }
@@ -306,13 +306,13 @@ fn refused_here(done: &str, why: &str) -> Failure {
     ))
 }
 
-/// Whether a sync left out an edit by this account in vault `vault_id` that
+/// Whether a sync left out an edit by this account in one of `vault_ids` that
 /// `before` (what was left out before the write: item id and version) does
 /// not hold — the change just written there, which is not on the server.
-fn left_out_now(report: &FfiSyncReport, vault_id: &str, before: &[LeftOut]) -> bool {
+fn left_out_now(report: &FfiSyncReport, vault_ids: &[&str], before: &[LeftOut]) -> bool {
     report.unpushable.iter().any(|item| {
         item.mine
-            && item.vault_id == vault_id
+            && vault_ids.contains(&item.vault_id.as_str())
             && !before.iter().any(|b| {
                 b.vault_id == item.vault_id
                     && b.item_id == item.item_id
@@ -519,20 +519,24 @@ mod tests {
         let before = [LeftOut::from(&item("aa", 2, true))];
 
         assert!(
-            left_out_now(&report(vec![item("aa", 3, true)]), "aa", &before),
+            left_out_now(&report(vec![item("aa", 3, true)]), &["aa"], &before),
             "the write made version 3, and it was left out"
         );
         assert!(
-            !left_out_now(&report(vec![item("aa", 2, true)]), "aa", &before),
+            !left_out_now(&report(vec![item("aa", 2, true)]), &["aa"], &before),
             "left out before the write"
         );
         assert!(
-            !left_out_now(&report(vec![item("aa", 3, false)]), "aa", &before),
+            !left_out_now(&report(vec![item("aa", 3, false)]), &["aa"], &before),
             "a teammate's"
         );
         assert!(
-            !left_out_now(&report(vec![item("bb", 3, true)]), "aa", &before),
+            !left_out_now(&report(vec![item("bb", 3, true)]), &["aa"], &before),
             "another vault's"
+        );
+        assert!(
+            left_out_now(&report(vec![item("bb", 3, true)]), &["aa", "bb"], &before),
+            "the host's identity binding was written in the second vault"
         );
     }
 
