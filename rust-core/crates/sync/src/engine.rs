@@ -736,7 +736,7 @@ fn process_manifest(
             Ok(_) => Ok(true),
             // intentional rollback: we return Err so the transaction rolls back,
             // but this is NOT a fatal sync error — we turn it into a reject outside.
-            Err(_) => Err(SyncError::Vault(unissh_vault::VaultError::AuthorityInvalid)),
+            Err(_) => Err(SyncError::Vault(VaultError::AuthorityInvalid)),
         }
     });
     match res {
@@ -753,7 +753,7 @@ fn process_manifest(
             }
             Ok(())
         }
-        Err(SyncError::Vault(unissh_vault::VaultError::AuthorityInvalid)) => {
+        Err(SyncError::Vault(VaultError::AuthorityInvalid)) => {
             reject(
                 report,
                 seq,
@@ -1116,11 +1116,7 @@ pub fn discard_unpushable(
     vault_id: &[u8],
     server_copy: Vec<(u64, SyncObject)>,
 ) -> Result<Discarded, SyncError> {
-    save_forbidden(
-        storage,
-        &push_forbidden_key(&ctx.tenant),
-        std::iter::empty(),
-    )?;
+    save_forbidden(storage, &push_forbidden_key(&ctx.tenant), &[])?;
     let report = sync_push_vault_data_as(transport, storage, ctx)?;
     let (mine, theirs): (Vec<Unpushable>, Vec<Unpushable>) = report
         .unpushable
@@ -1354,7 +1350,8 @@ impl Push<'_> {
     }
 
     fn save_forbidden(&self) -> Result<(), SyncError> {
-        save_forbidden(self.storage, &self.forbidden_key, self.server_refused())
+        let refused: Vec<Unpushable> = self.server_refused().cloned().collect();
+        save_forbidden(self.storage, &self.forbidden_key, &refused)
     }
 
     /// Collects what the tenant's server is missing of the objects that belong
@@ -1598,7 +1595,7 @@ impl Push<'_> {
 /// device's own check are not sent either way.
 pub fn forget_push_refusals(storage: &Storage, tenant: &[u8]) -> Result<(), SyncError> {
     save_refused(storage, &push_refused_key(tenant), &[])?;
-    save_forbidden(storage, &push_forbidden_key(tenant), std::iter::empty())
+    save_forbidden(storage, &push_forbidden_key(tenant), &[])
 }
 
 /// What settles an object once the transport accepted it.
@@ -1719,11 +1716,7 @@ fn read_forbidden(r: &mut Reader<'_>) -> Result<Unpushable, SyncError> {
     })
 }
 
-fn save_forbidden(
-    storage: &Storage,
-    key: &str,
-    refused: impl IntoIterator<Item = &Unpushable>,
-) -> Result<(), SyncError> {
+fn save_forbidden(storage: &Storage, key: &str, refused: &[Unpushable]) -> Result<(), SyncError> {
     let mut out = Vec::new();
     for r in refused {
         put_bytes(&mut out, &r.vault_id)?;
