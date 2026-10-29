@@ -108,7 +108,7 @@ pub(crate) fn auth_uses(
 
 /// The usage of `item_id` among `hosts` and `identities` (one vault's own).
 /// `same_vault` says whether a vault id named by a reference is this vault.
-fn usage_in(
+pub(crate) fn usage_in(
     item_id: &str,
     same_vault: impl Fn(&str) -> bool,
     hosts: &[ConnectionProfile],

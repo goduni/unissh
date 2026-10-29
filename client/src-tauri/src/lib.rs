@@ -364,7 +364,6 @@ pub fn run() {
             // items / keys / certs
             commands::list_items,
             commands::create_ssh_key,
-            commands::new_item_id,
             commands::create_imported_ssh_key,
             commands::import_ssh_certificate,
             commands::get_public_key,
@@ -401,6 +400,7 @@ pub fn run() {
             commands::import_known_hosts,
             // connection profiles
             commands::save_connection,
+            commands::save_host,
             commands::list_connections,
             commands::get_connection,
             commands::delete_connection,

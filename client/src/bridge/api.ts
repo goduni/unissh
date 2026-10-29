@@ -12,8 +12,11 @@ import type {
   PresenceCheck,
   BroadcastEvent,
   ConnectionProfile,
+  HostGroupChoice,
+  HostSaved,
   Identity,
   IdentityBinding,
+  IdentityLink,
   BindingResolution,
   PersonalAuth,
   ResolvedConnect,
@@ -244,12 +247,6 @@ export const listItemVersions = (vaultId: string, itemId: string) =>
   invoke<number[]>("list_item_versions", { vaultId, itemId });
 
 // ── passwords ──────────────────────────────────────────────────
-/** A fresh item id for a new item labelled `label`, minted by the core — for
- *  `savePassword`, which still takes the caller's id (a new host's password).
- *  The id is minted in this call and written in the next, so it is not
- *  reserved in between; interim, until saving a host creates its password. */
-export const newItemId = (vaultId: string, label: string) =>
-  invoke<string>("new_item_id", { vaultId, label });
 export const savePassword = (vaultId: string, itemId: string, password: string) =>
   afterMut(vaultId, invoke<void>("save_password", { vaultId, itemId, password }));
 export const getPassword = (vaultId: string, itemId: string) =>
@@ -279,6 +276,24 @@ export const importKnownHosts = (text: string) =>
  *  Resolves to the host's id. */
 export const saveConnection = (vaultId: string, profile: ConnectionProfile) =>
   afterMut(vaultId, invoke<string>("save_connection", { vaultId, profile }));
+/** Saves a host from the host editor through the core's one host-save path,
+ *  shared with `unissh hosts add|edit`: the core checks the host's rules
+ *  (an `invalidHost` error, nothing saved), stores a typed password with it,
+ *  places it in one group and links or re-pins a personal identity. What it
+ *  could not finish after the host was stored is in `unfinished`. */
+export const saveHost = (
+  vaultId: string,
+  profile: ConnectionProfile,
+  newPassword: string | null,
+  group: HostGroupChoice,
+  identity: IdentityLink | null,
+) =>
+  invoke<HostSaved>("save_host", { vaultId, profile, newPassword, group, identity }).then((saved) => {
+    vaultMutated(vaultId);
+    // The identity's binding lives in its own vault, which changed too.
+    if (saved.bindingVaultId && saved.bindingVaultId !== vaultId) vaultMutated(saved.bindingVaultId);
+    return saved;
+  });
 export const listConnections = (vaultId: string) =>
   invoke<ConnectionProfile[]>("list_connections", { vaultId });
 export const getConnection = (vaultId: string, profileId: string) =>

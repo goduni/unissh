@@ -11,8 +11,9 @@ use std::sync::{Arc, Mutex};
 
 use unissh_crypto::KdfParams;
 use unissh_ffi::{
-    grouped_fingerprint, Core, FfiError, FfiMemberRole, FfiSyncMode, FfiSyncTransport,
-    FfiTrustOutcome, FfiVaultTrust, SharedVaultInfo, SyncDeltaItem,
+    grouped_fingerprint, ConnectionProfile, Core, FfiError, FfiMemberRole, FfiSyncMode,
+    FfiSyncTransport, FfiTrustOutcome, FfiVaultTrust, HostGroup, HostSave, ProfileAuth,
+    SharedVaultInfo, SyncDeltaItem,
 };
 use unissh_keychain::UnlockedKeyset;
 use unissh_storage::{MemberRole, MembershipManifest};
@@ -471,4 +472,63 @@ fn the_own_fingerprint_reads_while_locked() {
     core.lock();
 
     assert_eq!(core.own_fingerprint().unwrap(), unlocked);
+}
+
+/// With a teammate's vault on this device, a personal host with no identity
+/// linked yet still saves on edit: looking for its binding skips the
+/// teammate's vault (its membership does not verify against this account, so
+/// it is not a private vault of ours) instead of failing the save.
+#[test]
+fn a_personal_host_saves_with_a_teammates_vault_present() {
+    let (dir_a, dir_b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (owner, member) = (account(dir_a.path()), account(dir_b.path()));
+    let team = share_with(&owner, &member);
+    let fingerprint = grouped_fingerprint(owner.own_fingerprint().unwrap());
+    assert_eq!(
+        trust(&member, &team, &fingerprint),
+        FfiTrustOutcome::Trusted
+    );
+    let objects = team.server.vault_objects(&team.vault_id);
+    member
+        .pull_vault_paged(TENANT, |_| Ok((objects.clone(), None)))
+        .unwrap();
+    assert!(
+        member
+            .list_vaults()
+            .unwrap()
+            .iter()
+            .any(|v| v.vault_id == team.vault_id),
+        "the teammate's vault did not arrive"
+    );
+    member.create_vault("v".to_owned(), "V".to_owned()).unwrap();
+    let save = |profile: ConnectionProfile| HostSave {
+        profile,
+        new_password: None,
+        group: HostGroup::Unchanged,
+        identity: None,
+        move_identity_pin: false,
+    };
+    let profile = ConnectionProfile {
+        profile_id: String::new(),
+        uid: String::new(),
+        label: "db".to_owned(),
+        host: "db.example".to_owned(),
+        port: 22,
+        user: String::new(),
+        auth: ProfileAuth::Personal,
+        username_template: None,
+        jumps: vec![],
+        proxy: None,
+        tags: vec![],
+        startup_snippet_ids: vec![],
+        record_sessions: false,
+        agent_forward: false,
+        color: None,
+        icon: None,
+    };
+    let id = member.save_host("v", save(profile)).unwrap().profile_id;
+    let mut edit = member.get_connection("v".to_owned(), id).unwrap();
+    edit.port = 2222;
+    let saved = member.save_host("v", save(edit)).unwrap();
+    assert!(!saved.identity_linked, "linked without an identity");
 }
