@@ -21,7 +21,11 @@ describe("shared with you", () => {
   it("shows a vault whose owner changed as a warning with no verify action", () => {
     const markup = renderToStaticMarkup(
       <ThemeProvider>
-        <SharedWithYou vaults={[vault]} serverId={null} onChanged={() => {}} />
+        <SharedWithYou
+          load={{ status: "ready", vaults: [vault], malformed: 0 }}
+          serverId={null}
+          onChanged={() => {}}
+        />
       </ThemeProvider>,
     );
     expect(markup).toContain('role="alert"');

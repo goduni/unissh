@@ -1,17 +1,18 @@
 // "On this server" — the per-vault catalog + Pull/Push actions for the vault picker
 // (Phase 4). Self-contained so it can be mounted inside Settings (and later the vault
 // switcher) without entangling the rest of the screen.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import * as api from "@/bridge/api";
 import { tooLargeSummary } from "@/bridge/syncReport";
-import { apiErrorMessage, type PendingSharedVault, type ServerVault } from "@/bridge/types";
+import { apiErrorMessage, type ServerVault } from "@/bridge/types";
 import { useTranslation } from "@/i18n";
 import { Btn, Icon, Spinner, Tag } from "@/components/primitives";
 import { toast } from "@/store/toast";
 import { usePalette } from "@/theme/ThemeProvider";
 import { rem, TEXT } from "@/theme/tokens";
-import { SharedWithYou } from "./SharedVaultTrust";
+import { catalogRows, loadServerVaults } from "@/support/serverVaults";
+import { SharedWithYou, type SharedLoad } from "./SharedVaultTrust";
 
 /** A vault's status decides the single action offered on its row. */
 type Kind = "inSync" | "pull" | "push";
@@ -36,46 +37,59 @@ export function ServerVaultsSection({
 }) {
   const p = usePalette();
   const { t } = useTranslation();
-  const [rows, setRows] = useState<ServerVault[] | null>(null);
+  const [all, setAll] = useState<ServerVault[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
-  // Vaults a teammate shared that wait for this device to trust their owner. They
-  // are listed on their own, never with a plain "Pull": a pull before the owner
-  // is confirmed is rejected by verify-before-apply anyway.
-  const [shared, setShared] = useState<PendingSharedVault[]>([]);
+  // Vaults a teammate shared that wait for this device to trust their owner:
+  // their own group, with its own loading state and error.
+  const [shared, setShared] = useState<SharedLoad>({ status: "idle" });
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  const generation = useRef(0);
 
   const load = useCallback(async () => {
     if (!hasSession) return;
+    const gen = ++generation.current;
+    const current = () => gen === generation.current;
     setLoading(true);
-    // Each waiting vault is inspected (its membership read from the server), so
-    // this runs next to the catalog, and its failure does not hide the catalog.
-    const pending = api.serverPendingSharedVaults(serverId ?? undefined).then(
-      (r) => r.vaults,
-      (e: unknown) => {
-        toast(t("sharedVaults.listFailed", { error: apiErrorMessage(e) }), "warn");
-        return [] as PendingSharedVault[];
+    setShared((s) => (s.status === "ready" ? s : { status: "loading" }));
+    await loadServerVaults(
+      {
+        listVaults: () => api.serverListVaults(serverId ?? undefined),
+        pendingShared: () => api.serverPendingSharedVaults(serverId ?? undefined),
+      },
+      {
+        rows: (list) => {
+          if (!current()) return;
+          setAll(list);
+          setLoading(false);
+        },
+        rowsFailed: (e) => {
+          if (!current()) return;
+          setAll([]);
+          setLoading(false);
+          toast(t("serverVaults.listFailed", { error: apiErrorMessage(e) }), "err");
+        },
+        shared: (r) => {
+          if (current()) setShared({ status: "ready", vaults: r.vaults, malformed: r.malformed });
+        },
+        // Shown in its group, not as a second toast: offline, the catalog's
+        // toast already says why.
+        sharedFailed: (e) => {
+          if (current()) setShared({ status: "failed", error: apiErrorMessage(e) });
+        },
       },
     );
-    try {
-      const [all, waiting] = await Promise.all([api.serverListVaults(serverId ?? undefined), pending]);
-      setShared(waiting);
-      const waitingIds = new Set(waiting.map((w) => w.vaultId.toLowerCase()));
-      const list = all.filter((v) => !waitingIds.has(v.vaultId.toLowerCase()));
-      // Stable order: not-local first (things you can pull), then by id.
-      list.sort((a, b) => Number(a.isLocal) - Number(b.isLocal) || a.vaultId.localeCompare(b.vaultId));
-      setRows(list);
-    } catch (e) {
-      setRows([]);
-      setShared(await pending);
-      toast(t("serverVaults.listFailed", { error: apiErrorMessage(e) }), "err");
-    } finally {
-      setLoading(false);
-    }
   }, [serverId, hasSession, t]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  const waiting = shared.status === "ready" ? shared.vaults : [];
+  const rows = all === null ? null : catalogRows(all, waiting);
+  // Until the shared check is in, a not-local vault may be one that waits for
+  // trust: its Pull is held back rather than offered and then taken away.
+  const checkingShared = shared.status === "loading";
 
   const pull = async (v: ServerVault) => {
     setBusy(v.vaultId);
@@ -119,13 +133,28 @@ export function ServerVaultsSection({
           marginBottom: rem(8),
         }}
       >
-        <div style={{ fontSize: TEXT.base, fontWeight: 600, color: p.txt }}>{t("serverVaults.title")}</div>
+        <h3
+          ref={titleRef}
+          tabIndex={-1}
+          style={{ margin: 0, fontSize: TEXT.base, fontWeight: 600, color: p.txt }}
+        >
+          {t("serverVaults.title")}
+        </h3>
         <Btn variant="ghost" icon="refresh" onClick={load} disabled={loading}>
           {t("common.refresh")}
         </Btn>
       </div>
 
-      <SharedWithYou vaults={shared} serverId={serverId} onChanged={() => void load()} />
+      <SharedWithYou
+        load={shared}
+        serverId={serverId}
+        onChanged={(focus) => {
+          void load();
+          // The dialog's trigger row is about to go: focus the list the vault
+          // now shows in.
+          if (focus) requestAnimationFrame(() => titleRef.current?.focus());
+        }}
+      />
 
       {loading && rows === null ? (
         <div style={{ display: "flex", alignItems: "center", gap: rem(8), color: p.txt3, fontSize: TEXT.base }}>
@@ -178,7 +207,7 @@ export function ServerVaultsSection({
                     <Icon name="check" /> {t("serverVaults.inSync")}
                   </span>
                 ) : kind === "pull" ? (
-                  <Btn variant="ghost" icon="download" onClick={() => pull(v)}>
+                  <Btn variant="ghost" icon="download" onClick={() => pull(v)} disabled={checkingShared}>
                     {t("serverVaults.pull")}
                   </Btn>
                 ) : (

@@ -9,7 +9,7 @@ const VAULT = "ab".repeat(16);
 function deps(outcome: TrustOutcome, here = true) {
   return {
     trust: vi.fn<TrustDeps["trust"]>(async () => outcome),
-    pull: vi.fn<TrustDeps["pull"]>(async () => ({ applied: 3, rejected: 0 }) as SyncReport),
+    pull: vi.fn<TrustDeps["pull"]>(async () => ({ applied: 3, rejected: 0, tooLarge: [] }) as unknown as SyncReport),
     isHere: vi.fn<TrustDeps["isHere"]>(async () => here),
   };
 }
@@ -38,7 +38,7 @@ describe("trusting a shared vault's owner", () => {
     const result = await verifyAndFetch(VAULT, GROUPED, d);
     expect(d.trust).toHaveBeenCalledWith(VAULT, GROUPED);
     expect(d.pull).toHaveBeenCalledWith(VAULT);
-    expect(result).toEqual({ kind: "fetched", applied: 3, rejected: 0 });
+    expect(result).toEqual({ kind: "fetched", applied: 3, rejected: 0, tooLarge: [], already: false });
   });
 
   it("on a mismatch pulls nothing", async () => {
@@ -54,6 +54,21 @@ describe("trusting a shared vault's owner", () => {
   });
 
   it("says when the owner is pinned but the pull did not bring the vault", async () => {
-    expect(await verifyAndFetch(VAULT, FP, deps("alreadyTrusted", false))).toEqual({ kind: "notFetched" });
+    expect(await verifyAndFetch(VAULT, FP, deps("alreadyTrusted", false))).toEqual({ kind: "notFetched", already: true });
+  });
+
+  // The owner is pinned, so this is not a verification failure: the dialog
+  // closes and the vault waits under "Pull".
+  it("reports a pull that fails after a successful trust as a failed fetch, not a refusal", async () => {
+    const d = deps("trusted");
+    d.pull.mockRejectedValueOnce(new Error("connection reset"));
+    const result = await verifyAndFetch(VAULT, FP, d);
+    expect(result).toMatchObject({ kind: "fetchFailed", already: false });
+    expect(result.kind === "fetchFailed" && result.message).toContain("connection reset");
+  });
+
+  it("does not let an invisible character pass as a separator", () => {
+    expect(normalizeFingerprint(`\uFEFF${FP}`)).toBeNull();
+    expect(normalizeFingerprint(`${GROUPED.replace(/ /g, "\t")}\r\n`)).toBe(FP);
   });
 });

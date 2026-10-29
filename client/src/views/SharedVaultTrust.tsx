@@ -12,7 +12,8 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 
 import * as api from "@/bridge/api";
 import { apiErrorMessage, type MemberRole, type PendingSharedVault } from "@/bridge/types";
-import { i18n, useTranslation } from "@/i18n";
+import { tooLargeSummary } from "@/bridge/syncReport";
+import { i18n, tDyn, useTranslation } from "@/i18n";
 import { Btn, Checkbox, Field, Icon, Input, Spinner, Tag } from "@/components/primitives";
 import { Modal } from "@/components/Modal";
 import { useApp } from "@/store/app";
@@ -22,7 +23,9 @@ import {
   FINGERPRINT_DIGITS,
   fetchShared,
   typedDigits,
+  unverifiableReason,
   verifyAndFetch,
+  type FetchResult,
   type TrustDeps,
   type TrustResult,
 } from "@/support/sharedVaultTrust";
@@ -47,7 +50,22 @@ function claimedOwner(v: PendingSharedVault): string | null {
   return v.claimedName ?? v.claimedHandle ?? null;
 }
 
-/** The pull + "is it here now" half, shared by the dialog and "Fetch now". */
+/** "Owner: Alice (as the server claims)" — one line, the claim marker part of
+ *  it. The name is the server's text, isolated so it cannot reorder what is
+ *  around it. */
+function ClaimedOwner({ vault }: { vault: PendingSharedVault }) {
+  const { t } = useTranslation();
+  const owner = claimedOwner(vault);
+  if (!owner) return <>{t("sharedVaults.noClaimedOwner")}</>;
+  return (
+    <>
+      {t("sharedVaults.ownerLabel")} <bdi style={{ unicodeBidi: "isolate" }}>{owner}</bdi>{" "}
+      {t("sharedVaults.claimSuffix")}
+    </>
+  );
+}
+
+/** The pull + "is it here now" half, shared by the dialog and "Pull". */
 function trustDeps(serverId: string | null | undefined): TrustDeps {
   return {
     trust: (vaultId, expected) => api.serverTrustSharedVault(vaultId, expected, serverId ?? undefined),
@@ -59,32 +77,97 @@ function trustDeps(serverId: string | null | undefined): TrustDeps {
   };
 }
 
-/** Says what a successful trust or fetch did; a mismatch/owner change is shown
+/** Says what a successful trust or pull did; a mismatch/owner change is shown
  *  in place (the dialog or the row), not as a toast. */
-function toastResult(r: TrustResult) {
-  if (r.kind === "fetched") {
-    toast(i18n.t("sharedVaults.fetched", { count: r.applied }), r.rejected > 0 ? "warn" : "ok");
+function toastResult(r: TrustResult | FetchResult) {
+  if (r.kind === "mismatch" || r.kind === "ownerChanged") return;
+  const lead =
+    "already" in r ? i18n.t(r.already ? "sharedVaults.alreadyTrusted" : "sharedVaults.confirmed") : "";
+  const say = (rest: string, tone: "ok" | "warn" | "err") => toast(lead ? `${lead} ${rest}` : rest, tone);
+  if (r.kind === "fetchFailed") {
+    say(i18n.t("sharedVaults.fetchFailed", { error: r.message }), "err");
   } else if (r.kind === "notFetched") {
-    toast(i18n.t("sharedVaults.notFetched"), "warn");
+    say(i18n.t("sharedVaults.notFetched"), "warn");
+  } else {
+    if (r.rejected > 0) say(i18n.t("sharedVaults.fetchedRejected", { count: r.rejected }), "warn");
+    else say(i18n.t("sharedVaults.fetched"), "ok");
+    // Items the server refused as too large are named, as after any other sync.
+    const notUploaded = tooLargeSummary(r.tooLarge);
+    if (notUploaded) toast(i18n.t("serverCloud.syncTooLarge", { items: notUploaded }), "warn");
   }
 }
 
-/** "Shared with you — not verified yet": one row per waiting vault. */
+/** The shared-vault check, as "On this server" loads it next to the catalog. */
+export type SharedLoad =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; vaults: PendingSharedVault[]; malformed: number }
+  | { status: "failed"; error: string };
+
+/** "Shared with you": one row per vault a teammate shared that is not on this
+ *  device yet. Its loading and its failure are its own, never the catalog's. */
 export function SharedWithYou({
-  vaults,
+  load,
   serverId,
   onChanged,
 }: {
-  vaults: PendingSharedVault[];
+  load: SharedLoad;
   serverId: string | null | undefined;
-  onChanged: () => void;
+  /** Something may have changed: reload. `focus`: the dialog that changed it
+   *  closed on success, so focus moves to the list. */
+  onChanged: (focus?: boolean) => void;
 }) {
   const p = usePalette();
   const { t } = useTranslation();
   const [verifying, setVerifying] = useState<PendingSharedVault | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
-  if (vaults.length === 0) return null;
+  if (load.status === "idle") return null;
+  if (load.status === "loading") {
+    return (
+      <div
+        role="status"
+        style={{ display: "flex", alignItems: "center", gap: rem(8), color: p.txt3, fontSize: TEXT.small, marginBottom: rem(10) }}
+      >
+        <Spinner size={14} /> {t("sharedVaults.checking")}
+      </div>
+    );
+  }
+  if (load.status === "failed") {
+    return (
+      <div
+        role="status"
+        style={{
+          display: "flex",
+          gap: rem(6),
+          alignItems: "flex-start",
+          color: p.amber,
+          fontSize: TEXT.small,
+          lineHeight: 1.5,
+          marginBottom: rem(10),
+          overflowWrap: "anywhere",
+        }}
+      >
+        <Icon name="alert" size={14} color={p.amber} />
+        <span>{t("sharedVaults.listFailed", { error: load.error })}</span>
+      </div>
+    );
+  }
+
+  const { vaults, malformed } = load;
+  if (vaults.length === 0 && malformed === 0) return null;
+
+  const malformedLine = malformed > 0 && (
+    <div style={{ fontSize: TEXT.small, color: p.txt3, lineHeight: 1.5, marginTop: rem(6) }}>
+      {t("sharedVaults.malformed", { count: malformed })}
+    </div>
+  );
+  if (vaults.length === 0) return <div style={{ marginBottom: rem(10) }}>{malformedLine}</div>;
+
+  // The heading says what the rows are: all confirmed and only waiting to be
+  // pulled is no warning; an owner change is the loudest.
+  const allReady = vaults.every((v) => v.state === "trustedNotFetched");
+  const anyChanged = vaults.some((v) => v.state === "ownerChanged");
 
   const fetchNow = async (v: PendingSharedVault) => {
     setBusy(v.vaultId);
@@ -100,27 +183,32 @@ export function SharedWithYou({
 
   return (
     <section aria-labelledby="shared-with-you-title" style={{ marginBottom: rem(14) }}>
-      <div
+      <h4
         id="shared-with-you-title"
         style={{
           display: "flex",
           alignItems: "center",
           gap: rem(6),
+          margin: 0,
           fontSize: TEXT.base,
           fontWeight: 600,
           color: p.txt,
         }}
       >
-        <Icon name="alert" size={15} color={p.amber} />
-        {t("sharedVaults.title")}
-      </div>
+        {allReady ? (
+          <Icon name="download" size={15} color={p.txt2} />
+        ) : (
+          <Icon name="alert" size={15} color={anyChanged ? p.red : p.amber} />
+        )}
+        {allReady ? t("sharedVaults.titleReady") : t("sharedVaults.title")}
+      </h4>
       <div style={{ fontSize: TEXT.small, color: p.txt3, lineHeight: 1.5, margin: `${rem(4)} 0 ${rem(8)}` }}>
-        {t("sharedVaults.intro")}
+        {allReady ? t("sharedVaults.introReady") : t("sharedVaults.intro")}
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: rem(6) }}>
         {vaults.map((v) => {
-          const owner = claimedOwner(v);
           const changed = v.state === "ownerChanged";
+          const ready = v.state === "trustedNotFetched";
           return (
             <div
               key={v.vaultId}
@@ -130,7 +218,7 @@ export function SharedWithYou({
                 alignItems: changed ? "stretch" : "center",
                 gap: rem(10),
                 padding: `${rem(8)} ${rem(10)}`,
-                border: `1px solid ${changed ? p.red : rgba(p.amber, 0.55)}`,
+                border: `1px solid ${changed ? p.red : ready ? p.line : rgba(p.amber, 0.55)}`,
                 background: changed ? rgba(p.red, 0.08) : undefined,
                 borderRadius: 8,
               }}
@@ -152,20 +240,24 @@ export function SharedWithYou({
                     }}
                   >
                     <span style={{ overflowWrap: "anywhere" }}>
-                      {owner ? t("sharedVaults.claimedOwner", { who: owner }) : t("sharedVaults.noClaimedOwner")}
+                      <ClaimedOwner vault={v} />
                     </span>
-                    {owner && <Tag>{t("sharedVaults.claimTag")}</Tag>}
-                    {v.role && <Tag>{t(ROLE_KEY[v.role])}</Tag>}
+                    {v.role && <Tag>{t("sharedVaults.yourRole", { role: t(ROLE_KEY[v.role]) })}</Tag>}
                   </div>
                 )}
-                {v.state === "trustedNotFetched" && (
+                {ready && (
                   <div style={{ marginTop: rem(3), fontSize: TEXT.small, color: p.txt3 }}>
                     {t("sharedVaults.trustedNotFetched")}
                   </div>
                 )}
                 {v.state === "unverifiable" && (
-                  <div style={{ marginTop: rem(3), fontSize: TEXT.small, color: p.amber, overflowWrap: "anywhere" }}>
-                    {t("sharedVaults.unverifiable", { error: v.error ?? "" })}
+                  <div
+                    style={{ marginTop: rem(3), fontSize: TEXT.small, color: p.amber, overflowWrap: "anywhere" }}
+                    title={v.error ?? undefined}
+                  >
+                    {t("sharedVaults.unverifiable", {
+                      reason: tDyn(`sharedVaults.reason.${unverifiableReason(v.error)}`),
+                    })}
                   </div>
                 )}
               </div>
@@ -200,7 +292,7 @@ export function SharedWithYou({
                 <Btn variant="soft" icon="fingerprint" onClick={() => setVerifying(v)}>
                   {t("sharedVaults.verify")}
                 </Btn>
-              ) : v.state === "trustedNotFetched" ? (
+              ) : ready ? (
                 <Btn variant="ghost" icon="download" onClick={() => void fetchNow(v)}>
                   {t("sharedVaults.fetchNow")}
                 </Btn>
@@ -209,15 +301,21 @@ export function SharedWithYou({
           );
         })}
       </div>
+      {malformedLine}
       {verifying && (
         <VerifyOwnerDialog
           vault={verifying}
           deps={trustDeps(serverId)}
-          onClose={() => setVerifying(null)}
+          onClose={(changed) => {
+            setVerifying(null);
+            // A refused trust changes nothing here, but the server may have
+            // shown a new owner: the row shows what the core says now.
+            if (changed) onChanged();
+          }}
           onDone={(r) => {
             setVerifying(null);
             toastResult(r);
-            onChanged();
+            onChanged(true);
           }}
         />
       )}
@@ -237,7 +335,9 @@ export function VerifyOwnerDialog({
 }: {
   vault: PendingSharedVault;
   deps: TrustDeps;
-  onClose: () => void;
+  /** `changed`: a trust attempt was refused while the dialog was open. */
+  onClose: (changed: boolean) => void;
+  /** The owner is pinned (the pull may still have failed: see the result). */
   onDone: (r: TrustResult) => void;
 }) {
   const p = usePalette();
@@ -248,6 +348,7 @@ export function VerifyOwnerDialog({
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<"mismatch" | "ownerChanged" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const refused = useRef(false);
   const bodyRef = useRef<HTMLDivElement>(null);
   const firstRender = useRef(true);
 
@@ -264,10 +365,15 @@ export function VerifyOwnerDialog({
   const expected = expectedFingerprint(
     compare ? { kind: "confirmed", displayed, matches } : { kind: "typed", typed },
   );
-  const owner = claimedOwner(vault);
-
   const close = () => {
-    if (!busy) onClose();
+    if (!busy) onClose(refused.current);
+  };
+
+  const switchPath = (toCompare: boolean) => {
+    setCompare(toCompare);
+    setMatches(false);
+    setFailure(null);
+    setError(null);
   };
 
   const submit = async () => {
@@ -278,6 +384,7 @@ export function VerifyOwnerDialog({
     try {
       const r = await verifyAndFetch(vault.vaultId, expected, deps);
       if (r.kind === "mismatch" || r.kind === "ownerChanged") {
+        refused.current = true;
         setFailure(r.kind);
         setBusy(false);
         return;
@@ -317,8 +424,7 @@ export function VerifyOwnerDialog({
       <div ref={bodyRef} style={{ display: "flex", flexDirection: "column", gap: rem(14) }}>
         <div style={{ fontSize: TEXT.base, color: p.txt2, lineHeight: 1.5 }}>
           <p style={{ margin: `0 0 ${rem(6)}` }}>
-            {owner ? t("sharedVaults.claimedOwner", { who: owner }) : t("sharedVaults.noClaimedOwner")}{" "}
-            {owner && <Tag>{t("sharedVaults.claimTag")}</Tag>}
+            <ClaimedOwner vault={vault} />
           </p>
           <p style={{ margin: 0 }}>{t("sharedVaults.how")}</p>
         </div>
@@ -373,7 +479,7 @@ export function VerifyOwnerDialog({
             </Field>
             {displayed && (
               <div>
-                <Btn variant="ghost" size="sm" onClick={() => setCompare(true)} disabled={busy}>
+                <Btn variant="ghost" size="sm" onClick={() => switchPath(true)} disabled={busy}>
                   {t("sharedVaults.noFingerprint")}
                 </Btn>
               </div>
@@ -413,10 +519,7 @@ export function VerifyOwnerDialog({
               <Btn
                 variant="ghost"
                 size="sm"
-                onClick={() => {
-                  setCompare(false);
-                  setMatches(false);
-                }}
+                onClick={() => switchPath(false)}
                 disabled={busy}
               >
                 {t("sharedVaults.backToTyped")}
@@ -458,7 +561,7 @@ export function OwnFingerprintRow() {
       await writeText(fp);
       toast(t("ownFingerprint.copied"), "ok");
     } catch (e) {
-      toast(apiErrorMessage(e), "err");
+      toast(t("ownFingerprint.copyFailed", { error: apiErrorMessage(e) }), "err");
     }
   };
 
@@ -477,7 +580,7 @@ export function OwnFingerprintRow() {
           icon="copy"
           onClick={() => void copy()}
           disabled={!fp}
-          aria-label={t("ownFingerprint.copy")}
+          aria-label={t("ownFingerprint.copyLabel")}
         >
           {t("ownFingerprint.copy")}
         </Btn>

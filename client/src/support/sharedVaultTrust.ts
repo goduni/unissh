@@ -5,23 +5,27 @@
 // the one the owner gave the user, or the one shown and explicitly confirmed —
 // and a vault is fetched only after the core said the owner is pinned.
 
-import type { SyncReport, TrustOutcome } from "@/bridge/types";
+import { apiErrorMessage, type SyncReport, type TooLargeItem, type TrustOutcome } from "@/bridge/types";
 
 /** Hex digits in a fingerprint (`member_fingerprint`: hex SHA-256). */
 export const FINGERPRINT_DIGITS = 64;
 
+/** The separators a typed fingerprint may carry. An explicit class, not `\s`:
+ *  that would also drop invisible characters such as U+FEFF without a word. */
+const SEPARATORS = /[ \t\r\n:-]/g;
+
 /** A fingerprint as typed or pasted, in the core's form (64 lowercase hex
- *  digits): spaces, `:` and `-` dropped, case ignored. `null` when what is left
+ *  digits): spaces, tabs, line breaks, `:` and `-` dropped, case ignored. `null` when what is left
  *  is not exactly 64 hex digits — a prefix is not a fingerprint. Mirrors
  *  `normalize_fingerprint` in the core, which checks again. */
 export function normalizeFingerprint(typed: string): string | null {
-  const digits = typed.replace(/[\s:-]/g, "");
+  const digits = typed.replace(SEPARATORS, "");
   return digits.length === FINGERPRINT_DIGITS && /^[0-9a-fA-F]+$/.test(digits) ? digits.toLowerCase() : null;
 }
 
 /** How many fingerprint characters the user has typed so far (separators not counted). */
 export function typedDigits(typed: string): number {
-  return typed.replace(/[\s:-]/g, "").length;
+  return typed.replace(SEPARATORS, "").length;
 }
 
 /** The two ways the dialog lets the user vouch for the owner. */
@@ -39,12 +43,22 @@ export function expectedFingerprint(mode: VerifyMode): string | null {
   return mode.matches ? normalizeFingerprint(mode.displayed) : null;
 }
 
-/** What verifying (or fetching) came to, for the UI to word. */
+/** What pulling a vault whose owner is pinned came to. */
+export type FetchResult =
+  /** The vault is on this device now. `rejected` objects failed verification;
+   *  `tooLarge` items stayed off the server. */
+  | { kind: "fetched"; applied: number; rejected: number; tooLarge: TooLargeItem[] }
+  /** The pull did not bring the vault (yet). */
+  | { kind: "notFetched" };
+
+/** What verifying came to, for the UI to word. */
 export type TrustResult =
-  /** Owner pinned and the vault is on this device now. */
-  | { kind: "fetched"; applied: number; rejected: number }
-  /** Owner pinned, but the pull did not bring the vault (yet). */
-  | { kind: "notFetched" }
+  /** The owner is pinned (`already`: it was before this call) and the pull
+   *  ran: see the fetch result. */
+  | (FetchResult & { already: boolean })
+  /** The owner is pinned, but the pull failed or was cut short. Not a
+   *  verification failure: the vault waits under "Pull". */
+  | { kind: "fetchFailed"; message: string; already: boolean }
   /** The fingerprint is not the creator's. Nothing pinned, nothing pulled. */
   | { kind: "mismatch" }
   /** Another owner is pinned here. Nothing changed, nothing pulled. */
@@ -58,15 +72,17 @@ export interface TrustDeps {
 }
 
 /** Pulls a vault whose owner is pinned here, and says whether it arrived. */
-export async function fetchShared(vaultId: string, deps: Pick<TrustDeps, "pull" | "isHere">): Promise<TrustResult> {
+export async function fetchShared(vaultId: string, deps: Pick<TrustDeps, "pull" | "isHere">): Promise<FetchResult> {
   const report = await deps.pull(vaultId);
   return (await deps.isHere(vaultId))
-    ? { kind: "fetched", applied: report.applied, rejected: report.rejected }
+    ? { kind: "fetched", applied: report.applied, rejected: report.rejected, tooLarge: report.tooLarge }
     : { kind: "notFetched" };
 }
 
 /** Has the core compare `expected` and pin the owner, then pulls the vault.
- *  Refuses (throws, before any call) without a real fingerprint. */
+ *  Refuses (throws, before any call) without a real fingerprint. A failed
+ *  trust call throws; a pull that fails once the owner is pinned is
+ *  `fetchFailed`, since the trust itself held. */
 export async function verifyAndFetch(vaultId: string, expected: string, deps: TrustDeps): Promise<TrustResult> {
   if (normalizeFingerprint(expected) === null) throw new Error("not a fingerprint");
   const outcome = await deps.trust(vaultId, expected);
@@ -76,7 +92,39 @@ export async function verifyAndFetch(vaultId: string, expected: string, deps: Tr
     case "pinnedToAnotherOwner":
       return { kind: "ownerChanged" };
     case "trusted":
-    case "alreadyTrusted":
-      return fetchShared(vaultId, deps);
+    case "alreadyTrusted": {
+      const already = outcome === "alreadyTrusted";
+      try {
+        return { ...(await fetchShared(vaultId, deps)), already };
+      } catch (e) {
+        return { kind: "fetchFailed", message: apiErrorMessage(e), already };
+      }
+    }
   }
+}
+
+/** The i18n key (under `sharedVaults.reason`) for why the core could not
+ *  verify a vault; `generic` for a reason it words in a way not known here. */
+export type UnverifiableReason =
+  | "twoCreators"
+  | "noGenesis"
+  | "crowded"
+  | "brokenChain"
+  | "noGrant"
+  | "unreadable"
+  | "generic";
+
+const REASONS: [string, UnverifiableReason][] = [
+  ["two different creators", "twoCreators"],
+  ["no valid genesis manifest", "noGenesis"],
+  ["serves too many", "crowded"],
+  ["membership chain", "brokenChain"],
+  ["grants this account nothing", "noGrant"],
+  ["could not be read in full", "unreadable"],
+];
+
+/** Maps the core's (English) refusal to a reason the app words itself. */
+export function unverifiableReason(error: string | null): UnverifiableReason {
+  if (!error) return "generic";
+  return REASONS.find(([needle]) => error.includes(needle))?.[1] ?? "generic";
 }
