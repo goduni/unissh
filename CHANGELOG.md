@@ -34,6 +34,9 @@ starts with `0.`:
 
 ### Added
 
+- In the app's host editor, a saved host that logs in through the system SSH
+  agent (a hardware key, for example) can now be picked as a jump host, as
+  `unissh hosts add|edit --jump` already allowed.
 - Hosts and groups take a colour tag and an icon (#134), set under Appearance
   in the host editor and in Host groups. The colour shows beside the host in the
   hosts list, on its folder in the sidebar, on the terminal tab (a line along the
@@ -185,12 +188,23 @@ starts with `0.`:
   is a new item and gets `slug(label)-<millis>`. New create-only functions
   `create_ssh_key`, `create_imported_ssh_key` and `create_identity` fail with
   `AlreadyExists` instead of replacing; `generate_ssh_key`, `import_ssh_key`
-  and `save_identity` still create or replace. `new_item_id` mints an id for
-  an item whose save takes one from the caller (for now, a new host's saved
-  password). New `FfiError` variants `PassphraseRequired` and
+  and `save_identity` still create or replace. New `FfiError` variants `PassphraseRequired` and
   `WrongPassphrase` for an encrypted key imported without or with a wrong
   passphrase; `FfiError::AlreadyExists` now also covers a taken item id, and
   its text is "already exists" (was "instance already exists").
+- The app's host editor and `unissh hosts add|edit` now save a host through
+  one path in the core, with the same rules (#167): a label, an address, a
+  user unless the host logs in with a personal identity, and a jump host that
+  is another saved host of the same vault logging in with a key, a saved
+  password or the system SSH agent. A password typed for a host is stored
+  together with it, so a host that cannot be saved leaves no stray password.
+  A new password never deletes the old one: when nothing else uses the host's
+  saved password, the new one becomes its next version (the old one stays in
+  its history); when something else shares it, the host gets a password of its
+  own and the shared one is left alone. A host saved without its identity link
+  now says so. Bindings: new `Core::save_host` (its result names the vault an
+  identity link was written to, so a client syncs it) and
+  `FfiError::InvalidHost`; `new_item_id` is gone.
 
 ### Fixed
 
@@ -259,6 +273,22 @@ starts with `0.`:
 
 ### Security
 
+- A connection refuses a jump host that is a saved host of another vault. A
+  synced host of a team vault could name a host of a member's personal vault
+  as its jump host, and connecting would then log in to it with the member's
+  own key or password. Such a host is now refused, in the app and the CLI
+  alike, and saving one was already refused. For callers of the bindings: a
+  jump hop that references a saved host must carry the placeholder login the
+  core writes (a key or stored password of the host's own vault); one that
+  carries a typed password or a system-agent key instead is now refused too.
+- Saving a host that logs in with a personal identity moves the identity's
+  pin only from where the host pointed before the save. When the host had
+  already been pointed elsewhere (a synced change by someone else), the pin
+  stays, connecting is still refused as redirected, and the save says so,
+  instead of the member's next save silently accepting the new address. To
+  accept the new address on purpose, link the identity again in the app, or
+  run `unissh hosts edit <host> --move-pin`, which shows both addresses and
+  asks first (`--yes` to skip the question).
 - A server link may use plain `http://` only to a loopback host, and the check
   now reads the host the way the HTTP stack connects to it. It used to compare
   the start of the text, so links such as `http://localhost.attacker.example`

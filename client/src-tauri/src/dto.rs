@@ -1367,6 +1367,97 @@ impl From<ffi::KeyUsage> for KeyUsage {
     }
 }
 
+/// Which group a saved host is in (a host is in one at most).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum HostGroup {
+    /// Leave an existing host's groups as they are; a new host is in none.
+    Unchanged,
+    /// In no group.
+    Ungrouped,
+    /// In this group of the host's vault, out of every other.
+    #[serde(rename_all = "camelCase")]
+    Existing { group_id: String },
+    /// In a new group with this label, created by the save.
+    New { label: String },
+}
+impl From<HostGroup> for ffi::HostGroup {
+    fn from(g: HostGroup) -> Self {
+        match g {
+            HostGroup::Unchanged => Self::Unchanged,
+            HostGroup::Ungrouped => Self::Ungrouped,
+            HostGroup::Existing { group_id } => Self::Existing { group_id },
+            HostGroup::New { label } => Self::New { label },
+        }
+    }
+}
+
+/// The personal identity to link to a personal host.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentityLink {
+    pub vault_id: String,
+    pub identity_id: String,
+}
+impl From<IdentityLink> for ffi::IdentityLink {
+    fn from(l: IdentityLink) -> Self {
+        Self {
+            vault_id: l.vault_id,
+            identity_id: l.identity_id,
+        }
+    }
+}
+
+/// What a host save could not finish after the host itself was stored.
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum HostSaveGap {
+    /// The identity is not linked to the host (or not re-pinned).
+    IdentityNotLinked { message: String },
+    /// The identity is still pinned to an older address (the host had been
+    /// pointed elsewhere before this save): its connect is refused as
+    /// redirected until it is linked again.
+    IdentityPinKept { pinned: String, message: String },
+}
+
+/// A saved host (`Core::save_host`).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostSaved {
+    pub profile_id: String,
+    pub uid: String,
+    pub password_item_id: Option<String>,
+    pub group_id: Option<String>,
+    pub identity_linked: bool,
+    /// The vault the identity binding was written to, when the save wrote one.
+    pub binding_vault_id: Option<String>,
+    pub unfinished: Vec<HostSaveGap>,
+}
+impl From<ffi::HostSaved> for HostSaved {
+    fn from(s: ffi::HostSaved) -> Self {
+        Self {
+            profile_id: s.profile_id,
+            uid: s.uid,
+            password_item_id: s.password_item_id,
+            group_id: s.group_id,
+            identity_linked: s.identity_linked,
+            binding_vault_id: s.binding_vault_id,
+            unfinished: s
+                .unfinished
+                .into_iter()
+                .map(|gap| match gap {
+                    ffi::HostSaveGap::IdentityNotLinked { message } => {
+                        HostSaveGap::IdentityNotLinked { message }
+                    }
+                    ffi::HostSaveGap::IdentityPinKept { pinned, message } => {
+                        HostSaveGap::IdentityPinKept { pinned, message }
+                    }
+                })
+                .collect(),
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KnownHostInfo {

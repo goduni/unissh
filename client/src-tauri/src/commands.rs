@@ -758,19 +758,6 @@ pub async fn create_imported_ssh_key(
         .await
 }
 
-/// A fresh item id for a new item labelled `label`, minted by the core (for
-/// a password stored for a new host; hosts, groups and snippets get theirs
-/// when saved with an empty id).
-#[tauri::command]
-pub async fn new_item_id(
-    vault_id: String,
-    label: String,
-    state: State<'_, AppState>,
-) -> ApiResult<String> {
-    let core = state.core.clone();
-    blocking(move || core.new_item_id(vault_id, label)).await
-}
-
 #[tauri::command]
 pub async fn import_ssh_certificate(
     vault_id: String,
@@ -1209,6 +1196,33 @@ pub async fn save_connection(
     let core = state.core.clone();
     let p = profile.into();
     blocking(move || core.save_connection(vault_id, p)).await
+}
+
+/// Saves a host from the host editor through the core's one host-save path
+/// (`Core::save_host`): the rules every saved host keeps, a typed password
+/// stored with it, its group, the personal identity linked to it. An empty
+/// `profileId` is a new host. What could not be finished after the host was
+/// stored comes back in `unfinished`.
+#[tauri::command]
+pub async fn save_host(
+    vault_id: String,
+    profile: dto::ConnectionProfile,
+    new_password: Option<String>,
+    group: dto::HostGroup,
+    identity: Option<dto::IdentityLink>,
+    state: State<'_, AppState>,
+) -> ApiResult<dto::HostSaved> {
+    let core = state.core.clone();
+    let save = unissh_ffi::HostSave {
+        profile: profile.into(),
+        new_password: new_password.map(zeroize::Zeroizing::new),
+        group: group.into(),
+        identity: identity.map(Into::into),
+        // The app moves a kept pin through its own link dialog.
+        move_identity_pin: false,
+    };
+    let saved = blocking(move || core.save_host(&vault_id, save)).await?;
+    Ok(saved.into())
 }
 
 #[tauri::command]

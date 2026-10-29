@@ -96,6 +96,70 @@ export interface ConnectionProfile {
   icon?: string | null;
 }
 
+/** Which group a saved host is in (a host is in one at most). */
+export type HostGroupChoice =
+  /** Leave an existing host's groups as they are; a new host is in none. */
+  | { type: "unchanged" }
+  /** In no group. */
+  | { type: "ungrouped" }
+  /** In this group, out of every other. */
+  | { type: "existing"; groupId: string }
+  /** In a new group with this name, created by the save. */
+  | { type: "new"; label: string };
+
+/** The personal identity to link to a host that logs in with one. */
+export interface IdentityLink {
+  vaultId: string;
+  identityId: string;
+}
+
+/** What a host save could not finish after the host itself was stored. */
+export type HostSaveGap =
+  | { kind: "identityNotLinked"; message: string }
+  /** Still pinned to an older address (the host had been pointed elsewhere
+   *  before this save): connecting with the identity is refused as redirected. */
+  | { kind: "identityPinKept"; pinned: string; message: string };
+
+/** The core's answer to `saveHost` (`Core::save_host`). */
+export interface HostSaved {
+  profileId: string;
+  uid: string;
+  /** The secret a typed password went into: the host's own (a new version of
+   *  it, the old one kept in its history) or a new one. */
+  passwordItemId: string | null;
+  /** The group the host is now in, when the save placed it in one. */
+  groupId: string | null;
+  /** An identity is linked and pinned to where the host points now. */
+  identityLinked: boolean;
+  /** The vault the identity binding was written to (it changed too). */
+  bindingVaultId: string | null;
+  /** Empty when everything was saved. */
+  unfinished: HostSaveGap[];
+}
+
+/** A rule a host save broke (`HostRule::code` in the core); nothing was saved. */
+export const HOST_RULES = [
+  "labelRequired",
+  "addressRequired",
+  "userRequired",
+  "hopAddressRequired",
+  "hopOtherVault",
+  "hopNotFound",
+  "hopSelf",
+  "hopNoCredential",
+  "newPasswordNeedsPasswordLogin",
+  "newPasswordEmpty",
+  "groupNotFound",
+  "groupLabelRequired",
+  "identityNeedsPersonalLogin",
+  "identityNotFound",
+] as const;
+export type HostRule = (typeof HOST_RULES)[number];
+
+function isHostRule(rule: string | undefined): rule is HostRule {
+  return (HOST_RULES as readonly string[]).includes(rule ?? "");
+}
+
 export interface ServerGroup {
   groupId: string;
   label: string;
@@ -508,6 +572,7 @@ export type ApiErrorKind =
   | "alreadyExists"
   | "passphraseRequired"
   | "wrongPassphrase"
+  | "invalidHost"
   | "alreadyCloud"
   | "readOnlyVault"
   | "noServer"
@@ -524,6 +589,8 @@ export interface ApiError {
   host?: string;
   port?: number;
   fingerprint?: string;
+  /** `invalidHost` variant: the rule broken (`msg` has the core's words). */
+  rule?: string;
   /** `rotationInProgress` variant: the live candidate's item id. */
   candidateId?: string;
   /** `rotationPartlyFinished` variant: the original key's item id. */
@@ -589,6 +656,11 @@ export function apiErrorMessage(e: unknown): string {
         return i18n.t("error.passphraseRequired");
       case "wrongPassphrase":
         return i18n.t("error.wrongPassphrase");
+      case "invalidHost":
+        // A rule a newer core added has no words here yet: the core's own.
+        return isHostRule(e.rule)
+          ? i18n.t(`error.invalidHost.${e.rule}`)
+          : e.msg || i18n.t("error.generic");
       case "alreadyCloud":
         return i18n.t("error.alreadyCloud");
       case "readOnlyVault":
