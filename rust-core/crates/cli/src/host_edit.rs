@@ -268,6 +268,14 @@ pub enum HostsAction {
         fields: HostFields,
         #[command(flatten)]
         vault: VaultArg,
+        /// Move your identity's pin to where the host points now, after the
+        /// host was pointed elsewhere (a save otherwise keeps the old pin and
+        /// connecting is refused as redirected). Asks first.
+        #[arg(long)]
+        move_pin: bool,
+        /// Do not ask before moving the pin.
+        #[arg(long, requires = "move_pin")]
+        yes: bool,
     },
     /// Delete a host.
     Rm {
@@ -335,6 +343,8 @@ pub fn hosts(device: &Device, offline: bool, action: HostsAction) -> Res<()> {
                 vault_name: &target.name,
                 all: &all,
                 creating: true,
+                move_pin: false,
+                yes: false,
             };
             let done = format!(
                 "Added host {} to vault \"{}\"",
@@ -349,8 +359,10 @@ pub fn hosts(device: &Device, offline: bool, action: HostsAction) -> Res<()> {
             address,
             fields,
             vault,
+            move_pin,
+            yes,
         } => {
-            if label.is_none() && address.is_none() && !fields.given() {
+            if label.is_none() && address.is_none() && !fields.given() && !move_pin {
                 return Err(Failure::msg(
                     "nothing to change: say what with flags (`unissh hosts edit --help`)",
                 ));
@@ -377,6 +389,8 @@ pub fn hosts(device: &Device, offline: bool, action: HostsAction) -> Res<()> {
                 vault_name: &found.vault_name,
                 all: &all,
                 creating: false,
+                move_pin,
+                yes,
             };
             save(device, offline, &place, profile, &fields, &done)
         }
@@ -421,6 +435,9 @@ struct Place<'a> {
     vault_name: &'a str,
     all: &'a [Host],
     creating: bool,
+    /// `--move-pin`, and its `--yes`.
+    move_pin: bool,
+    yes: bool,
 }
 
 /// What a save writes besides the host itself.
@@ -460,6 +477,7 @@ fn save(
     apply_rest(core, vault_id, &mut profile, fields, &mut pending)?;
     let personal = matches!(profile.auth, ProfileAuth::Personal);
     let label = one_line(profile.label.trim());
+    let move_identity_pin = place.move_pin && pin_move_confirmed(core, place, &profile, &label)?;
     let group = match pending.group.take() {
         None => HostGroup::Unchanged,
         Some(None) => HostGroup::Ungrouped,
@@ -473,6 +491,7 @@ fn save(
             vault_id: entry.vault_id,
             identity_id: entry.identity.identity_id,
         }),
+        move_identity_pin,
     };
     let result = core.save_host(vault_id, request);
     if let Err(FfiError::InvalidHost { rule }) = &result {
@@ -481,12 +500,13 @@ fn save(
     let saved = stored(vault_name, result)?;
 
     // The identity's binding lives in its own vault, which changed too.
-    let binding_syncs = saved
-        .binding_vault_id
-        .as_deref()
-        .map(|binding_vault| syncs(core, binding_vault))
-        .transpose()?;
-    let cloud = syncs(core, vault_id)? || binding_syncs == Some(true);
+    // The host is written: an error telling where it syncs must not stop it
+    // being sent.
+    let cloud = syncs_or_send(core, vault_id)
+        || saved
+            .binding_vault_id
+            .as_deref()
+            .is_some_and(|binding_vault| syncs_or_send(core, binding_vault));
     let pushed = server::push_after_write(device, cloud, offline, done);
     if !saved.unfinished.is_empty() {
         for gap in &saved.unfinished {
@@ -512,6 +532,84 @@ fn save(
     Ok(())
 }
 
+/// Whether vault `vault_id` syncs; when that cannot be told, says so and
+/// answers yes, so a change already written is still sent.
+fn syncs_or_send(core: &Core, vault_id: &str) -> bool {
+    syncs(core, vault_id).unwrap_or_else(|e| {
+        eprintln!(
+            "unissh: cannot tell whether vault {} syncs ({}); sending the change anyway",
+            one_line(vault_id),
+            one_line(&e.message)
+        );
+        true
+    })
+}
+
+/// For `--move-pin`: says where the identity linked to the host is pinned
+/// and where the save moves it, and asks. Whether there is a pin to move
+/// (none when it already names where the host points).
+fn pin_move_confirmed(
+    core: &Core,
+    place: &Place<'_>,
+    profile: &ConnectionProfile,
+    label: &str,
+) -> Res<bool> {
+    if !matches!(profile.auth, ProfileAuth::Personal) {
+        return Err(Failure::msg(format!(
+            "{label} does not log in with a personal identity: there is no pin to move"
+        )));
+    }
+    let Some((binding_vault, binding)) = core.list_vaults()?.into_iter().find_map(|v| {
+        core.get_binding(
+            v.vault_id.clone(),
+            place.vault_id.to_owned(),
+            profile.uid.clone(),
+        )
+        .ok()
+        .flatten()
+        .map(|b| (v.vault_id, b))
+    }) else {
+        return Err(Failure::msg(format!(
+            "no identity is linked to {label}: link one with \
+             `unissh hosts edit \"{label}\" --identity <name>`"
+        )));
+    };
+    let now = core.personal_destination(
+        profile.host.clone(),
+        profile.port,
+        profile.username_template.clone(),
+        profile.jumps.clone(),
+        profile.proxy.clone(),
+    );
+    if binding.destination_pin == now {
+        return Ok(false);
+    }
+    let name = core
+        .list_identities(binding_vault)
+        .ok()
+        .and_then(|ids| {
+            ids.into_iter()
+                .find(|i| i.identity_id == binding.identity_item_id)
+        })
+        .map_or_else(|| binding.identity_item_id.clone(), |i| i.label);
+    confirm(
+        place.yes,
+        &pin_move_warning(&name, &binding.destination_pin, &now),
+    )?;
+    Ok(true)
+}
+
+/// What `--move-pin` asks before it moves the pin.
+fn pin_move_warning(identity: &str, pinned: &str, now: &str) -> String {
+    format!(
+        "Identity {} is pinned to {}; this moves it to {}. Your identity will then log in \
+         wherever the host now points.\n",
+        one_line(identity),
+        one_line(pinned),
+        one_line(now)
+    )
+}
+
 /// What a save left undone, and how to finish it.
 fn missing(gap: &HostSaveGap, label: &str) -> String {
     match gap {
@@ -523,8 +621,8 @@ fn missing(gap: &HostSaveGap, label: &str) -> String {
         HostSaveGap::IdentityPinKept { pinned, .. } => format!(
             "your identity is still pinned to {}, where the host pointed when it was \
              linked: it was pointed elsewhere before this save, so connecting with your \
-             identity is refused as redirected. If the new address is right, link it again \
-             with `unissh hosts edit \"{label}\" --identity <name>`",
+             identity is refused as redirected. If the new address is right, move the pin \
+             with `unissh hosts edit \"{label}\" --move-pin`",
             one_line(pinned)
         ),
     }
@@ -1400,6 +1498,15 @@ mod tests {
             assert!(said.contains("--no-jump"), "{said}");
             assert!(said.contains("--jump <host>"), "{said}");
         }
+    }
+
+    /// The pin-move question names the identity and both addresses.
+    #[test]
+    fn the_pin_move_question_names_both_addresses() {
+        let said = pin_move_warning("Me", "web.example:22", "new.example:22");
+        assert!(said.contains("Identity Me"), "{said}");
+        assert!(said.contains("pinned to web.example:22"), "{said}");
+        assert!(said.contains("moves it to new.example:22"), "{said}");
     }
 
     /// A colour or icon is one the app offers, in any case; empty clears it.
