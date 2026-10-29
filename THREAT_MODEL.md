@@ -783,7 +783,9 @@ overclaiming them would be dishonest:
   the core refused such writes (#166). To get the server's copy back, the user
   confirms a discard (`unissh vaults discard-unpushable`, "Discard unsent
   changes"). The discard deletes exactly those rows past version monotonicity.
-  It sends them once more first and drops only the ones still refused. Then it
+  An edit its author may not make is dropped on the local author check without
+  being sent. An edit the server refused is sent once more and dropped only if
+  the server refuses it again. Then it
   applies the server's copy, which was fetched in full beforehand, with
   verify-before-apply. If a copy does not verify, or if the fetched objects do
   not parse, nothing is dropped. For the dropped items, a server that serves
