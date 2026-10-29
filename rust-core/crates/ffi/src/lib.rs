@@ -3288,7 +3288,7 @@ impl Core {
             let items =
                 unissh_sync::unpushable_items(&state.storage, &own).map_err(map_sync_err)?;
             Ok(items
-                .into_iter()
+                .iter()
                 .map(|u| ffi_unpushable(state, u, &own))
                 .collect())
         })
@@ -8730,7 +8730,7 @@ fn map_sync_err(e: unissh_sync::SyncError) -> FfiError {
 }
 
 /// An item no push delivers, named for the UI; `own` is the account's pubkey.
-fn ffi_unpushable(state: &CoreState, u: unissh_sync::Unpushable, own: &[u8]) -> FfiUnpushableItem {
+fn ffi_unpushable(state: &CoreState, u: &unissh_sync::Unpushable, own: &[u8]) -> FfiUnpushableItem {
     FfiUnpushableItem {
         // The same id form `list_vaults` returns: hex for a cloud vault.
         vault_id: hex::encode(&u.vault_id),
@@ -8812,7 +8812,7 @@ fn push_to_tenant(
         .collect();
     let unpushable = report
         .unpushable
-        .into_iter()
+        .iter()
         .map(|u| ffi_unpushable(state, u, &ctx.genesis_owner))
         .collect();
     Ok((report.pushed, too_large, unpushable))

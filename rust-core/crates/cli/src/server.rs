@@ -252,7 +252,8 @@ pub fn push_recording(device: &Device) {
 /// fails (a refusal of the request), or it succeeds and names, among the
 /// edits it could not send, one of this account's in `vault_id` that was not
 /// left out before the write ([`Device::note_left_out`], taken when the
-/// command started): the write just made. Edits left out before it say
+/// command started, after its stale sync): as a rule the write just made, so
+/// the failure says an edit in this vault could not be sent. Edits left out before it say
 /// nothing about it. Either fails the command. (A Viewer's write never gets here: the core refuses it before
 /// storing anything, `FfiError::ReadOnlyVault`. A refusal here means the
 /// server knows of a role or policy this device does not yet.)
@@ -274,7 +275,14 @@ pub fn push_after_write(
     match sync(device) {
         Ok(report) if left_out_now(&report, vault_id, &device.left_out_before()) => {
             warn_about(&report);
-            Err(refused_here(done, "it cannot be sent"))
+            // An edit by this account in the vault that was not left out when
+            // the command started: the write, as a rule — but an older edit
+            // first sent by this sync looks the same, so the message says what
+            // is known.
+            Err(Failure::msg(format!(
+                "{done} on this machine, but an edit by this account in this vault could not \
+                 be sent: it stays on this machine only (see above)."
+            )))
         }
         Ok(report) => {
             println!("{done}.");

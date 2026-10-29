@@ -1138,9 +1138,11 @@ pub struct Discarded {
 ///   with [`SyncError::NotRestored`]. A dropped item the server holds nothing
 ///   of is removed (its archived versions too, as on any delete) and named in
 ///   [`Discarded::removed`].
-/// - The archived versions of a restored item are kept as they are (the
-///   versions only this device had included): the dropped edit's history stays
-///   readable.
+/// - The archived versions of a restored item above the server's copy are
+///   the discarded edits' own, and go with them (so the item's next real
+///   versions are archived under those numbers); the ones at or below it
+///   stay. The remembered refusals of the dropped and released items are
+///   forgotten, so a later edit of one of them is sent.
 pub fn discard_unpushable(
     transport: &mut dyn SyncTransport,
     storage: &Storage,
@@ -1204,14 +1206,30 @@ pub fn discard_unpushable(
         out.pulled = apply_pulled_objects(storage, ctx, pulled)?;
         for u in &out.dropped {
             if held.contains(&u.item_id) {
-                if storage.get_item(&u.vault_id, &u.item_id)?.is_none() {
+                let Some(restored) = storage.get_item(&u.vault_id, &u.item_id)? else {
                     return Err(SyncError::NotRestored);
-                }
+                };
+                // The archived versions above the server's copy are the
+                // discarded edits' own: they go with them, so that the item's
+                // next real versions, which take those numbers again, are
+                // archived as what they are. The ones at or below it stay.
+                storage.delete_item_history_above(&u.vault_id, &u.item_id, restored.version)?;
             } else {
                 storage.clear_item_history(&u.vault_id, &u.item_id)?;
                 out.removed.push(u.clone());
             }
         }
+        // The refusals remembered for the items dropped or released are
+        // settled: a later edit of one of them is sent like any other.
+        let settled = |r: &Unpushable| {
+            out.dropped
+                .iter()
+                .chain(&out.released)
+                .any(|u| u.vault_id == r.vault_id && u.item_id == r.item_id)
+        };
+        let remembered = load_forbidden(storage, &key)?;
+        let kept: Vec<Unpushable> = remembered.into_iter().filter(|r| !settled(r)).collect();
+        save_forbidden(storage, &key, &kept)?;
         Ok(out)
     })
 }

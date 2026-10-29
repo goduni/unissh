@@ -1248,9 +1248,10 @@ fn discard_whose_server_copy_is_rejected_rolls_back() {
     assert_eq!(kept.version, 2, "the edit is still here");
 }
 
-#[test]
-fn discard_removes_an_item_the_server_does_not_have_and_no_other_history() {
-    let (s, k) = account(&[50_u8; 32]);
+/// A vault with a note on the server (two archived versions under it) and an
+/// item made here that the server refuses, left out by one push already.
+fn item_the_server_does_not_have(db_key: &[u8; 32]) -> (Storage, UnlockedKeyset, ForbiddingServer) {
+    let (s, k) = account(db_key);
     let v =
         Vault::create_with_target(&s, &k, b"vault-1".to_vec(), b"name", SyncTarget::Cloud).unwrap();
     v.put_item_keep_history(b"note", 6, b"one").unwrap();
@@ -1261,7 +1262,12 @@ fn discard_removes_an_item_the_server_does_not_have_and_no_other_history() {
     v.put_item(b"made-here", 1, b"new").unwrap();
     server.refuse(&[b"made-here"]);
     sync_push(&mut server, &s, TENANT).unwrap();
-    let history = s.list_item_history(b"vault-1", b"note").unwrap().len();
+    (s, k, server)
+}
+
+#[test]
+fn discard_removes_an_item_the_server_does_not_have() {
+    let (s, k, mut server) = item_the_server_does_not_have(&[50_u8; 32]);
     let copy = server.copy();
 
     let done = discard_unpushable(&mut server, &s, &ctx_of(&k), b"vault-1", &copy).unwrap();
@@ -1271,11 +1277,107 @@ fn discard_removes_an_item_the_server_does_not_have_and_no_other_history() {
         s.get_item(b"vault-1", b"made-here").unwrap().is_none(),
         "removed"
     );
+}
+
+#[test]
+fn discard_leaves_other_items_history_alone() {
+    let (s, k, mut server) = item_the_server_does_not_have(&[54_u8; 32]);
+    let history = s.list_item_history(b"vault-1", b"note").unwrap();
+    let copy = server.copy();
+
+    discard_unpushable(&mut server, &s, &ctx_of(&k), b"vault-1", &copy).unwrap();
+
     assert_eq!(
-        s.list_item_history(b"vault-1", b"note").unwrap().len(),
+        s.list_item_history(b"vault-1", b"note").unwrap(),
         history,
         "another item's history is untouched"
     );
+}
+
+#[test]
+fn a_restored_item_edited_after_the_discard_is_sent() {
+    // The refusal remembered for the discarded edit is settled with it: the
+    // next edit of the restored item takes the same version number, and must
+    // not pass for the refused one.
+    let (s, k, mut server) = edit_the_server_refuses(&[55_u8; 32]);
+    let copy = server.copy();
+    discard_unpushable(&mut server, &s, &ctx_of(&k), b"vault-1", &copy).unwrap();
+    server.refuse(&[]);
+    Vault::open(&s, &k, b"vault-1")
+        .unwrap()
+        .put_item(b"viewer-edit", 1, b"edit again")
+        .unwrap();
+
+    let report = sync_push(&mut server, &s, TENANT).unwrap();
+
+    assert!(report.unpushable.is_empty(), "{:?}", report.unpushable);
+    assert_eq!(report.pushed, 1, "the new edit went up");
+}
+
+#[test]
+fn a_discard_keeps_another_vaults_remembered_refusal() {
+    let (s, k, mut server) = edit_the_server_refuses(&[56_u8; 32]);
+    let other =
+        Vault::create_with_target(&s, &k, b"vault-2".to_vec(), b"name", SyncTarget::Cloud).unwrap();
+    other.put_item(b"elsewhere", 1, b"x").unwrap();
+    s.bind_unbound_cloud_vaults(TENANT).unwrap();
+    server.refuse(&[b"viewer-edit", b"elsewhere"]);
+    sync_push(&mut server, &s, TENANT).unwrap();
+    let copy = server.copy();
+    discard_unpushable(&mut server, &s, &ctx_of(&k), b"vault-1", &copy).unwrap();
+    let requests = server.requests;
+
+    let report = sync_push(&mut server, &s, TENANT).unwrap();
+
+    assert_eq!(
+        server.requests, requests,
+        "the other vault's edit is not sent again"
+    );
+    assert_eq!(report.unpushable.len(), 1, "{:?}", report.unpushable);
+    assert_eq!(report.unpushable[0].item_id, b"elsewhere".to_vec());
+}
+
+#[test]
+fn the_discarded_edits_archived_versions_go_with_them() {
+    // Server at v3; v4 and v5 made here and refused; the discard brings v3
+    // back. The next two real edits are v4 and v5 again, and the archive must
+    // hold the real v4, not the discarded one.
+    let (s, k) = account(&[57_u8; 32]);
+    let v =
+        Vault::create_with_target(&s, &k, b"vault-1".to_vec(), b"name", SyncTarget::Cloud).unwrap();
+    for text in [b"v1", b"v2", b"v3"] {
+        v.put_item_keep_history(b"note", 6, text).unwrap();
+    }
+    s.bind_unbound_cloud_vaults(TENANT).unwrap();
+    let mut server = ForbiddingServer::new(b"none");
+    sync_push(&mut server, &s, TENANT).unwrap();
+    v.put_item_keep_history(b"note", 6, b"discarded v4")
+        .unwrap();
+    v.put_item_keep_history(b"note", 6, b"discarded v5")
+        .unwrap();
+    server.refuse(&[b"note"]);
+    sync_push(&mut server, &s, TENANT).unwrap();
+    let copy = server.copy();
+
+    discard_unpushable(&mut server, &s, &ctx_of(&k), b"vault-1", &copy).unwrap();
+    assert!(
+        s.list_item_history(b"vault-1", b"note")
+            .unwrap()
+            .iter()
+            .all(|r| r.version <= 3),
+        "nothing above the server's copy is archived"
+    );
+    v.put_item_keep_history(b"note", 6, b"real v4").unwrap();
+    let real_v4 = s.get_item(b"vault-1", b"note").unwrap().unwrap();
+    v.put_item_keep_history(b"note", 6, b"real v5").unwrap();
+
+    let archived_v4 = s
+        .list_item_history(b"vault-1", b"note")
+        .unwrap()
+        .into_iter()
+        .find(|r| r.version == 4)
+        .unwrap();
+    assert_eq!(archived_v4, real_v4, "the real v4 is archived");
 }
 
 #[test]

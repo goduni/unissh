@@ -1105,7 +1105,8 @@ impl Storage {
     /// A row that was pushed, edited again or replaced by a pull since the
     /// caller looked is left alone. Which edits may be dropped (the caller's
     /// own, ones no push can deliver) is the caller's decision. The item's
-    /// archived versions are left as they are. Returns whether the row was
+    /// archived versions are left to the caller (see
+    /// [`Self::delete_item_history_above`]). Returns whether the row was
     /// deleted.
     pub fn discard_unpushed_item(
         &self,
@@ -1122,6 +1123,25 @@ impl Storage {
             params![vault_id, item_id, version, author_pubkey],
         )?;
         Ok(n > 0)
+    }
+
+    /// Deletes the archived versions of an item above `version`: after a
+    /// dropped local edit (see [`Self::discard_unpushed_item`]) the versions
+    /// newer than the server's copy are the discarded edits', and an archive
+    /// above the item's current version would keep them under the numbers its
+    /// next real versions take (archiving is `INSERT OR IGNORE` per version).
+    pub fn delete_item_history_above(
+        &self,
+        vault_id: &[u8],
+        item_id: &[u8],
+        version: u64,
+    ) -> Result<(), StorageError> {
+        let version = checked_version(version)?;
+        self.conn.execute(
+            "DELETE FROM item_history WHERE vault_id = ?1 AND item_id = ?2 AND version > ?3",
+            params![vault_id, item_id, version],
+        )?;
+        Ok(())
     }
 
     /// Clears the dirty flag of ONE item (see [`Self::clear_vault_dirty`]).
