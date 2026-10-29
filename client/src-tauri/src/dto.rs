@@ -825,6 +825,9 @@ pub struct SyncReport {
     pub pushed: u64,
     /// Items the server refuses as too large: not uploaded, everything else was.
     pub too_large: Vec<TooLargeItem>,
+    /// Edits no push can deliver (a Viewer's edit, an edit the server refuses):
+    /// not uploaded, everything else was.
+    pub unpushable: Vec<UnpushableItem>,
 }
 impl From<ffi::FfiSyncReport> for SyncReport {
     fn from(r: ffi::FfiSyncReport) -> Self {
@@ -835,6 +838,69 @@ impl From<ffi::FfiSyncReport> for SyncReport {
             rejected: r.rejected,
             pushed: r.pushed,
             too_large: r.too_large.into_iter().map(Into::into).collect(),
+            unpushable: r.unpushable.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// What discarding a vault's unsendable edits did (mirror of `FfiDiscardReport`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscardReport {
+    /// This account's edits that were dropped (the server's copy replaced them,
+    /// or the item is gone: `removed`).
+    pub dropped: u32,
+    /// Of `dropped`, the items the server does not have: removed.
+    pub removed: u32,
+    /// Other members' items no longer sent (kept as they are).
+    pub released: u32,
+}
+impl From<ffi::FfiDiscardReport> for DiscardReport {
+    fn from(r: ffi::FfiDiscardReport) -> Self {
+        Self {
+            dropped: r.dropped,
+            removed: r.removed,
+            released: r.released,
+        }
+    }
+}
+
+/// An edit no push can deliver (mirror of `FfiUnpushableItem`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnpushableItem {
+    pub vault_id: String,
+    pub vault_name: String,
+    pub item_id: String,
+    /// The core's item type (as in `ItemInfo`), so the UI can name the kind.
+    pub item_type: u32,
+    /// This account made the edit, so it can be discarded.
+    pub mine: bool,
+    /// `notAuthorized` (the author may not write the vault) or
+    /// `serverRefused` (the server refused it).
+    pub reason: UnpushableReason,
+}
+
+/// Why an edit cannot be pushed (mirror of `FfiUnpushableReason`).
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UnpushableReason {
+    NotAuthorized,
+    ServerRefused,
+}
+
+impl From<ffi::FfiUnpushableItem> for UnpushableItem {
+    fn from(u: ffi::FfiUnpushableItem) -> Self {
+        Self {
+            vault_id: u.vault_id,
+            vault_name: u.vault_name,
+            item_id: u.item_id,
+            item_type: u.item_type,
+            mine: u.mine,
+            reason: match u.reason {
+                ffi::FfiUnpushableReason::NotAuthorized => UnpushableReason::NotAuthorized,
+                ffi::FfiUnpushableReason::ServerRefused => UnpushableReason::ServerRefused,
+            },
         }
     }
 }

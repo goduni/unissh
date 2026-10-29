@@ -852,6 +852,40 @@ export interface SyncReport {
   /** Items the server refuses as too large: NOT uploaded (everything else was).
    *  Reported by every sync until the item changes or a manual sync gets it through. */
   tooLarge: TooLargeItem[];
+  /** Edits no push can deliver — a Viewer's edit made before the core refused them,
+   *  or one the server refuses: NOT uploaded (everything else was). Reported by
+   *  every sync until the item changes or the edit is discarded
+   *  ({@link UnpushableItem.mine}). */
+  unpushable: UnpushableItem[];
+}
+
+/** What discarding a vault's unsendable edits did. */
+export interface DiscardReport {
+  /** This account's edits that were dropped: the server's copy replaced them, or
+   *  the item is gone (`removed`). */
+  dropped: number;
+  /** Of `dropped`, the items the server doesn't have: removed. */
+  removed: number;
+  /** Other members' edits held here that are no longer sent (kept as they are). */
+  released: number;
+}
+
+/** An edit no sync can push (see {@link SyncReport.unpushable}). */
+export interface UnpushableItem {
+  vaultId: string;
+  vaultName: string;
+  itemId: string;
+  /** The core's item type ({@link ItemType}), to name the item by kind. */
+  itemType: number;
+  /** This account made the edit, so "Discard unsent changes" can drop it (another
+   *  member's is only no longer sent). */
+  mine: boolean;
+  /** `notAuthorized`: this account may not change the vault (only view it).
+   *  `serverRefused`: the server refused the edit. */
+  reason: "notAuthorized" | "serverRefused";
+  /** The linked server whose sync reported it (set by the store when it merges
+   *  the reports of several servers; absent for the active server's own). */
+  serverId?: string;
 }
 
 /** An item the sync server refuses as too large: over its `limits.max_object_bytes`,

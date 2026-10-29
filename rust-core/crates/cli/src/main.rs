@@ -108,7 +108,12 @@ enum Command {
     /// What this machine is signed in to.
     Status,
     /// Sync the vaults with the server now.
-    Sync,
+    Sync {
+        /// Send again the changes the server refused before (too large, or not
+        /// permitted), instead of leaving them out until they change.
+        #[arg(long)]
+        retry_refused: bool,
+    },
     /// List the hosts, or add, change or delete one.
     #[command(args_conflicts_with_subcommands = true)]
     Hosts {
@@ -482,12 +487,16 @@ fn run(cli: Cli) -> Res<u8> {
             manage::status(&home)?;
             Ok(0)
         }
-        Command::Sync => {
+        Command::Sync { retry_refused } => {
             if offline {
                 return Err(Failure::msg("`sync` and --offline contradict each other"));
             }
             let device = unlocked(home, &credentials)?;
-            let report = server::sync(&device)?;
+            let report = if retry_refused {
+                server::sync_retrying_refused(&device)?
+            } else {
+                server::sync(&device)?
+            };
             println!("{}", server::summary(&report));
             server::warn_about(&report);
             vaults::name_pending(&device);
@@ -746,6 +755,9 @@ fn ready(home: Home, credentials: &Credentials, offline: bool) -> Res<Device> {
     let device = unlocked(home, credentials)?;
     if !offline {
         server::sync_if_stale(&device);
+        // What is left out before the command writes anything: the sync after
+        // a write tells the write from these.
+        device.note_left_out();
     }
     Ok(device)
 }

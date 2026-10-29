@@ -507,7 +507,11 @@ fn save(
             .binding_vault_id
             .as_deref()
             .is_some_and(|binding_vault| syncs_or_send(core, binding_vault));
-    let pushed = server::push_after_write(device, cloud, offline, done);
+    let mut changed_vaults = vec![vault_id];
+    if let Some(binding_vault) = saved.binding_vault_id.as_deref() {
+        changed_vaults.push(binding_vault);
+    }
+    let pushed = server::push_after_write(device, &changed_vaults, cloud, offline, done);
     if !saved.unfinished.is_empty() {
         for gap in &saved.unfinished {
             eprintln!("unissh: saved host {label}, but {}", missing(gap, &label));
