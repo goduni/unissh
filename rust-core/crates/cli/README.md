@@ -300,7 +300,8 @@ A jump host is either `user@host[:port]` with `--jump-key` or
 `--jump-password-item`, or another saved host of the same vault, referenced so
 that its own settings apply. A saved host can be a jump host only if it logs in
 with a key, a stored password or the system ssh-agent, the same hosts the app
-offers. `--jump` gives the whole chain, and on `edit` it replaces the chain, so
+offers: the app and the CLI save hosts through one path in the core, with the
+same rules. `--jump` gives the whole chain, and on `edit` it replaces the chain, so
 `--jump-key` and `--jump-password-item` go with `--jump` there too.
 
 A list flag such as `--tags` replaces the list, and an empty value (`--tags ""`)

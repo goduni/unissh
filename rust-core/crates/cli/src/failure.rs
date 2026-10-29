@@ -110,6 +110,7 @@ impl From<FfiError> for Failure {
             | FfiError::KeyAcceptedMoreAuthRequired
             | FfiError::PassphraseRequired
             | FfiError::WrongPassphrase
+            | FfiError::InvalidHost { .. }
             | FfiError::Ssh { .. }
             | FfiError::Other { .. } => e.to_string(),
         };

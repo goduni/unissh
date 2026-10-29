@@ -60,6 +60,7 @@ use unissh_vault::{
 mod approvals;
 pub mod automation;
 pub mod automation_recording;
+mod host_save;
 mod item_ids;
 mod key_rotation;
 pub mod key_rotation_plan;
@@ -72,6 +73,7 @@ mod system_agent;
 mod terminal_workspace;
 
 use approvals::{Approvals, Asker, Connection};
+pub use host_save::{HostGroup, HostRule, HostSave, HostSaveGap, HostSaved, IdentityLink};
 use item_ids::{mint_item_id, refuse_taken};
 pub use key_rotation::KeyRotationLink;
 pub use key_usage::{HostKeyUse, IdentityKeyUse, KeyUsage, KeyUseRole};
@@ -238,6 +240,13 @@ pub enum FfiError {
     /// The passphrase given for an encrypted private key is not its passphrase.
     #[error("incorrect passphrase for the private key")]
     WrongPassphrase,
+    /// A host save ([`Core::save_host`]) broke one of the rules every saved
+    /// host keeps; nothing was written.
+    #[error("{rule}")]
+    InvalidHost {
+        /// The rule it broke.
+        rule: HostRule,
+    },
     /// The vault is already a cloud vault, so an operation that applies only to a
     /// local vault (the local-to-cloud conversion) does not apply to it.
     #[error("vault is already a cloud vault")]
@@ -1125,9 +1134,10 @@ pub struct JumpHost {
     /// an inline `Password` is allowed only for a direct connection.
     pub auth: AuthMethod,
     /// Host-chain (B2.2): if set, the hop is a REFERENCE to another saved profile
-    /// (by immutable uid, possibly in a DIFFERENT vault); its host/port/user/auth
+    /// (by immutable uid, in the SAME vault as the host); its host/port/user/auth
     /// are resolved at connect time, and the inline fields above are IGNORED. Lets you
-    /// reuse a bastion profile in chains without duplication.
+    /// reuse a bastion profile in chains without duplication. A reference into
+    /// another vault is refused at connect (`InvalidHost{HopOtherVault}`).
     pub hop_ref: Option<HopRef>,
 }
 
@@ -2409,19 +2419,7 @@ impl Core {
             // resolve_vid accepts both a local (UTF-8) and a cloud (hex) id; decode_vid
             // was hex-only and rejected local vaults.
             let vid = resolve_vid(&state.storage, &vault_id);
-            let owner_ed = state.keyset.signing.verifying.to_bytes().to_vec();
-            let members = match state
-                .storage
-                .latest_membership_epoch(&vid)
-                .map_err(FfiError::other)?
-            {
-                Some(latest) => verify_chain_to_epoch(&state.storage, &vid, latest, &owner_ed)
-                    .map_err(map_vault_err)?
-                    .members()
-                    .len(),
-                None => 0, // a local / not-yet-shared vault — no members
-            };
-            if members > 1 {
+            if vault_member_count(state, &vid)? > 1 {
                 return Err(FfiError::other(
                     "cannot use a shared (multi-member) vault as your personal vault",
                 ));
@@ -3379,23 +3377,7 @@ impl Core {
 
     /// Deletes an item (tombstone) and, if it was an SSH key in the agent, unloads it.
     pub fn delete_item(&self, vault_id: String, item_id: String) -> Result<(), FfiError> {
-        self.with_state_mut(|state| {
-            let vault = Vault::open(
-                &state.storage,
-                &state.keyset,
-                &resolve_vid(&state.storage, &vault_id),
-            )
-            .map_err(FfiError::other)?;
-            vault
-                .delete_item(item_id.as_bytes())
-                .map_err(map_vault_err)?;
-            // A4a namespace: the agent stores the key under agent_key_id(vault_id,item_id), not
-            // under the bare item_id — it must be unloaded with the same key, otherwise remove is a no-op and
-            // a revoked/rotated private key stays alive in the agent until the end of the session.
-            state.agent.remove(&agent_key_id(&vault_id, &item_id));
-            system_agent::forget(state, &vault_id, Some(&item_id));
-            Ok(())
-        })
+        self.with_state_mut(|state| remove_item(state, &vault_id, &item_id))
     }
 
     /// Saves/updates a server password as a vault item (type "password").
@@ -3410,24 +3392,7 @@ impl Core {
     ) -> Result<(), FfiError> {
         // The password goes into Zeroizing immediately — zeroized on exit.
         let password = Zeroizing::new(password);
-        self.with_state_mut(|state| {
-            ensure_item_type(
-                &state.storage,
-                &vault_id,
-                item_id.as_bytes(),
-                ITEM_TYPE_PASSWORD,
-            )?;
-            let vault = Vault::open(
-                &state.storage,
-                &state.keyset,
-                &resolve_vid(&state.storage, &vault_id),
-            )
-            .map_err(FfiError::other)?;
-            vault
-                .put_item_keep_history(item_id.as_bytes(), ITEM_TYPE_PASSWORD, password.as_bytes())
-                .map_err(map_vault_err)?;
-            Ok(())
-        })
+        self.with_state_mut(|state| put_password(state, &vault_id, &item_id, &password))
     }
 
     /// Returns a server password (reveal: display/copy in the UI on an explicit
@@ -3770,19 +3735,6 @@ impl Core {
         passphrase: Option<String>,
     ) -> Result<String, FfiError> {
         self.store_imported_key(&vault_id, &item_id, openssh_private, passphrase, true)
-    }
-
-    /// A fresh item id in `vault_id` for a new item labelled `label`, for an
-    /// item whose save takes the id from the caller (such as a password stored
-    /// for a new host): `slug(label)-<millis>`, stepped past any id the vault
-    /// already has. Hosts, groups and snippets need no call: saved with an
-    /// empty id, they get one the same way.
-    ///
-    /// Interim: the id is minted here and written by a later call
-    /// (`save_password`), outside this lock, so it is not reserved in between.
-    /// It goes once saving a host creates the host's password item itself.
-    pub fn new_item_id(&self, vault_id: String, label: String) -> Result<String, FfiError> {
-        self.with_state(|state| mint_item_id(&state.storage, &vault_id, &label, "item"))
     }
 
     /// Attaches an OpenSSH user certificate to the key `key_item_id` (stored as
@@ -4960,81 +4912,12 @@ impl Core {
     /// group that has no id yet, so the self checks apply to an existing one.
     /// Returns the group's id.
     pub fn save_group(&self, vault_id: String, group: ServerGroup) -> Result<String, FfiError> {
-        if !group.group_id.is_empty() {
-            if group.member_ids.contains(&group.group_id) {
-                return Err(FfiError::other("a group cannot be a member of itself"));
-            }
-            if group.parent_id.as_deref() == Some(group.group_id.as_str()) {
-                return Err(FfiError::other("a group cannot be its own parent"));
-            }
-        }
-        let color = appearance_id(group.color)?;
-        let icon = appearance_id(group.icon)?;
-        self.with_state_mut(|state| {
-            let group_id = if group.group_id.is_empty() {
-                mint_item_id(&state.storage, &vault_id, &group.label, "group")?
-            } else {
-                group.group_id
-            };
-            ensure_item_type(
-                &state.storage,
-                &vault_id,
-                group_id.as_bytes(),
-                ITEM_TYPE_GROUP,
-            )?;
-            let vault = Vault::open(
-                &state.storage,
-                &state.keyset,
-                &resolve_vid(&state.storage, &vault_id),
-            )
-            .map_err(FfiError::other)?;
-            let stored = StoredGroup {
-                label: group.label,
-                member_ids: group.member_ids,
-                parent_id: group.parent_id,
-                color,
-                icon,
-                // Forward-compat: carry over the unknown fields of the existing group.
-                extra: preserved_extra::<StoredGroup>(
-                    &vault,
-                    group_id.as_bytes(),
-                    ITEM_TYPE_GROUP,
-                    |sg| sg.extra,
-                ),
-            };
-            let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
-            vault
-                .put_item(group_id.as_bytes(), ITEM_TYPE_GROUP, &json)
-                .map_err(map_vault_err)?;
-            Ok(group_id)
-        })
+        self.with_state_mut(|state| put_group(state, &vault_id, group))
     }
 
     /// List of a vault's groups (broken JSON is skipped, tombstones are not visible).
     pub fn list_groups(&self, vault_id: String) -> Result<Vec<ServerGroup>, FfiError> {
-        self.with_state_mut(|state| {
-            let vault = Vault::open(
-                &state.storage,
-                &state.keyset,
-                &resolve_vid(&state.storage, &vault_id),
-            )
-            .map_err(FfiError::other)?;
-            let mut out = Vec::new();
-            for m in vault.list_items().map_err(FfiError::other)? {
-                if m.item_type != ITEM_TYPE_GROUP {
-                    continue;
-                }
-                if let Some(item) = vault.get_item(&m.item_id).map_err(FfiError::other)? {
-                    if let Ok(stored) = serde_json::from_slice::<StoredGroup>(&item.content) {
-                        out.push(group_to_public(
-                            String::from_utf8_lossy(&m.item_id).to_string(),
-                            stored,
-                        ));
-                    }
-                }
-            }
-            Ok(out)
-        })
+        self.with_state_mut(|state| groups_in(state, &vault_id))
     }
 
     /// Returns a single group.
@@ -5381,126 +5264,12 @@ impl Core {
         vault_id: String,
         profile: ConnectionProfile,
     ) -> Result<String, FfiError> {
-        self.with_state_mut(|state| {
-            let ConnectionProfile {
-                profile_id,
-                uid,
-                label,
-                host,
-                port,
-                user,
-                auth,
-                username_template,
-                jumps,
-                proxy,
-                tags,
-                startup_snippet_ids,
-                record_sessions,
-                agent_forward,
-                color,
-                icon,
-            } = profile;
-            let profile_id = if profile_id.is_empty() {
-                mint_item_id(&state.storage, &vault_id, &label, "host")?
-            } else {
-                profile_id
-            };
-            let color = appearance_id(color)?;
-            let icon = appearance_id(icon)?;
-            // Empty uid = creating a new profile → mint an immutable id. A non-empty one
-            // (an edit: the UI returned the uid from get_connection) is kept as-is — the uid does not
-            // change when host/label change.
-            let uid = if uid.is_empty() {
-                mint_profile_uid()
-            } else {
-                uid
-            };
-            let (key_item_id, password_item_id, personal, system_agent_public_key) = match auth {
-                ProfileAuth::Key { key_item_id } => (Some(key_item_id), None, false, None),
-                ProfileAuth::VaultPassword { password_item_id } => {
-                    (None, Some(password_item_id), false, None)
-                }
-                ProfileAuth::PromptPassword => (None, None, false, None),
-                ProfileAuth::Personal => (None, None, true, None),
-                ProfileAuth::SystemAgent { public_key } => (None, None, false, Some(public_key)),
-            };
-            let mut stored = StoredProfile {
-                uid: Some(uid),
-                label,
-                host,
-                port,
-                user,
-                key_item_id,
-                password_item_id,
-                personal,
-                username_template,
-                jumps: jumps
-                    .into_iter()
-                    .map(jump_to_stored)
-                    .collect::<Result<_, _>>()?,
-                proxy: proxy.map(proxy_to_stored).transpose()?,
-                tags,
-                startup_snippet_ids,
-                record_sessions,
-                agent_forward,
-                system_agent_public_key,
-                color,
-                icon,
-                extra: BTreeMap::new(),
-            };
-            ensure_item_type(
-                &state.storage,
-                &vault_id,
-                profile_id.as_bytes(),
-                ITEM_TYPE_CONNECTION,
-            )?;
-            let vault = Vault::open(
-                &state.storage,
-                &state.keyset,
-                &resolve_vid(&state.storage, &vault_id),
-            )
-            .map_err(FfiError::other)?;
-            // Forward-compat: carry over the unknown fields of the existing profile.
-            stored.extra = preserved_extra::<StoredProfile>(
-                &vault,
-                profile_id.as_bytes(),
-                ITEM_TYPE_CONNECTION,
-                |sp| sp.extra,
-            );
-            let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
-            vault
-                .put_item(profile_id.as_bytes(), ITEM_TYPE_CONNECTION, &json)
-                .map_err(map_vault_err)?;
-            Ok(profile_id)
-        })
+        self.with_state_mut(|state| put_connection(state, &vault_id, profile).map(|(id, _)| id))
     }
 
     /// List of connection profiles in a vault.
     pub fn list_connections(&self, vault_id: String) -> Result<Vec<ConnectionProfile>, FfiError> {
-        self.with_state_mut(|state| {
-            let vault = Vault::open(
-                &state.storage,
-                &state.keyset,
-                &resolve_vid(&state.storage, &vault_id),
-            )
-            .map_err(FfiError::other)?;
-            let mut out = Vec::new();
-            for m in vault.list_items().map_err(FfiError::other)? {
-                if m.item_type != ITEM_TYPE_CONNECTION {
-                    continue;
-                }
-                if let Some(item) = vault.get_item(&m.item_id).map_err(FfiError::other)? {
-                    if let Ok(stored) = serde_json::from_slice::<StoredProfile>(&item.content) {
-                        out.push(stored_to_profile(
-                            &vault_id,
-                            String::from_utf8_lossy(&m.item_id).to_string(),
-                            stored,
-                        ));
-                    }
-                }
-            }
-            Ok(out)
-        })
+        self.with_state_mut(|state| profiles_in(state, &vault_id))
     }
 
     /// Returns a single connection profile.
@@ -5588,28 +5357,7 @@ impl Core {
 
     /// List of personal identities in a vault.
     pub fn list_identities(&self, vault_id: String) -> Result<Vec<Identity>, FfiError> {
-        self.with_state_mut(|state| {
-            let vault = Vault::open(
-                &state.storage,
-                &state.keyset,
-                &resolve_vid(&state.storage, &vault_id),
-            )
-            .map_err(FfiError::other)?;
-            let mut out = Vec::new();
-            for m in vault.list_items().map_err(FfiError::other)? {
-                if m.item_type != ITEM_TYPE_IDENTITY {
-                    continue;
-                }
-                if let Some(item) = vault.get_item(&m.item_id).map_err(FfiError::other)? {
-                    if let Ok(stored) = serde_json::from_slice::<StoredIdentity>(&item.content) {
-                        out.push(
-                            stored.into_identity(String::from_utf8_lossy(&m.item_id).to_string()),
-                        );
-                    }
-                }
-            }
-            Ok(out)
-        })
+        self.with_state_mut(|state| identities_in(state, &vault_id))
     }
 
     /// Deletes a personal identity.
@@ -5646,68 +5394,7 @@ impl Core {
         binding: IdentityBinding,
         allow_rebind: bool,
     ) -> Result<(), FfiError> {
-        self.with_state_mut(|state| {
-            let IdentityBinding {
-                team_vault_id,
-                profile_uid,
-                identity_item_id,
-                destination_pin,
-            } = binding;
-            if team_vault_id.is_empty() || profile_uid.is_empty() {
-                return Err(FfiError::other(
-                    "binding requires non-empty team_vault_id and profile_uid",
-                ));
-            }
-            let item_id = binding_item_id(&team_vault_id, &profile_uid);
-            ensure_item_type(
-                &state.storage,
-                &personal_vault_id,
-                item_id.as_bytes(),
-                ITEM_TYPE_BINDING,
-            )?;
-            let vault = Vault::open(
-                &state.storage,
-                &state.keyset,
-                &resolve_vid(&state.storage, &personal_vault_id),
-            )
-            .map_err(FfiError::other)?;
-            // First-bind guard: we do not silently rebind to a changed destination.
-            if !allow_rebind {
-                if let Some(existing) = vault
-                    .get_item(item_id.as_bytes())
-                    .map_err(FfiError::other)?
-                    .filter(|i| i.item_type == ITEM_TYPE_BINDING)
-                    .and_then(|i| serde_json::from_slice::<StoredBinding>(&i.content).ok())
-                {
-                    if existing.destination_pin != destination_pin {
-                        return Err(FfiError::other(format!(
-                            "binding already pinned to {}; re-bind to {} requires \
-                         explicit confirmation (allow_rebind)",
-                            existing.destination_pin, destination_pin
-                        )));
-                    }
-                }
-            }
-            let mut stored = StoredBinding {
-                team_vault_id,
-                profile_uid,
-                identity_item_id,
-                destination_pin,
-                extra: BTreeMap::new(),
-            };
-            // Forward-compat: carry over the unknown fields of the existing binding.
-            stored.extra = preserved_extra::<StoredBinding>(
-                &vault,
-                item_id.as_bytes(),
-                ITEM_TYPE_BINDING,
-                |sb| sb.extra,
-            );
-            let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
-            vault
-                .put_item(item_id.as_bytes(), ITEM_TYPE_BINDING, &json)
-                .map_err(map_vault_err)?;
-            Ok(())
-        })
+        self.with_state_mut(|state| put_binding(state, &personal_vault_id, binding, allow_rebind))
     }
 
     /// Returns the binding for (team_vault_id, profile_uid), if any.
@@ -5718,23 +5405,7 @@ impl Core {
         profile_uid: String,
     ) -> Result<Option<IdentityBinding>, FfiError> {
         self.with_state_mut(|state| {
-            let item_id = binding_item_id(&team_vault_id, &profile_uid);
-            let vault = Vault::open(
-                &state.storage,
-                &state.keyset,
-                &resolve_vid(&state.storage, &personal_vault_id),
-            )
-            .map_err(FfiError::other)?;
-            let Some(item) = vault
-                .get_item(item_id.as_bytes())
-                .map_err(FfiError::other)?
-                .filter(|i| i.item_type == ITEM_TYPE_BINDING)
-            else {
-                return Ok(None);
-            };
-            let stored: StoredBinding =
-                serde_json::from_slice(&item.content).map_err(FfiError::other)?;
-            Ok(Some(stored.into_binding()))
+            binding_in(state, &personal_vault_id, &team_vault_id, &profile_uid)
         })
     }
 
@@ -5816,26 +5487,7 @@ impl Core {
         team_vault_id: &str,
         profile_uid: &str,
     ) -> Result<Option<String>, FfiError> {
-        let item_id = binding_item_id(team_vault_id, profile_uid);
-        self.with_state(|state| {
-            for rec in state.storage.list_vaults().map_err(FfiError::other)? {
-                if let Some(item) = state
-                    .storage
-                    .get_item(&rec.vault_id, item_id.as_bytes())
-                    .map_err(FfiError::other)?
-                {
-                    if item.item_type == ITEM_TYPE_BINDING && !item.tombstone {
-                        return Ok(Some(match rec.sync_target {
-                            SyncTarget::Cloud => hex::encode(&rec.vault_id),
-                            SyncTarget::Local => String::from_utf8_lossy(&rec.vault_id).to_string(),
-                            // non_exhaustive: a future target is treated like a local id.
-                            _ => String::from_utf8_lossy(&rec.vault_id).to_string(),
-                        }));
-                    }
-                }
-            }
-            Ok(None)
-        })
+        self.with_state(|state| binding_vault_in(state, team_vault_id, profile_uid, false))
     }
 
     /// Resolves Personal authentication for connecting to a shared host (B4):
@@ -7003,19 +6655,7 @@ impl Core {
         // in a PRIVATE (single-member) vault — otherwise it syncs to a shared vault's
         // other members (leaked private cred). Refuse a shared/multi-member vault.
         let vid = resolve_vid(&state.storage, vault_id);
-        let owner_ed = state.keyset.signing.verifying.to_bytes().to_vec();
-        let members = match state
-            .storage
-            .latest_membership_epoch(&vid)
-            .map_err(FfiError::other)?
-        {
-            Some(latest) => verify_chain_to_epoch(&state.storage, &vid, latest, &owner_ed)
-                .map_err(map_vault_err)?
-                .members()
-                .len(),
-            None => 0, // local / not-yet-shared vault → single-member
-        };
-        if members > 1 {
+        if vault_member_count(state, &vid)? > 1 {
             return Err(FfiError::other(
                 "cannot store an identity in a shared (multi-member) vault — it would leak to the other members",
             ));
@@ -8026,6 +7666,11 @@ fn connect_with_options(
         // port/user/auth are taken from there); a normal hop is inline, as before.
         let (host, port, user, auth) = match &j.hop_ref {
             Some(hr) => {
+                if !hop_ref_in_own_vault(&st.storage, j, hr) {
+                    return Err(FfiError::InvalidHost {
+                        rule: HostRule::HopOtherVault,
+                    });
+                }
                 let prof = resolve_profile_by_uid(st, &hr.vault_id, &hr.profile_uid)?;
                 if idx == 0 {
                     first_hop_proxy = prof.proxy.clone();
@@ -8443,6 +8088,21 @@ impl Core {
         vault_id: &str,
         p: &ConnectionProfile,
     ) -> Result<ResolvedConnection, FfiError> {
+        // A hop of this host may only name a saved host of its own vault (the
+        // connect refuses the rest too; this says so before any dial).
+        let foreign_hop = self.with_state(|st| {
+            let own = resolve_vid(&st.storage, vault_id);
+            Ok(p.jumps.iter().any(|j| {
+                j.hop_ref
+                    .as_ref()
+                    .is_some_and(|r| resolve_vid(&st.storage, &r.vault_id) != own)
+            }))
+        })?;
+        if foreign_hop {
+            return Err(FfiError::InvalidHost {
+                rule: HostRule::HopOtherVault,
+            });
+        }
         let (user, auth) = if matches!(p.auth, ProfileAuth::Personal) {
             let destination = self.personal_destination(
                 p.host.clone(),
@@ -8979,7 +8639,8 @@ fn backup_keyset_sidecar(path: &std::path::Path) {
 ///
 /// The method's `vault_id` is dropped here: a stored jump is vault-relative (the item
 /// lives in the profile's vault, the same `vault_id` is restored on read in
-/// [`stored_to_profile`]). Cross-vault hops are a separate model (`HopRef`).
+/// [`stored_to_profile`]). A `HopRef` hop names a saved host of the same vault too: the
+/// connect refuses one into another vault.
 fn jump_to_stored(j: JumpHost) -> Result<StoredJump, FfiError> {
     let hop_ref = j.hop_ref.map(|hr| StoredHopRef {
         vault_id: hr.vault_id,
@@ -9140,6 +8801,414 @@ fn stored_appearance_id(id: Option<String>) -> Option<String> {
     appearance_id(id).ok().flatten()
 }
 
+/// The body of [`Core::save_password`], on state already locked.
+fn put_password(
+    state: &CoreState,
+    vault_id: &str,
+    item_id: &str,
+    password: &str,
+) -> Result<(), FfiError> {
+    ensure_item_type(
+        &state.storage,
+        vault_id,
+        item_id.as_bytes(),
+        ITEM_TYPE_PASSWORD,
+    )?;
+    let vault = Vault::open(
+        &state.storage,
+        &state.keyset,
+        &resolve_vid(&state.storage, vault_id),
+    )
+    .map_err(FfiError::other)?;
+    vault
+        .put_item_keep_history(item_id.as_bytes(), ITEM_TYPE_PASSWORD, password.as_bytes())
+        .map_err(map_vault_err)?;
+    Ok(())
+}
+
+/// The body of [`Core::delete_item`], on state already locked.
+fn remove_item(state: &mut CoreState, vault_id: &str, item_id: &str) -> Result<(), FfiError> {
+    let vault = Vault::open(
+        &state.storage,
+        &state.keyset,
+        &resolve_vid(&state.storage, vault_id),
+    )
+    .map_err(FfiError::other)?;
+    vault
+        .delete_item(item_id.as_bytes())
+        .map_err(map_vault_err)?;
+    // A4a namespace: the agent stores the key under agent_key_id(vault_id,item_id), not
+    // under the bare item_id — it must be unloaded with the same key, otherwise remove is a no-op and
+    // a revoked/rotated private key stays alive in the agent until the end of the session.
+    state.agent.remove(&agent_key_id(vault_id, item_id));
+    system_agent::forget(state, vault_id, Some(item_id));
+    Ok(())
+}
+
+/// The body of [`Core::save_group`], on state already locked.
+fn put_group(state: &CoreState, vault_id: &str, group: ServerGroup) -> Result<String, FfiError> {
+    if !group.group_id.is_empty() {
+        if group.member_ids.contains(&group.group_id) {
+            return Err(FfiError::other("a group cannot be a member of itself"));
+        }
+        if group.parent_id.as_deref() == Some(group.group_id.as_str()) {
+            return Err(FfiError::other("a group cannot be its own parent"));
+        }
+    }
+    let color = appearance_id(group.color)?;
+    let icon = appearance_id(group.icon)?;
+    let group_id = if group.group_id.is_empty() {
+        mint_item_id(&state.storage, vault_id, &group.label, "group")?
+    } else {
+        group.group_id
+    };
+    ensure_item_type(
+        &state.storage,
+        vault_id,
+        group_id.as_bytes(),
+        ITEM_TYPE_GROUP,
+    )?;
+    let vault = Vault::open(
+        &state.storage,
+        &state.keyset,
+        &resolve_vid(&state.storage, vault_id),
+    )
+    .map_err(FfiError::other)?;
+    let stored = StoredGroup {
+        label: group.label,
+        member_ids: group.member_ids,
+        parent_id: group.parent_id,
+        color,
+        icon,
+        // Forward-compat: carry over the unknown fields of the existing group.
+        extra: preserved_extra::<StoredGroup>(&vault, group_id.as_bytes(), ITEM_TYPE_GROUP, |sg| {
+            sg.extra
+        }),
+    };
+    let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
+    vault
+        .put_item(group_id.as_bytes(), ITEM_TYPE_GROUP, &json)
+        .map_err(map_vault_err)?;
+    Ok(group_id)
+}
+
+/// The body of [`Core::list_connections`], on state already locked.
+fn profiles_in(state: &CoreState, vault_id: &str) -> Result<Vec<ConnectionProfile>, FfiError> {
+    let vault = Vault::open(
+        &state.storage,
+        &state.keyset,
+        &resolve_vid(&state.storage, vault_id),
+    )
+    .map_err(FfiError::other)?;
+    let mut out = Vec::new();
+    for m in vault.list_items().map_err(FfiError::other)? {
+        if m.item_type != ITEM_TYPE_CONNECTION {
+            continue;
+        }
+        if let Some(item) = vault.get_item(&m.item_id).map_err(FfiError::other)? {
+            if let Ok(stored) = serde_json::from_slice::<StoredProfile>(&item.content) {
+                out.push(stored_to_profile(
+                    vault_id,
+                    String::from_utf8_lossy(&m.item_id).to_string(),
+                    stored,
+                ));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The body of [`Core::list_identities`], on state already locked.
+fn identities_in(state: &CoreState, vault_id: &str) -> Result<Vec<Identity>, FfiError> {
+    let vault = Vault::open(
+        &state.storage,
+        &state.keyset,
+        &resolve_vid(&state.storage, vault_id),
+    )
+    .map_err(FfiError::other)?;
+    let mut out = Vec::new();
+    for m in vault.list_items().map_err(FfiError::other)? {
+        if m.item_type != ITEM_TYPE_IDENTITY {
+            continue;
+        }
+        if let Some(item) = vault.get_item(&m.item_id).map_err(FfiError::other)? {
+            if let Ok(stored) = serde_json::from_slice::<StoredIdentity>(&item.content) {
+                out.push(stored.into_identity(String::from_utf8_lossy(&m.item_id).to_string()));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The body of [`Core::list_groups`], on state already locked.
+fn groups_in(state: &CoreState, vault_id: &str) -> Result<Vec<ServerGroup>, FfiError> {
+    let vault = Vault::open(
+        &state.storage,
+        &state.keyset,
+        &resolve_vid(&state.storage, vault_id),
+    )
+    .map_err(FfiError::other)?;
+    let mut out = Vec::new();
+    for m in vault.list_items().map_err(FfiError::other)? {
+        if m.item_type != ITEM_TYPE_GROUP {
+            continue;
+        }
+        if let Some(item) = vault.get_item(&m.item_id).map_err(FfiError::other)? {
+            if let Ok(stored) = serde_json::from_slice::<StoredGroup>(&item.content) {
+                out.push(group_to_public(
+                    String::from_utf8_lossy(&m.item_id).to_string(),
+                    stored,
+                ));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The body of [`Core::get_binding`], on state already locked.
+fn binding_in(
+    state: &CoreState,
+    personal_vault_id: &str,
+    team_vault_id: &str,
+    profile_uid: &str,
+) -> Result<Option<IdentityBinding>, FfiError> {
+    let item_id = binding_item_id(team_vault_id, profile_uid);
+    let vault = Vault::open(
+        &state.storage,
+        &state.keyset,
+        &resolve_vid(&state.storage, personal_vault_id),
+    )
+    .map_err(FfiError::other)?;
+    let Some(item) = vault
+        .get_item(item_id.as_bytes())
+        .map_err(FfiError::other)?
+        .filter(|i| i.item_type == ITEM_TYPE_BINDING)
+    else {
+        return Ok(None);
+    };
+    let stored: StoredBinding = serde_json::from_slice(&item.content).map_err(FfiError::other)?;
+    Ok(Some(stored.into_binding()))
+}
+
+/// How many members vault `vid` has by its verified membership chain; 0 for a
+/// local or not-yet-shared vault.
+fn vault_member_count(state: &CoreState, vid: &[u8]) -> Result<usize, FfiError> {
+    let owner_ed = state.keyset.signing.verifying.to_bytes().to_vec();
+    match state
+        .storage
+        .latest_membership_epoch(vid)
+        .map_err(FfiError::other)?
+    {
+        Some(latest) => Ok(
+            verify_chain_to_epoch(&state.storage, vid, latest, &owner_ed)
+                .map_err(map_vault_err)?
+                .members()
+                .len(),
+        ),
+        None => Ok(0),
+    }
+}
+
+/// The body of [`Core::find_binding_vault`], on state already locked.
+/// `private_only` skips shared (multi-member) vaults: a member's own
+/// identities, and so their bindings, live in a single-member one.
+fn binding_vault_in(
+    state: &CoreState,
+    team_vault_id: &str,
+    profile_uid: &str,
+    private_only: bool,
+) -> Result<Option<String>, FfiError> {
+    let item_id = binding_item_id(team_vault_id, profile_uid);
+    for rec in state.storage.list_vaults().map_err(FfiError::other)? {
+        // A vault whose membership chain does not verify against this
+        // account (one a teammate created) is not a private one of ours.
+        if private_only && !vault_member_count(state, &rec.vault_id).is_ok_and(|n| n <= 1) {
+            continue;
+        }
+        if let Some(item) = state
+            .storage
+            .get_item(&rec.vault_id, item_id.as_bytes())
+            .map_err(FfiError::other)?
+        {
+            if item.item_type == ITEM_TYPE_BINDING && !item.tombstone {
+                return Ok(Some(match rec.sync_target {
+                    SyncTarget::Cloud => hex::encode(&rec.vault_id),
+                    SyncTarget::Local => String::from_utf8_lossy(&rec.vault_id).to_string(),
+                    // non_exhaustive: a future target is treated like a local id.
+                    _ => String::from_utf8_lossy(&rec.vault_id).to_string(),
+                }));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// The body of [`Core::set_binding`], on state already locked.
+fn put_binding(
+    state: &CoreState,
+    personal_vault_id: &str,
+    binding: IdentityBinding,
+    allow_rebind: bool,
+) -> Result<(), FfiError> {
+    let IdentityBinding {
+        team_vault_id,
+        profile_uid,
+        identity_item_id,
+        destination_pin,
+    } = binding;
+    if team_vault_id.is_empty() || profile_uid.is_empty() {
+        return Err(FfiError::other(
+            "binding requires non-empty team_vault_id and profile_uid",
+        ));
+    }
+    let item_id = binding_item_id(&team_vault_id, &profile_uid);
+    ensure_item_type(
+        &state.storage,
+        personal_vault_id,
+        item_id.as_bytes(),
+        ITEM_TYPE_BINDING,
+    )?;
+    let vault = Vault::open(
+        &state.storage,
+        &state.keyset,
+        &resolve_vid(&state.storage, personal_vault_id),
+    )
+    .map_err(FfiError::other)?;
+    // First-bind guard: we do not silently rebind to a changed destination.
+    if !allow_rebind {
+        if let Some(existing) = vault
+            .get_item(item_id.as_bytes())
+            .map_err(FfiError::other)?
+            .filter(|i| i.item_type == ITEM_TYPE_BINDING)
+            .and_then(|i| serde_json::from_slice::<StoredBinding>(&i.content).ok())
+        {
+            if existing.destination_pin != destination_pin {
+                return Err(FfiError::other(format!(
+                    "binding already pinned to {}; re-bind to {} requires \
+                     explicit confirmation (allow_rebind)",
+                    existing.destination_pin, destination_pin
+                )));
+            }
+        }
+    }
+    let mut stored = StoredBinding {
+        team_vault_id,
+        profile_uid,
+        identity_item_id,
+        destination_pin,
+        extra: BTreeMap::new(),
+    };
+    // Forward-compat: carry over the unknown fields of the existing binding.
+    stored.extra =
+        preserved_extra::<StoredBinding>(&vault, item_id.as_bytes(), ITEM_TYPE_BINDING, |sb| {
+            sb.extra
+        });
+    let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
+    vault
+        .put_item(item_id.as_bytes(), ITEM_TYPE_BINDING, &json)
+        .map_err(map_vault_err)?;
+    Ok(())
+}
+
+/// The body of [`Core::save_connection`], on state already locked: writes the
+/// host and returns its id and uid (both minted when empty).
+fn put_connection(
+    state: &CoreState,
+    vault_id: &str,
+    profile: ConnectionProfile,
+) -> Result<(String, String), FfiError> {
+    let ConnectionProfile {
+        profile_id,
+        uid,
+        label,
+        host,
+        port,
+        user,
+        auth,
+        username_template,
+        jumps,
+        proxy,
+        tags,
+        startup_snippet_ids,
+        record_sessions,
+        agent_forward,
+        color,
+        icon,
+    } = profile;
+    let profile_id = if profile_id.is_empty() {
+        mint_item_id(&state.storage, vault_id, &label, "host")?
+    } else {
+        profile_id
+    };
+    let color = appearance_id(color)?;
+    let icon = appearance_id(icon)?;
+    // Empty uid = creating a new profile → mint an immutable id. A non-empty one
+    // (an edit: the UI returned the uid from get_connection) is kept as-is — the uid does not
+    // change when host/label change.
+    let uid = if uid.is_empty() {
+        mint_profile_uid()
+    } else {
+        uid
+    };
+    let (key_item_id, password_item_id, personal, system_agent_public_key) = match auth {
+        ProfileAuth::Key { key_item_id } => (Some(key_item_id), None, false, None),
+        ProfileAuth::VaultPassword { password_item_id } => {
+            (None, Some(password_item_id), false, None)
+        }
+        ProfileAuth::PromptPassword => (None, None, false, None),
+        ProfileAuth::Personal => (None, None, true, None),
+        ProfileAuth::SystemAgent { public_key } => (None, None, false, Some(public_key)),
+    };
+    let mut stored = StoredProfile {
+        uid: Some(uid.clone()),
+        label,
+        host,
+        port,
+        user,
+        key_item_id,
+        password_item_id,
+        personal,
+        username_template,
+        jumps: jumps
+            .into_iter()
+            .map(jump_to_stored)
+            .collect::<Result<_, _>>()?,
+        proxy: proxy.map(proxy_to_stored).transpose()?,
+        tags,
+        startup_snippet_ids,
+        record_sessions,
+        agent_forward,
+        system_agent_public_key,
+        color,
+        icon,
+        extra: BTreeMap::new(),
+    };
+    ensure_item_type(
+        &state.storage,
+        vault_id,
+        profile_id.as_bytes(),
+        ITEM_TYPE_CONNECTION,
+    )?;
+    let vault = Vault::open(
+        &state.storage,
+        &state.keyset,
+        &resolve_vid(&state.storage, vault_id),
+    )
+    .map_err(FfiError::other)?;
+    // Forward-compat: carry over the unknown fields of the existing profile.
+    stored.extra = preserved_extra::<StoredProfile>(
+        &vault,
+        profile_id.as_bytes(),
+        ITEM_TYPE_CONNECTION,
+        |sp| sp.extra,
+    );
+    let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
+    vault
+        .put_item(profile_id.as_bytes(), ITEM_TYPE_CONNECTION, &json)
+        .map_err(map_vault_err)?;
+    Ok((profile_id, uid))
+}
+
 /// Mints a new immutable profile uid: 16 cryptographically random bytes in hex.
 /// RANDOM (not derived from item_id) — a recycled-after-tombstone
 /// item_id (the ssh-config import takes the alias as the id) won't collide in uid with an old
@@ -9252,6 +9321,21 @@ fn stored_to_profile(vault_id: &str, profile_id: String, s: StoredProfile) -> Co
         color: stored_appearance_id(s.color),
         icon: stored_appearance_id(s.icon),
     }
+}
+
+/// Whether reference hop `hop` names a saved host of the connecting host's own
+/// vault. The core stamps that vault on every hop's placeholder auth when it
+/// reads a host ([`stored_to_profile`]), and the editors write the same, so a
+/// reference into any other vault is refused rather than resolved to that
+/// vault's credential: synced data from a team vault must not route a
+/// connection through, and so log in with, a host of a member's personal
+/// vault.
+fn hop_ref_in_own_vault(storage: &Storage, hop: &JumpHost, hop_ref: &HopRef) -> bool {
+    let own = match &hop.auth {
+        AuthMethod::Agent { vault_id, .. } | AuthMethod::VaultPassword { vault_id, .. } => vault_id,
+        AuthMethod::Password { .. } | AuthMethod::SystemAgent { .. } => return false,
+    };
+    resolve_vid(storage, own) == resolve_vid(storage, &hop_ref.vault_id)
 }
 
 /// Resolves a bastion profile by (vault_id, profile_uid) for a host-chain (B2.2):
