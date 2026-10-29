@@ -1218,6 +1218,8 @@ pub async fn save_host(
         new_password: new_password.map(zeroize::Zeroizing::new),
         group: group.into(),
         identity: identity.map(Into::into),
+        // The app moves a kept pin through its own link dialog.
+        move_identity_pin: false,
     };
     let saved = blocking(move || core.save_host(&vault_id, save)).await?;
     Ok(saved.into())
