@@ -176,6 +176,11 @@ pub struct HostSave {
     /// For a personal host: the identity to link. `None` re-pins the identity
     /// already linked to an existing host, if any, from a private vault.
     pub identity: Option<IdentityLink>,
+    /// Move the identity's pin to where the host points now even when it no
+    /// longer names where the host pointed before this save (the user has
+    /// seen both addresses and confirmed the move). `false` keeps such a pin
+    /// ([`HostSaveGap::IdentityPinKept`]).
+    pub move_identity_pin: bool,
 }
 
 /// What a save could not finish after the host itself was stored.
@@ -280,6 +285,7 @@ fn save_locked(state: &CoreState, vault_id: &str, save: HostSave) -> Result<Host
         new_password,
         group,
         identity,
+        move_identity_pin,
     } = save;
     let hosts = profiles_in(state, vault_id)?;
     let before = hosts
@@ -298,7 +304,7 @@ fn save_locked(state: &CoreState, vault_id: &str, save: HostSave) -> Result<Host
     let pin = destination(&profile);
     let pinned_before = before.as_ref().map(destination);
     let own_password = if new_password.is_some() {
-        own_password_item(state, vault_id, before.as_ref(), &hosts)?
+        own_password_item(state, vault_id, before.as_ref(), &profile, &hosts)?
     } else {
         None
     };
@@ -322,6 +328,7 @@ fn save_locked(state: &CoreState, vault_id: &str, save: HostSave) -> Result<Host
             link,
             &pin,
             pinned_before.as_deref(),
+            move_identity_pin,
         )
     });
     Ok(HostSaved {
@@ -351,7 +358,8 @@ struct Linked {
 /// points, so the pin follows it, but only from where the host pointed before
 /// this save (`pinned_before`). A pin that already differs was left behind
 /// by an earlier change of the host (a team member's, maybe): moving it here
-/// would wave that redirect through, so it stays, and the gap says so.
+/// would wave that redirect through, so it stays, and the gap says so;
+/// unless `move_pin`: the user confirmed the move on purpose.
 fn pin_identity(
     state: &CoreState,
     vault_id: &str,
@@ -359,12 +367,13 @@ fn pin_identity(
     link: Link,
     pin: &str,
     pinned_before: Option<&str>,
+    move_pin: bool,
 ) -> Linked {
     let Link { to, existing } = link;
     let kept = existing
         .as_ref()
         .map(|b| b.destination_pin.clone())
-        .filter(|was| pinned_before.is_some_and(|then| then != was.as_str()));
+        .filter(|was| !move_pin && pinned_before.is_some_and(|then| then != was.as_str()));
     let new_pin = kept.clone().unwrap_or_else(|| pin.to_owned());
     let unchanged = existing
         .as_ref()
@@ -392,7 +401,9 @@ fn pin_identity(
             message: format!(
                 "your identity is still pinned to {pinned}, not to {pin}: the host had \
                  been pointed elsewhere before this save, so connecting with your \
-                 identity is refused as redirected until you link it again"
+                 identity is refused as redirected until you move the pin on purpose \
+                 (`unissh hosts edit <host> --move-pin`, or link the identity again in \
+                 the app)"
             ),
             pinned,
         });
@@ -582,12 +593,14 @@ fn link_to_pin(
 
 /// The stored password a typed one becomes the new version of: the one the
 /// host logs in with, when it is a live password item nothing else in the
-/// vault uses (no other host, hop, proxy or identity). `None` means a new
-/// secret: a password shared with something else is left as it is.
+/// vault uses (no other host, hop, proxy or identity, nor the host's own
+/// proxy or jump hops as `profile` now has them). `None` means a new secret:
+/// a password shared with something else is left as it is.
 fn own_password_item(
     state: &CoreState,
     vault_id: &str,
     before: Option<&ConnectionProfile>,
+    profile: &ConnectionProfile,
     hosts: &[ConnectionProfile],
 ) -> Result<Option<String>, FfiError> {
     let Some(ConnectionProfile {
@@ -610,13 +623,18 @@ fn own_password_item(
     if !live {
         return Ok(None);
     }
-    // The host itself is left out: its own login is what is being changed,
-    // and a hop naming it follows its credential anyway.
-    let others: Vec<ConnectionProfile> = hosts
+    // Only the host's own login is left out: that is what is being changed,
+    // and a hop naming the host follows its credential anyway. Its proxy and
+    // inline hops, as saved now, still count.
+    let mut others: Vec<ConnectionProfile> = hosts
         .iter()
         .filter(|h| h.profile_id != *profile_id)
         .cloned()
         .collect();
+    others.push(ConnectionProfile {
+        auth: ProfileAuth::PromptPassword,
+        ..profile.clone()
+    });
     let identities = identities_in(state, vault_id)?;
     let storage = &state.storage;
     let used = usage_in(
@@ -720,8 +738,8 @@ mod tests {
     use super::{HostGroup, HostRule, HostSave, HostSaveGap, IdentityLink};
     use crate::{
         binding_item_id, resolve_vid, AuthMethod, BindingResolution, ConnectionProfile, Core,
-        FfiError, HopRef, Identity, JumpHost, ProfileAuth, ServerGroup, Vault, ITEM_TYPE_GROUP,
-        ITEM_TYPE_PASSWORD,
+        FfiError, HopRef, Identity, JumpHost, ProfileAuth, ProxyConfig, ProxyKind, ProxyPassword,
+        ServerGroup, Vault, ITEM_TYPE_GROUP, ITEM_TYPE_PASSWORD,
     };
 
     /// A core with vault `v` (the hosts) and vault `p` (an identity `me`).
@@ -787,6 +805,7 @@ mod tests {
             new_password: None,
             group: HostGroup::Unchanged,
             identity: None,
+            move_identity_pin: false,
         }
     }
 
@@ -1417,6 +1436,60 @@ mod tests {
             ),
             "redirect let through"
         );
+    }
+
+    /// A save that moves the pin on purpose re-pins an identity the host was
+    /// redirected from to where it points now.
+    #[test]
+    fn a_save_that_moves_the_pin_re_pins_a_redirected_identity() {
+        let (core, _dir) = core();
+        let (id, uid) = linked(&core);
+        let mut p = stored(&core, &id);
+        p.host = "new.example".into();
+        core.save_connection("v".into(), p).unwrap();
+        let save = HostSave {
+            move_identity_pin: true,
+            ..plain(stored(&core, &id))
+        };
+        let s = core.save_host("v", save).unwrap();
+        assert!(s.identity_linked, "pin not moved: {:?}", s.unfinished);
+        assert_eq!(
+            binding_at(&core, &uid, "new.example"),
+            BindingResolution::Matched {
+                identity_item_id: "me".into()
+            }
+        );
+    }
+
+    /// A password the host's own proxy also uses is shared: the typed one
+    /// becomes a new secret and the proxy's stays as it was.
+    #[test]
+    fn a_password_the_hosts_proxy_uses_is_not_rewritten() {
+        let (core, _dir) = core();
+        core.save_password("v".into(), "pw".into(), "old".into())
+            .unwrap();
+        let mut p = host(
+            "web",
+            ProfileAuth::VaultPassword {
+                password_item_id: "pw".into(),
+            },
+        );
+        p.proxy = Some(ProxyConfig {
+            kind: ProxyKind::Socks5,
+            host: "proxy.example".into(),
+            port: 1080,
+            username: Some("u".into()),
+            password: Some(ProxyPassword::Vault {
+                vault_id: "v".into(),
+                password_item_id: "pw".into(),
+            }),
+        });
+        let id = core.save_host("v", plain(p)).unwrap().profile_id;
+        let s = core
+            .save_host("v", typed(stored(&core, &id), "new"))
+            .unwrap();
+        assert_ne!(s.password_item_id.as_deref(), Some("pw"));
+        assert_eq!(core.get_password("v".into(), "pw".into()).unwrap(), "old");
     }
 
     /// A link that cannot be written leaves the host saved and says so.

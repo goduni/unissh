@@ -137,7 +137,7 @@ save_connection(vault_id, profile) -> profile_id / list_connections(vault_id)
 //   An empty profile_id (and group_id / snippet_id in save_group / save_snippet) is a new item:
 //   the core mints `slug(label)-<millis>` (collision-checked in the vault, tombstones included)
 //   and returns it. Clients do not mint ids.
-save_host(vault_id, HostSave{profile, new_password?, group, identity?}) -> HostSaved   // Rust-only
+save_host(vault_id, HostSave{profile, new_password?, group, identity?, move_identity_pin}) -> HostSaved   // Rust-only
 //   The one host-save path of the app's host editor and `unissh hosts add|edit`: checks the
 //   HostRule set (label, address, user unless personal; a hop by address has one; a referenced
 //   hop is another host of the same vault, found by uid, logging in with Key / VaultPassword /
@@ -147,7 +147,8 @@ save_host(vault_id, HostSave{profile, new_password?, group, identity?}) -> HostS
 //   never a delete), the host and its one group (HostGroup Unchanged|Ungrouped|Existing|New) in
 //   one storage transaction; the identity binding pinned to where the host points (given, or the
 //   one already linked from a single-member vault), moved only when its pin still names where
-//   the host pointed before (else kept: HostSaveGap::IdentityPinKept). A link that fails leaves
+//   the host pointed before (else kept: HostSaveGap::IdentityPinKept), or when
+//   move_identity_pin says the user confirmed the move. A link that fails leaves
 //   the host saved: HostSaved.unfinished lists it; HostSaved.binding_vault_id names the vault a
 //   binding was written to. The uid is the core's (kept on edit, minted for a new host).
 //   Referenced hops are stored in the placeholder shape under the host's vault id, inline hop

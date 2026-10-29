@@ -8434,7 +8434,8 @@ fn backup_keyset_sidecar(path: &std::path::Path) {
 ///
 /// The method's `vault_id` is dropped here: a stored jump is vault-relative (the item
 /// lives in the profile's vault, the same `vault_id` is restored on read in
-/// [`stored_to_profile`]). Cross-vault hops are a separate model (`HopRef`).
+/// [`stored_to_profile`]). A `HopRef` hop names a saved host of the same vault too: the
+/// connect refuses one into another vault.
 fn jump_to_stored(j: JumpHost) -> Result<StoredJump, FfiError> {
     let hop_ref = j.hop_ref.map(|hr| StoredHopRef {
         vault_id: hr.vault_id,
@@ -8814,7 +8815,9 @@ fn binding_vault_in(
 ) -> Result<Option<String>, FfiError> {
     let item_id = binding_item_id(team_vault_id, profile_uid);
     for rec in state.storage.list_vaults().map_err(FfiError::other)? {
-        if private_only && vault_member_count(state, &rec.vault_id)? > 1 {
+        // A vault whose membership chain does not verify against this
+        // account (one a teammate created) is not a private one of ours.
+        if private_only && !vault_member_count(state, &rec.vault_id).is_ok_and(|n| n <= 1) {
             continue;
         }
         if let Some(item) = state
