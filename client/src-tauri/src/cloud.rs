@@ -11,7 +11,7 @@
 //! STANDARD, as on the server. The Bearer token is held in-process (access — in memory,
 //! refresh — in the OS keychain); raw keyset/signature blobs are built exclusively by the core.
 
-pub use unissh_cloud::{client, identity, onboard, recovery, transport};
+pub use unissh_cloud::{client, identity, onboard, recovery, shared, transport};
 
 pub mod commands;
 pub mod config;

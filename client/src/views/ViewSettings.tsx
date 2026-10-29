@@ -39,6 +39,7 @@ import { useWindowControls } from "@/shell/WindowChrome";
 import type { ControlsSide } from "@/shell/windowControls";
 import { exportPath } from "@/support/paths";
 import { ServerVaultsSection } from "./ServerVaultsSection";
+import { OwnFingerprintRow } from "./SharedVaultTrust";
 import { Modal } from "@/components/Modal";
 import type { IconName } from "@/components/primitives";
 import { forgetTerminalWorkspace, moveTerminalWorkspace, useApp } from "@/store/app";
@@ -5302,6 +5303,8 @@ function SettingsCloud() {
           onClose={() => setEditingProfile(false)}
         />
       )}
+
+      <OwnFingerprintRow />
 
       <SectionLabel>{t("serverCloud.sectionDevices")}</SectionLabel>
       <SettingRow title={t("serverCloud.addDevice")} desc={t("serverCloud.addDeviceDesc")}>

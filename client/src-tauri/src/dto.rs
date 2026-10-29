@@ -959,6 +959,158 @@ pub struct ServerVault {
     pub local_name: Option<String>,
 }
 
+/// Where a vault shared with this account stands on this device, as the core's
+/// inspection of its membership chain and this device's pin say.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SharedVaultState {
+    /// No owner pinned here yet: the user has to confirm the owner's fingerprint.
+    Waiting,
+    /// The owner is pinned here, the vault is not fetched yet.
+    TrustedNotFetched,
+    /// ANOTHER owner is pinned here than the one the server now presents. Never
+    /// offer trust: the user must contact the owner.
+    OwnerChanged,
+    /// The vault's membership could not be verified (broken chain, no grant to
+    /// this account, a page that could not be read).
+    Unverifiable,
+}
+
+/// A vault a teammate shared with this account that is not on this device yet.
+/// Public facts only: the fingerprint of the key that created it (grouped by
+/// four, as the core formats it) and what the server CLAIMS about its owner,
+/// which is never verified and must be shown as a claim. No keys, no secrets.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingSharedVault {
+    /// hex vault id (validated: 32 hex digits, lowercase).
+    pub vault_id: String,
+    pub state: SharedVaultState,
+    /// Grouped fingerprint of the vault creator's key; `None` when unverifiable.
+    pub fingerprint: Option<String>,
+    /// This account's role at the chain's latest epoch; `None` when unverifiable.
+    pub role: Option<MemberRole>,
+    /// The handle the server's directory lists for the creator's key. UNVERIFIED.
+    pub claimed_handle: Option<String>,
+    /// The display name the server's directory lists for it. UNVERIFIED.
+    pub claimed_name: Option<String>,
+    /// Why the vault cannot be verified (`Unverifiable` only).
+    pub error: Option<String>,
+}
+
+/// The shared vaults waiting on this device, plus how many catalog entries the
+/// server sent under a malformed id (ignored, never shown).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingSharedVaults {
+    pub vaults: Vec<PendingSharedVault>,
+    pub malformed: u32,
+}
+
+/// What a trust attempt did (mirror of `ffi::FfiTrustOutcome`).
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TrustOutcome {
+    /// Pinned now: pull the vault next.
+    Trusted,
+    /// This owner was pinned already: pull the vault next.
+    AlreadyTrusted,
+    /// The fingerprint given is not the creator's. Nothing was pinned.
+    FingerprintMismatch,
+    /// Another owner is pinned here. Nothing changed.
+    PinnedToAnotherOwner,
+}
+
+impl From<ffi::FfiTrustOutcome> for TrustOutcome {
+    fn from(o: ffi::FfiTrustOutcome) -> Self {
+        match o {
+            ffi::FfiTrustOutcome::Trusted => Self::Trusted,
+            ffi::FfiTrustOutcome::AlreadyTrusted => Self::AlreadyTrusted,
+            ffi::FfiTrustOutcome::FingerprintMismatch => Self::FingerprintMismatch,
+            ffi::FfiTrustOutcome::PinnedToAnotherOwner => Self::PinnedToAnotherOwner,
+        }
+    }
+}
+
+/// At most this many characters of a server-claimed handle or name are passed
+/// on: enough to recognise someone, not a page of text (as the CLI does).
+const CLAIM_CHARS: usize = 64;
+
+/// Whether a character of a server-claimed handle or name may be shown: not a
+/// C0, DEL or C1 control, not a bidi embedding, override, isolate or mark
+/// (U+061C, U+200E/F, U+202A–U+202E, U+2066–U+2069), and not an invisible
+/// format character (U+00AD, U+200B–U+200D, U+2060–U+2064, U+FEFF): any of
+/// them could reorder or hide part of a name. The same set as the CLI's
+/// `tty::one_line`.
+fn shown(c: char) -> bool {
+    !c.is_control()
+        && !matches!(
+            c,
+            '\u{ad}'
+                | '\u{61c}'
+                | '\u{200b}'..='\u{200f}'
+                | '\u{202a}'..='\u{202e}'
+                | '\u{2060}'..='\u{2064}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{feff}'
+        )
+}
+
+/// A server-claimed handle or name as it may be shown: on one line, without
+/// the characters [`shown`] drops, trimmed, and cut at [`CLAIM_CHARS`] with
+/// "…" marking the cut. `None` when nothing is left to show.
+fn capped(claim: &str) -> Option<String> {
+    let cleaned: String = claim.chars().filter(|c| shown(*c)).collect();
+    let mut chars = cleaned.trim().chars();
+    let mut out: String = chars.by_ref().take(CLAIM_CHARS).collect();
+    if out.is_empty() {
+        return None;
+    }
+    if chars.next().is_some() {
+        out.push('…');
+    }
+    Some(out)
+}
+
+impl From<unissh_cloud::shared::PendingVault> for PendingSharedVault {
+    fn from(p: unissh_cloud::shared::PendingVault) -> Self {
+        let claimed_handle = p
+            .claimed_owner
+            .as_ref()
+            .and_then(|d| d.handle.as_deref())
+            .and_then(capped);
+        let claimed_name = p
+            .claimed_owner
+            .as_ref()
+            .and_then(|d| d.display_name.as_deref())
+            .and_then(capped);
+        match p.inspected {
+            Ok(info) => Self {
+                vault_id: p.vault_id,
+                state: match info.trust {
+                    ffi::FfiVaultTrust::NotPinned => SharedVaultState::Waiting,
+                    ffi::FfiVaultTrust::Pinned => SharedVaultState::TrustedNotFetched,
+                    ffi::FfiVaultTrust::PinnedToAnotherOwner => SharedVaultState::OwnerChanged,
+                },
+                fingerprint: Some(ffi::grouped_fingerprint(info.fingerprint)),
+                role: Some(info.my_role.into()),
+                claimed_handle,
+                claimed_name,
+                error: None,
+            },
+            Err(error) => Self {
+                vault_id: p.vault_id,
+                state: SharedVaultState::Unverifiable,
+                fingerprint: None,
+                role: None,
+                claimed_handle: None,
+                claimed_name: None,
+                error: Some(error),
+            },
+        }
+    }
+}
+
 // ---------- membership / sharing ----------
 
 /// Cryptographic vault role (mirror of `ffi::FfiMemberRole`). Used both as input
@@ -2164,5 +2316,37 @@ impl From<ffi::SystemAgentKeyFfi> for SystemAgentKey {
             comment: k.comment,
             algorithm: k.algorithm,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{capped, CLAIM_CHARS};
+
+    /// A server-claimed name loses the controls and bidi/invisible characters
+    /// that could reorder or hide part of it, and a long one says it was cut.
+    #[test]
+    fn a_claimed_name_is_cleaned_and_marks_a_cut() {
+        assert_eq!(
+            capped("Al\u{202e}ice\u{200b}\u{1b}[2J\n").as_deref(),
+            Some("Alice[2J"),
+            "controls, bidi overrides and zero-width characters are dropped"
+        );
+        assert_eq!(
+            capped("\u{2066}\u{feff} "),
+            None,
+            "nothing visible is no name"
+        );
+        let fits = "a".repeat(CLAIM_CHARS);
+        assert_eq!(
+            capped(&fits),
+            Some(fits.clone()),
+            "a name that fits is kept whole"
+        );
+        assert_eq!(
+            capped(&format!("{fits}b")),
+            Some(format!("{fits}…")),
+            "a cut name is marked"
+        );
     }
 }

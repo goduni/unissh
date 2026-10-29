@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use crate::cloud::config::{new_server_id, ServerConfig, SpaceEntry};
 use crate::cloud::transport::HttpSyncTransport;
-use crate::cloud::{client, identity, oidc, onboard, tokens, ServerList, ServerStatus};
+use crate::cloud::{client, identity, oidc, onboard, shared, tokens, ServerList, ServerStatus};
 use crate::dto;
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
@@ -980,6 +980,58 @@ pub async fn server_pull_vault(
     Ok(report.into())
 }
 
+/// The vaults a teammate shared with this account that are not on this device yet
+/// (from a server, defaults to active), each inspected by the core: the
+/// fingerprint of the key that created it, this account's role, and what this
+/// device has pinned for it. The owner's handle/name come from the server's
+/// directory and are a CLAIM, never verified. Vaults this account created are
+/// left out (a sync brings them). Writes nothing. Requires unlock and a session.
+#[tauri::command]
+pub async fn server_pending_shared_vaults(
+    server_id: Option<String>,
+    state: State<'_, AppState>,
+) -> ApiResult<dto::PendingSharedVaults> {
+    let cfg = require_config(&state, server_id.as_deref())?;
+    let access = require_access(&state, server_id.as_deref())?;
+    let core = state.core.clone();
+    blocking_api(move || {
+        let list =
+            shared::pending_shared_vaults(&core, &cfg.base_url, &access).map_err(ApiError::from)?;
+        Ok(dto::PendingSharedVaults {
+            vaults: list.vaults.into_iter().map(Into::into).collect(),
+            malformed: u32::try_from(list.malformed).unwrap_or(u32::MAX),
+        })
+    })
+    .await
+}
+
+/// **Trust the owner of a vault shared with this account** (on a server, defaults to
+/// active): the core reads the vault's membership from the server, compares
+/// `expected_fingerprint` with the fingerprint of the key that created it and pins
+/// that key in one step. `expected_fingerprint` is REQUIRED — the one the owner gave
+/// the user, or the one the app displayed and the user confirmed; nothing pins
+/// "whatever the server presents". A mismatch pins nothing. Pull the vault after
+/// `trusted`/`alreadyTrusted` (`server_pull_vault`). Requires unlock and a session.
+#[tauri::command]
+pub async fn server_trust_shared_vault(
+    vault_id: String,
+    expected_fingerprint: String,
+    server_id: Option<String>,
+    state: State<'_, AppState>,
+) -> ApiResult<dto::TrustOutcome> {
+    let cfg = require_config(&state, server_id.as_deref())?;
+    let access = require_access(&state, server_id.as_deref())?;
+    let core = state.core.clone();
+    blocking_api(move || {
+        let transport = HttpSyncTransport::new(cfg.base_url, access);
+        transport
+            .trust_vault(&core, &vault_id, &expected_fingerprint)
+            .map(Into::into)
+            .map_err(ApiError::from)
+    })
+    .await
+}
+
 /// **Discard the unpushable edits of ONE vault** (by hex id; the server defaults to
 /// the active one): drops this account's edits there that no push can deliver (a
 /// Viewer's edit made before the core refused them, an edit the server refuses —
@@ -1180,23 +1232,6 @@ pub async fn server_confirm_member_pin(
     let core = state.core.clone();
     blocking_api(move || {
         core.confirm_member_pin(account_id, ed25519_pub_hex)
-            .map_err(ApiError::from)
-    })
-    .await
-}
-
-/// Pin (TOFU) the genesis-owner of a teammate-created vault at share-accept (A0).
-/// Without it the vault's records fail authority verification on sync. Re-pinning
-/// the same key is ok; a different key errors (anti-rebind).
-#[tauri::command]
-pub async fn server_pin_vault_genesis_owner(
-    vault_id: String,
-    ed25519_pub_hex: String,
-    state: State<'_, AppState>,
-) -> ApiResult<()> {
-    let core = state.core.clone();
-    blocking_api(move || {
-        core.pin_vault_genesis_owner(vault_id, ed25519_pub_hex)
             .map_err(ApiError::from)
     })
     .await

@@ -449,6 +449,20 @@ pub async fn is_unlocked(state: State<'_, AppState>) -> ApiResult<bool> {
     blocking_ok(move || core.is_unlocked()).await
 }
 
+/// This account's own fingerprint, grouped by four as the core formats it: what a
+/// teammate compares before trusting a vault this account shared with them. Not a
+/// secret; works locked (read from the public half of the keyset file).
+#[tauri::command]
+pub async fn own_fingerprint(state: State<'_, AppState>) -> ApiResult<String> {
+    let core = state.core.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        core.own_fingerprint()
+            .map(unissh_ffi::grouped_fingerprint)
+            .map_err(ApiError::from)
+    })
+    .await?
+}
+
 /// Set the SSH keepalive interval (seconds) for subsequent connections; 0 = off.
 /// Cheap (an atomic store), so no need to hop onto the blocking pool.
 #[tauri::command]
