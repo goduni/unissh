@@ -755,6 +755,9 @@ fn ready(home: Home, credentials: &Credentials, offline: bool) -> Res<Device> {
     let device = unlocked(home, credentials)?;
     if !offline {
         server::sync_if_stale(&device);
+        // What is left out before the command writes anything: the sync after
+        // a write tells the write from these.
+        device.note_left_out();
     }
     Ok(device)
 }

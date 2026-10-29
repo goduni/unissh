@@ -1571,8 +1571,11 @@ pub struct FfiSyncReport {
 /// What [`Core::discard_unpushable_changes`] did.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct FfiDiscardReport {
-    /// This account's edits that were dropped.
+    /// This account's edits that were dropped: the server's copy replaced
+    /// each, or the item is gone (`removed`).
     pub dropped: u32,
+    /// Of `dropped`, the items the server holds nothing of: removed.
+    pub removed: u32,
     /// Other members' items that are no longer sent (kept as they are).
     pub released: u32,
     /// What putting back the server's copy of the vault applied.
@@ -1602,6 +1605,8 @@ pub struct FfiUnpushableItem {
     pub item_id: String,
     /// The item's type (the core's `item_type` value).
     pub item_type: u32,
+    /// The version left out (a later edit of the item is a new version).
+    pub version: u64,
     /// Whether this account made the edit: only those can be discarded
     /// ([`Core::discard_unpushable_changes`]).
     pub mine: bool,
@@ -3238,14 +3243,14 @@ impl Core {
                 push_err: Mutex::new(None),
             };
             let vid = resolve_vid(&state.storage, &vault_id);
-            let parsed: Vec<(u64, SyncObject)> = server_copy
-                .iter()
-                .enumerate()
-                .filter_map(|(i, b)| SyncObject::from_bytes(b).ok().map(|o| (i as u64 + 1, o)))
-                .collect();
-            let done =
-                unissh_sync::discard_unpushable(&mut adapter, &state.storage, &ctx, &vid, parsed)
-                    .map_err(|e| push_failure(&adapter, e))?;
+            let done = unissh_sync::discard_unpushable(
+                &mut adapter,
+                &state.storage,
+                &ctx,
+                &vid,
+                &server_copy,
+            )
+            .map_err(|e| push_failure(&adapter, e))?;
             for u in &done.dropped {
                 let item_id = String::from_utf8_lossy(&u.item_id);
                 state.agent.remove(&agent_key_id(&vault_id, &item_id));
@@ -3256,6 +3261,7 @@ impl Core {
             }
             Ok(FfiDiscardReport {
                 dropped: count_u32(done.dropped.len()),
+                removed: count_u32(done.removed.len()),
                 released: count_u32(done.released.len()),
                 restored: FfiSyncReport {
                     applied: done.pulled.applied,
@@ -3267,6 +3273,24 @@ impl Core {
                     unpushable: Vec::new(),
                 },
             })
+        })
+    }
+
+    /// The edits no push delivers as of now, in every vault bound to a server
+    /// ([`FfiSyncReport::unpushable`] without a sync): the remembered server
+    /// refusals still current, and the edits whose author may not write them
+    /// by this device's check. Reads only, makes no request — what a caller
+    /// takes before an edit, to tell the edit from the ones already left out
+    /// in the report of the sync that follows it. Requires unlock.
+    pub fn unpushable_changes(&self) -> Result<Vec<FfiUnpushableItem>, FfiError> {
+        self.with_state(|state| {
+            let own = state.keyset.signing.verifying.to_bytes().to_vec();
+            let items =
+                unissh_sync::unpushable_items(&state.storage, &own).map_err(map_sync_err)?;
+            Ok(items
+                .into_iter()
+                .map(|u| ffi_unpushable(state, u, &own))
+                .collect())
         })
     }
 
@@ -8705,6 +8729,23 @@ fn map_sync_err(e: unissh_sync::SyncError) -> FfiError {
     FfiError::Other { msg: e.to_string() }
 }
 
+/// An item no push delivers, named for the UI; `own` is the account's pubkey.
+fn ffi_unpushable(state: &CoreState, u: unissh_sync::Unpushable, own: &[u8]) -> FfiUnpushableItem {
+    FfiUnpushableItem {
+        // The same id form `list_vaults` returns: hex for a cloud vault.
+        vault_id: hex::encode(&u.vault_id),
+        vault_name: report_vault_name(state, &u.vault_id),
+        item_id: String::from_utf8_lossy(&u.item_id).into_owned(),
+        item_type: u.item_type,
+        version: u.version,
+        mine: u.author_pubkey == own,
+        reason: match u.reason {
+            UnpushableReason::NotAuthorized => FfiUnpushableReason::NotAuthorized,
+            UnpushableReason::ServerRefused => FfiUnpushableReason::ServerRefused,
+        },
+    }
+}
+
 /// A failed push as the caller hears it: one that failed on the transport
 /// reports what the transport said (for a size or permission refusal: the
 /// server's own message). Any other failure is the engine's, whatever an
@@ -8772,17 +8813,7 @@ fn push_to_tenant(
     let unpushable = report
         .unpushable
         .into_iter()
-        .map(|u| FfiUnpushableItem {
-            vault_id: hex::encode(&u.vault_id),
-            vault_name: report_vault_name(state, &u.vault_id),
-            item_id: String::from_utf8_lossy(&u.item_id).into_owned(),
-            item_type: u.item_type,
-            mine: u.author_pubkey == ctx.genesis_owner,
-            reason: match u.reason {
-                UnpushableReason::NotAuthorized => FfiUnpushableReason::NotAuthorized,
-                UnpushableReason::ServerRefused => FfiUnpushableReason::ServerRefused,
-            },
-        })
+        .map(|u| ffi_unpushable(state, u, &ctx.genesis_owner))
         .collect();
     Ok((report.pushed, too_large, unpushable))
 }

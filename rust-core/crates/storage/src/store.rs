@@ -1105,9 +1105,7 @@ impl Storage {
     /// A row that was pushed, edited again or replaced by a pull since the
     /// caller looked is left alone. Which edits may be dropped (the caller's
     /// own, ones no push can deliver) is the caller's decision. The item's
-    /// archived versions are left as they are: those the server had are
-    /// still its history, and [`Self::delete_item_history_above`] drops the
-    /// ones it never had once its copy is back. Returns whether the row was
+    /// archived versions are left as they are. Returns whether the row was
     /// deleted.
     pub fn discard_unpushed_item(
         &self,
@@ -1124,25 +1122,6 @@ impl Storage {
             params![vault_id, item_id, version, author_pubkey],
         )?;
         Ok(n > 0)
-    }
-
-    /// Deletes the archived versions of an item above `version` (all of them
-    /// for 0): after a dropped local edit (see [`Self::discard_unpushed_item`]),
-    /// the versions newer than the server's copy are ones only this device
-    /// had, and an archive above the item's current version would read as its
-    /// history.
-    pub fn delete_item_history_above(
-        &self,
-        vault_id: &[u8],
-        item_id: &[u8],
-        version: u64,
-    ) -> Result<(), StorageError> {
-        let version = checked_version(version)?;
-        self.conn.execute(
-            "DELETE FROM item_history WHERE vault_id = ?1 AND item_id = ?2 AND version > ?3",
-            params![vault_id, item_id, version],
-        )?;
-        Ok(())
     }
 
     /// Clears the dirty flag of ONE item (see [`Self::clear_vault_dirty`]).
@@ -1977,30 +1956,6 @@ mod purge_tests {
         s.put_item(&irec(&vid, b"edit")).unwrap();
         assert!(s.get_item(&vid, b"pushed").unwrap().is_some());
         assert!(s.get_item(&vid, b"theirs").unwrap().is_some());
-    }
-
-    /// After a dropped edit, only the archived versions the server never had
-    /// go: the older ones are still the item's history.
-    #[test]
-    fn delete_item_history_above_keeps_the_versions_up_to_the_restored_one() {
-        let s = st();
-        let vid = b"vault-h".to_vec();
-        s.put_vault(&vrec(&vid)).unwrap();
-        for version in 1..=4 {
-            let mut r = irec(&vid, b"pw");
-            r.version = version;
-            s.archive_and_put(&r, 10).unwrap();
-        }
-
-        s.delete_item_history_above(&vid, b"pw", 2).unwrap();
-
-        let left: Vec<u64> = s
-            .list_item_history(&vid, b"pw")
-            .unwrap()
-            .into_iter()
-            .map(|r| r.version)
-            .collect();
-        assert_eq!(left, vec![2, 1]);
     }
 
     #[test]

@@ -55,6 +55,21 @@ pub enum SyncError {
     #[error("the server refused the push as not permitted")]
     Forbidden,
 
+    /// An object of the server's copy handed to a discard
+    /// ([`crate::discard_unpushable`]) does not parse: nothing was sent or
+    /// dropped.
+    #[error(
+        "an object of the server's copy of the vault could not be read, so nothing was discarded"
+    )]
+    ServerCopyUnreadable,
+
+    /// A discard ([`crate::discard_unpushable`]) found the server's copy of
+    /// an item it dropped, and that copy did not apply (verify-before-apply
+    /// rejected it): the whole discard was rolled back, and nothing was
+    /// dropped.
+    #[error("the server's copy of an item could not be put back, so nothing was discarded")]
+    NotRestored,
+
     /// A vault-layer error (verify/authority).
     #[error(transparent)]
     Vault(#[from] VaultError),

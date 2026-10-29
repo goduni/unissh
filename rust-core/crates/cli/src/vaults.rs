@@ -56,11 +56,11 @@ pub enum VaultsAction {
         #[arg(long, value_name = "FINGERPRINT")]
         fingerprint: Option<String>,
     },
-    /// Drop the changes made on this machine in a vault that the server will
-    /// not take (an edit made while this account could only view the vault),
-    /// after sending them once more, and put back the server's copy of those
-    /// items. Other members' such changes are kept and no longer sent; other
-    /// changes not sent yet are kept.
+    /// Replace this account's edits in a vault that cannot be sent (an edit
+    /// made while this account could only view the vault) with the server's
+    /// copy, after sending them once more; an item the server does not have
+    /// is removed. Other members' such changes are kept and no longer sent;
+    /// other changes not sent yet are kept.
     #[command(name = "discard-unpushable")]
     DiscardUnpushable {
         /// The vault, by name or id.
@@ -556,10 +556,10 @@ fn discard_unpushable(device: &Device, offline: bool, wanted: &str, yes: bool) -
     let mut prompt = String::new();
     if !ours.is_empty() {
         prompt.push_str(&format!(
-            "These changes made on this machine in vault \"{name}\" cannot be sent to the \
-             server:\n{ours}They are sent once more; the ones still refused are dropped, and \
-             the server's copy of each item is put back (an item the server never had is \
-             gone).\n"
+            "These edits by this account in vault \"{name}\" cannot be sent to the \
+             server:\n{ours}They are sent once more. The server's copy replaces each one \
+             still refused, and an item the server does not have is removed from this \
+             machine.\n"
         ));
     }
     if !theirs.is_empty() {
@@ -574,10 +574,17 @@ fn discard_unpushable(device: &Device, offline: bool, wanted: &str, yes: bool) -
         println!("Nothing was dropped: the changes went through when sent again.");
         return Ok(());
     }
-    if done.dropped > 0 {
+    let restored = done.dropped.saturating_sub(done.removed);
+    if restored > 0 {
         println!(
-            "Dropped {} change(s) made here; vault \"{name}\" has the server's copy again.",
-            done.dropped
+            "Replaced {restored} edit(s) by this account in vault \"{name}\" with the \
+             server's copy."
+        );
+    }
+    if done.removed > 0 {
+        println!(
+            "Removed {} item(s) the server does not have from vault \"{name}\".",
+            done.removed
         );
     }
     if done.released > 0 {

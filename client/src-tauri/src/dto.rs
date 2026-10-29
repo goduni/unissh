@@ -847,8 +847,11 @@ impl From<ffi::FfiSyncReport> for SyncReport {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiscardReport {
-    /// This account's edits that were dropped.
+    /// This account's edits that were dropped (the server's copy replaced them,
+    /// or the item is gone: `removed`).
     pub dropped: u32,
+    /// Of `dropped`, the items the server does not have: removed.
+    pub removed: u32,
     /// Other members' items no longer sent (kept as they are).
     pub released: u32,
 }
@@ -856,6 +859,7 @@ impl From<ffi::FfiDiscardReport> for DiscardReport {
     fn from(r: ffi::FfiDiscardReport) -> Self {
         Self {
             dropped: r.dropped,
+            removed: r.removed,
             released: r.released,
         }
     }

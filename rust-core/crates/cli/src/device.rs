@@ -1,5 +1,6 @@
 //! This machine's instance: the core over the device directory, and unlocking it.
 
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -8,7 +9,7 @@ use zeroize::Zeroizing;
 
 use crate::failure::{Failure, Res};
 use crate::home::{read_private, Home, Link};
-use crate::server::Sessions;
+use crate::server::{LeftOut, Sessions};
 use crate::tty::{lines, one_line, Tty};
 
 /// What the user said about where the master password comes from.
@@ -27,6 +28,9 @@ pub struct Device {
     /// The core over its instance.
     pub core: Arc<Core>,
     sessions: Sessions,
+    /// The edits no push delivered when the command started (see
+    /// [`Self::note_left_out`]).
+    left_out: RefCell<Vec<LeftOut>>,
 }
 
 /// What to do when this machine is not signed in.
@@ -63,7 +67,33 @@ impl Device {
             link,
             core,
             sessions: Sessions::default(),
+            left_out: RefCell::new(Vec::new()),
         }
+    }
+
+    /// Notes this account's edits no push delivers as of now (a local read,
+    /// no request), so that the sync after a write can tell the write from
+    /// the ones left out already (`server::push_after_write`). The core must
+    /// be unlocked; when it cannot be read nothing is noted, and any such
+    /// edit after the write counts as the write's.
+    pub fn note_left_out(&self) {
+        let noted = self
+            .core
+            .unpushable_changes()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter(|item| item.mine)
+                    .map(LeftOut::from)
+                    .collect()
+            })
+            .unwrap_or_default();
+        *self.left_out.borrow_mut() = noted;
+    }
+
+    /// What [`Self::note_left_out`] noted.
+    pub fn left_out_before(&self) -> Vec<LeftOut> {
+        self.left_out.borrow().clone()
     }
 
     /// A bearer for a call to the server, signing in first when needed. The

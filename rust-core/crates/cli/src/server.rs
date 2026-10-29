@@ -249,9 +249,11 @@ pub fn push_recording(device: &Device) {
 /// change stays on this machine only, and the user must hear that rather than
 /// believe it went through. The push leaves an item it cannot deliver out and
 /// goes on with the rest (#166), so a refusal comes back two ways: the sync
-/// fails (a refusal of the request), or it succeeds and names this account's
-/// edits in `vault_id` among those it could not send. Either fails the
-/// command. (A Viewer's write never gets here: the core refuses it before
+/// fails (a refusal of the request), or it succeeds and names, among the
+/// edits it could not send, one of this account's in `vault_id` that was not
+/// left out before the write ([`Device::note_left_out`], taken when the
+/// command started): the write just made. Edits left out before it say
+/// nothing about it. Either fails the command. (A Viewer's write never gets here: the core refuses it before
 /// storing anything, `FfiError::ReadOnlyVault`. A refusal here means the
 /// server knows of a role or policy this device does not yet.)
 pub fn push_after_write(
@@ -270,7 +272,7 @@ pub fn push_after_write(
         return Ok(());
     }
     match sync(device) {
-        Ok(report) if left_out_here(&report, vault_id) => {
+        Ok(report) if left_out_now(&report, vault_id, &device.left_out_before()) => {
             warn_about(&report);
             Err(refused_here(done, "it cannot be sent"))
         }
@@ -296,13 +298,41 @@ fn refused_here(done: &str, why: &str) -> Failure {
     ))
 }
 
-/// Whether a sync left out an edit this account made in vault `vault_id`:
-/// the change just written there is not on the server.
-fn left_out_here(report: &FfiSyncReport, vault_id: &str) -> bool {
-    report
-        .unpushable
-        .iter()
-        .any(|item| item.mine && item.vault_id == vault_id)
+/// Whether a sync left out an edit by this account in vault `vault_id` that
+/// `before` (what was left out before the write: item id and version) does
+/// not hold — the change just written there, which is not on the server.
+fn left_out_now(report: &FfiSyncReport, vault_id: &str, before: &[LeftOut]) -> bool {
+    report.unpushable.iter().any(|item| {
+        item.mine
+            && item.vault_id == vault_id
+            && !before.iter().any(|b| {
+                b.vault_id == item.vault_id
+                    && b.item_id == item.item_id
+                    && b.version == item.version
+            })
+    })
+}
+
+/// An edit no push delivers, by vault, item and version (see
+/// [`Device::note_left_out`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeftOut {
+    /// The vault, as `list_vaults` names it.
+    pub vault_id: String,
+    /// The item's id.
+    pub item_id: String,
+    /// The version left out.
+    pub version: u64,
+}
+
+impl From<&FfiUnpushableItem> for LeftOut {
+    fn from(item: &FfiUnpushableItem) -> Self {
+        Self {
+            vault_id: item.vault_id.clone(),
+            item_id: item.item_id.clone(),
+            version: item.version,
+        }
+    }
 }
 
 /// Whether a sync failed because the server refused what this device sent —
@@ -371,7 +401,7 @@ pub const fn kind(item_type: u32) -> &'static str {
 /// is inside the encrypted content the sync does not read) and why.
 pub fn unpushable_entry(item: &FfiUnpushableItem) -> String {
     let why = match item.reason {
-        FfiUnpushableReason::NotAuthorized => "this account may not change the vault",
+        FfiUnpushableReason::NotAuthorized => "this account may not change it",
         FfiUnpushableReason::ServerRefused => "the server refused it",
     };
     format!(
@@ -382,8 +412,8 @@ pub fn unpushable_entry(item: &FfiUnpushableItem) -> String {
 }
 
 /// What a sync says about the edits it could not send (#166), one line per
-/// vault: they stay on this machine, nothing else is held up, and how to drop
-/// the ones made here in favour of the server's copy.
+/// vault: they stay on this machine, nothing else is held up, and how to
+/// replace this account's ones with the server's copy.
 fn unpushable_lines(items: &[FfiUnpushableItem]) -> Vec<String> {
     let mut vaults: Vec<(&str, &str)> = Vec::new();
     for item in items {
@@ -400,8 +430,8 @@ fn unpushable_lines(items: &[FfiUnpushableItem]) -> Vec<String> {
             let entries: Vec<String> = here.iter().copied().map(unpushable_entry).collect();
             let fix = if here.iter().any(|i| i.mine) {
                 format!(
-                    "; `unissh vaults discard-unpushable {id}` drops the ones made here \
-                     and restores the server's copy"
+                    "; `unissh vaults discard-unpushable {id}` replaces this account's \
+                     edits with the server's copy"
                 )
             } else {
                 String::new()
@@ -422,7 +452,7 @@ mod tests {
 
     use unissh_ffi::{FfiSyncReport, FfiUnpushableItem, FfiUnpushableReason};
 
-    use super::{is_refusal, left_out_here, reuse_for, unpushable_lines, REUSE};
+    use super::{is_refusal, left_out_now, reuse_for, unpushable_lines, LeftOut, REUSE};
     use crate::failure::Failure;
 
     /// A sync names what it could not send by vault, by kind and id, and
@@ -434,6 +464,7 @@ mod tests {
             vault_name: format!("{vault}-name"),
             item_id: id.to_owned(),
             item_type: 3,
+            version: 1,
             mine,
             reason,
         };
@@ -445,25 +476,26 @@ mod tests {
             lines,
             [
                 "1 change(s) in vault \"aa-name\" cannot be sent and stay on this machine: \
-                 host web (this account may not change the vault); \
-                 `unissh vaults discard-unpushable aa` drops the ones made here and restores \
-                 the server's copy",
+                 host web (this account may not change it); \
+                 `unissh vaults discard-unpushable aa` replaces this account's edits with the \
+                 server's copy",
                 "1 change(s) in vault \"bb-name\" cannot be sent and stay on this machine: \
                  host db (the server refused it)",
             ]
         );
     }
 
-    /// A write the sync left out — this account's edit in that vault — is
-    /// not on the server; a teammate's item, or another vault's, says
-    /// nothing about it.
+    /// The write the sync left out is an edit by this account, in that vault,
+    /// that was not left out before the write: an older left-out edit, a
+    /// teammate's, or another vault's says nothing about it.
     #[test]
-    fn a_write_the_sync_left_out_is_one_the_server_refused() {
-        let item = |vault: &str, mine| FfiUnpushableItem {
+    fn only_an_edit_left_out_since_the_write_is_the_write_refused() {
+        let item = |vault: &str, version, mine| FfiUnpushableItem {
             vault_id: vault.to_owned(),
             vault_name: String::new(),
             item_id: "web".to_owned(),
             item_type: 3,
+            version,
             mine,
             reason: FfiUnpushableReason::ServerRefused,
         };
@@ -476,9 +508,24 @@ mod tests {
             too_large: Vec::new(),
             unpushable,
         };
-        assert!(left_out_here(&report(vec![item("aa", true)]), "aa"));
-        assert!(!left_out_here(&report(vec![item("aa", false)]), "aa"));
-        assert!(!left_out_here(&report(vec![item("bb", true)]), "aa"));
+        let before = [LeftOut::from(&item("aa", 2, true))];
+
+        assert!(
+            left_out_now(&report(vec![item("aa", 3, true)]), "aa", &before),
+            "the write made version 3, and it was left out"
+        );
+        assert!(
+            !left_out_now(&report(vec![item("aa", 2, true)]), "aa", &before),
+            "left out before the write"
+        );
+        assert!(
+            !left_out_now(&report(vec![item("aa", 3, false)]), "aa", &before),
+            "a teammate's"
+        );
+        assert!(
+            !left_out_now(&report(vec![item("bb", 3, true)]), "aa", &before),
+            "another vault's"
+        );
     }
 
     /// Half the token's remaining life, never more than the cap and nothing
