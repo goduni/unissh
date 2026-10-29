@@ -61,20 +61,21 @@ export function unpushableSummary(items: UnpushableItem[], lang?: string): strin
   );
 }
 
-/** What a sync says about the edits it could not push: this device's own, with
- *  the way to restore the server's copy, then other members' ones held here,
- *  which only this device's copy has. Empty when there are none. */
+/** What a sync says about the edits it could not push: this account's ones the
+ *  server refused, then this account's ones it may not make (both with the way
+ *  to put the server's copy back), then other members' ones held here, which
+ *  only this device's copy has. Empty when there are none. */
 export function unpushableNotice(items: UnpushableItem[], lang?: string): string {
   const t = tr(lang);
-  const mine = unpushableSummary(
-    items.filter((u) => u.mine),
-    lang,
-  );
-  const theirs = unpushableSummary(
-    items.filter((u) => !u.mine),
-    lang,
-  );
-  return [mine && t("syncUnpushable", { items: mine }), theirs && t("syncUnpushableTheirs", { items: theirs })]
+  const of = (keep: (u: UnpushableItem) => boolean) => unpushableSummary(items.filter(keep), lang);
+  const refused = of((u) => u.mine && u.reason === "serverRefused");
+  const notAllowed = of((u) => u.mine && u.reason === "notAuthorized");
+  const theirs = of((u) => !u.mine);
+  return [
+    refused && t("syncUnpushable", { items: refused }),
+    notAllowed && t("syncUnpushableNotAllowed", { items: notAllowed }),
+    theirs && t("syncUnpushableTheirs", { items: theirs }),
+  ]
     .filter(Boolean)
     .join(" ");
 }

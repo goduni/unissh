@@ -5062,11 +5062,13 @@ function SettingsCloud() {
           const vaultsOf = new Map<string, string | undefined>();
           for (const u of discardable) vaultsOf.set(u.vaultId, u.serverId ?? s.serverId ?? undefined);
           let dropped = 0;
+          let removed = 0;
           let released = 0;
           try {
             for (const [vaultId, serverId] of vaultsOf) {
               const r = await api.serverDiscardUnpushable(vaultId, serverId);
               dropped += r.dropped;
+              removed += r.removed;
               released += r.released;
             }
           } finally {
@@ -5077,7 +5079,8 @@ function SettingsCloud() {
             /* the badge reports it; the discard itself went through */
           });
           const done = [
-            dropped > 0 && t("serverCloud.discardUnpushableDone", { count: dropped }),
+            dropped > removed && t("serverCloud.discardUnpushableDone", { count: dropped - removed }),
+            removed > 0 && t("serverCloud.discardUnpushableRemoved", { count: removed }),
             released > 0 && t("serverCloud.discardUnpushableReleased", { count: released }),
           ].filter(Boolean);
           toast(done.length ? done.join("; ") : t("serverCloud.discardUnpushableNone"), "ok");

@@ -789,8 +789,11 @@ export interface SyncReport {
 
 /** What discarding a vault's unsendable edits did. */
 export interface DiscardReport {
-  /** This account's edits that were dropped (the server's copy is back). */
+  /** This account's edits that were dropped: the server's copy replaced them, or
+   *  the item is gone (`removed`). */
   dropped: number;
+  /** Of `dropped`, the items the server doesn't have: removed. */
+  removed: number;
   /** Other members' edits held here that are no longer sent (kept as they are). */
   released: number;
 }
