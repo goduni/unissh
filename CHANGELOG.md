@@ -277,12 +277,18 @@ starts with `0.`:
   synced host of a team vault could name a host of a member's personal vault
   as its jump host, and connecting would then log in to it with the member's
   own key or password. Such a host is now refused, in the app and the CLI
-  alike, and saving one was already refused.
+  alike, and saving one was already refused. For callers of the bindings: a
+  jump hop that references a saved host must carry the placeholder login the
+  core writes (a key or stored password of the host's own vault); one that
+  carries a typed password or a system-agent key instead is now refused too.
 - Saving a host that logs in with a personal identity moves the identity's
   pin only from where the host pointed before the save. When the host had
   already been pointed elsewhere (a synced change by someone else), the pin
   stays, connecting is still refused as redirected, and the save says so,
-  instead of the member's next save silently accepting the new address.
+  instead of the member's next save silently accepting the new address. To
+  accept the new address on purpose, link the identity again in the app, or
+  run `unissh hosts edit <host> --move-pin`, which shows both addresses and
+  asks first (`--yes` to skip the question).
 - A server link may use plain `http://` only to a loopback host, and the check
   now reads the host the way the HTTP stack connects to it. It used to compare
   the start of the text, so links such as `http://localhost.attacker.example`
