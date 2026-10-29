@@ -1208,23 +1208,6 @@ pub async fn server_confirm_member_pin(
     .await
 }
 
-/// Pin (TOFU) the genesis-owner of a teammate-created vault at share-accept (A0).
-/// Without it the vault's records fail authority verification on sync. Re-pinning
-/// the same key is ok; a different key errors (anti-rebind).
-#[tauri::command]
-pub async fn server_pin_vault_genesis_owner(
-    vault_id: String,
-    ed25519_pub_hex: String,
-    state: State<'_, AppState>,
-) -> ApiResult<()> {
-    let core = state.core.clone();
-    blocking_api(move || {
-        core.pin_vault_genesis_owner(vault_id, ed25519_pub_hex)
-            .map_err(ApiError::from)
-    })
-    .await
-}
-
 /// Designate the account's personal vault (A3.2). Stored in the synced per-account
 /// state; syncs to the account's other devices.
 #[tauri::command]

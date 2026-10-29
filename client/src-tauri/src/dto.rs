@@ -970,8 +970,40 @@ impl From<ffi::FfiTrustOutcome> for TrustOutcome {
 /// on: enough to recognise someone, not a page of text (as the CLI does).
 const CLAIM_CHARS: usize = 64;
 
-fn capped(claim: &str) -> String {
-    claim.chars().take(CLAIM_CHARS).collect()
+/// Whether a character of a server-claimed handle or name may be shown: not a
+/// C0, DEL or C1 control, not a bidi embedding, override, isolate or mark
+/// (U+061C, U+200E/F, U+202A–U+202E, U+2066–U+2069), and not an invisible
+/// format character (U+00AD, U+200B–U+200D, U+2060–U+2064, U+FEFF): any of
+/// them could reorder or hide part of a name. The same set as the CLI's
+/// `tty::one_line`.
+fn shown(c: char) -> bool {
+    !c.is_control()
+        && !matches!(
+            c,
+            '\u{ad}'
+                | '\u{61c}'
+                | '\u{200b}'..='\u{200f}'
+                | '\u{202a}'..='\u{202e}'
+                | '\u{2060}'..='\u{2064}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{feff}'
+        )
+}
+
+/// A server-claimed handle or name as it may be shown: on one line, without
+/// the characters [`shown`] drops, trimmed, and cut at [`CLAIM_CHARS`] with
+/// "…" marking the cut. `None` when nothing is left to show.
+fn capped(claim: &str) -> Option<String> {
+    let cleaned: String = claim.chars().filter(|c| shown(*c)).collect();
+    let mut chars = cleaned.trim().chars();
+    let mut out: String = chars.by_ref().take(CLAIM_CHARS).collect();
+    if out.is_empty() {
+        return None;
+    }
+    if chars.next().is_some() {
+        out.push('…');
+    }
+    Some(out)
 }
 
 impl From<unissh_cloud::shared::PendingVault> for PendingSharedVault {
@@ -980,12 +1012,12 @@ impl From<unissh_cloud::shared::PendingVault> for PendingSharedVault {
             .claimed_owner
             .as_ref()
             .and_then(|d| d.handle.as_deref())
-            .map(capped);
+            .and_then(capped);
         let claimed_name = p
             .claimed_owner
             .as_ref()
             .and_then(|d| d.display_name.as_deref())
-            .map(capped);
+            .and_then(capped);
         match p.inspected {
             Ok(info) => Self {
                 vault_id: p.vault_id,
@@ -2127,5 +2159,37 @@ impl From<ffi::SystemAgentKeyFfi> for SystemAgentKey {
             comment: k.comment,
             algorithm: k.algorithm,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{capped, CLAIM_CHARS};
+
+    /// A server-claimed name loses the controls and bidi/invisible characters
+    /// that could reorder or hide part of it, and a long one says it was cut.
+    #[test]
+    fn a_claimed_name_is_cleaned_and_marks_a_cut() {
+        assert_eq!(
+            capped("Al\u{202e}ice\u{200b}\u{1b}[2J\n").as_deref(),
+            Some("Alice[2J"),
+            "controls, bidi overrides and zero-width characters are dropped"
+        );
+        assert_eq!(
+            capped("\u{2066}\u{feff} "),
+            None,
+            "nothing visible is no name"
+        );
+        let fits = "a".repeat(CLAIM_CHARS);
+        assert_eq!(
+            capped(&fits),
+            Some(fits.clone()),
+            "a name that fits is kept whole"
+        );
+        assert_eq!(
+            capped(&format!("{fits}b")),
+            Some(format!("{fits}…")),
+            "a cut name is marked"
+        );
     }
 }

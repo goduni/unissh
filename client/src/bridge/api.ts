@@ -1048,8 +1048,6 @@ export const serverMemberFingerprint = (ed25519PubHex: string) =>
   invoke<string>("server_member_fingerprint", { ed25519PubHex });
 export const serverConfirmMemberPin = (accountId: string, ed25519PubHex: string) =>
   invoke<void>("server_confirm_member_pin", { accountId, ed25519PubHex });
-export const serverPinVaultGenesisOwner = (vaultId: string, ed25519PubHex: string) =>
-  invoke<void>("server_pin_vault_genesis_owner", { vaultId, ed25519PubHex });
 export const setPersonalVault = (vaultId: string) =>
   invoke<void>("set_personal_vault", { vaultId });
 export const setAccountDefaultUsername = (username: string) =>

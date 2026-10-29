@@ -577,7 +577,6 @@ pub fn run() {
             cloud::commands::server_list_members,
             cloud::commands::server_member_fingerprint,
             cloud::commands::server_confirm_member_pin,
-            cloud::commands::server_pin_vault_genesis_owner,
             cloud::commands::set_personal_vault,
             cloud::commands::set_account_default_username,
             cloud::commands::get_personal_vault,
