@@ -1403,8 +1403,8 @@ fn member_ids(hosts: &[Host], vault_id: &str, names: &[String]) -> Res<Vec<Strin
 #[cfg(test)]
 mod tests {
     use super::{
-        appearance, chosen_auth, nests_in_itself, parse_address, parse_proxy, refusal, Address,
-        AuthKind, COLORS,
+        appearance, chosen_auth, nests_in_itself, parse_address, parse_proxy, pin_move_warning,
+        refusal, Address, AuthKind, COLORS,
     };
     use unissh_ffi::{HostRule, ProxyKind, ServerGroup};
 
