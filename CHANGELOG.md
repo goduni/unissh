@@ -34,6 +34,19 @@ starts with `0.`:
 
 ## [0.7.0] — 2026-10-30
 
+### Breaking changes
+
+**Legacy shared vaults may need an owner repair.** Reads now enforce the latest
+known membership even if an older owner client did not persist its epoch floor.
+If old shared records report an invalid/rolled-back epoch, the owner should use
+the vault's Members panel to re-grant existing members with their verified
+public keys and intended roles. This reissues the authenticated current snapshot
+and every remaining member's grant. Upgrade granting devices before changing
+membership. Records from revoked/demoted signers or an obsolete vault key are
+not automatically re-signed: recover the intended content from a trusted backup
+or recreate it explicitly as the owner. Never lower the epoch floor to bypass
+this check. The vault format and server wire encoding are unchanged.
+
 ### Added
 
 - In the app's host editor, a saved host that logs in through the system SSH
@@ -341,6 +354,13 @@ starts with `0.`:
     transport returns it for the server's own HTTP 403 `forbidden`).
 
 ### Security
+
+- Owner devices arm the epoch floor when publishing membership changes.
+  Reads and sync enforce known later membership even when an older device left
+  that floor unarmed, closing replay of old-epoch writes by demoted members.
+  An identical manifest re-pull repairs legacy floor metadata only after its
+  authority chain verifies; an unverified cached row cannot establish trust.
+
 
 - A connection refuses a jump host that is a saved host of another vault. A
   synced host of a team vault could name a host of a member's personal vault

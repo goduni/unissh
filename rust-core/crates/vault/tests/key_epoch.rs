@@ -392,15 +392,20 @@ fn old_epoch_deletes_from_revoked_or_demoted_signers_are_not_promoted() {
         }
         v.rotate_vk(&owner, &remaining, &grants).unwrap();
         signed_stale_delete(&st, v.vault_id(), &writer, 1);
-        let reopened = Vault::open(&st, &owner, v.vault_id()).unwrap();
-        assert!(matches!(
-            reopened.establish_or_extend_membership(&owner, &remaining, &xkeys),
-            Err(unissh_vault::VaultError::AuthorityInvalid)
-        ));
-        assert!(matches!(
-            reopened.rotate_vk(&owner, &remaining, &grants),
-            Err(unissh_vault::VaultError::AuthorityInvalid)
-        ));
+        for floor in [0, 2] {
+            // Older owner clients could leave the floor unarmed. Current
+            // permission is still required before reissuing their snapshot.
+            st.set_vault_epoch_floor(v.vault_id(), floor).unwrap();
+            let reopened = Vault::open(&st, &owner, v.vault_id()).unwrap();
+            assert!(matches!(
+                reopened.establish_or_extend_membership(&owner, &remaining, &xkeys),
+                Err(unissh_vault::VaultError::AuthorityInvalid)
+            ));
+            assert!(matches!(
+                reopened.rotate_vk(&owner, &remaining, &grants),
+                Err(unissh_vault::VaultError::AuthorityInvalid)
+            ));
+        }
         assert_eq!(st.latest_membership_epoch(v.vault_id()).unwrap(), Some(2));
     }
 }
@@ -462,4 +467,56 @@ fn owner_repair_cannot_replace_a_missing_manifest_at_the_trusted_floor() {
         .unwrap()
         .is_none());
     assert_eq!(st.get_vault_epoch_floor(v.vault_id()).unwrap(), Some(2));
+}
+
+#[test]
+fn membership_changes_arm_the_owners_floor_without_a_sync_round_trip() {
+    let st = storage();
+    let owner = keyset();
+    let editor = keyset();
+    let v = Vault::create(&st, &owner, b"owner-floor".to_vec(), b"shared").unwrap();
+    let mut members = [
+        Member {
+            ed25519_pub: ed_of(&owner),
+            role: MemberRole::Admin,
+        },
+        Member {
+            ed25519_pub: ed_of(&editor),
+            role: MemberRole::Editor,
+        },
+    ];
+    let xkeys = [
+        (ed_of(&owner), x_of(&owner)),
+        (ed_of(&editor), x_of(&editor)),
+    ];
+    v.establish_or_extend_membership(&owner, &members, &xkeys)
+        .unwrap();
+    assert_eq!(st.get_vault_epoch_floor(v.vault_id()).unwrap(), Some(1));
+    members[1].role = MemberRole::Viewer;
+    v.establish_or_extend_membership(&owner, &members, &xkeys)
+        .unwrap();
+    assert_eq!(st.get_vault_epoch_floor(v.vault_id()).unwrap(), Some(2));
+    assert!(matches!(
+        unissh_vault::verify_record_authority(
+            &st,
+            v.vault_id(),
+            &ed_of(&editor),
+            1,
+            &ed_of(&owner)
+        ),
+        Err(unissh_vault::VaultError::EpochInvalid)
+    ));
+    // A legacy owner can have the manifest but no persisted floor. Reads
+    // must enforce known membership even before the server echoes it.
+    st.set_vault_epoch_floor(v.vault_id(), 0).unwrap();
+    assert!(matches!(
+        unissh_vault::verify_record_authority(
+            &st,
+            v.vault_id(),
+            &ed_of(&editor),
+            1,
+            &ed_of(&owner)
+        ),
+        Err(unissh_vault::VaultError::EpochInvalid)
+    ));
 }

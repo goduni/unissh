@@ -24,7 +24,7 @@ use unissh_storage::{
 use crate::error::VaultError;
 use crate::membership::{
     add_member, build_grant, build_manifest, open_own_grant, verify_chain_to_epoch, verify_grant,
-    verify_manifest, Member,
+    verify_manifest, Member, VerifiedMembers,
 };
 
 /// How many past versions of a secret to keep in history (per-item retention).
@@ -820,6 +820,11 @@ impl<'a> Vault<'a> {
                         .mark_item_dirty(&self.vault_id, &record.item_id)?;
                 }
             }
+            // This owner already has the manifest locally, so an identical
+            // re-pull need not apply it again. Arm its floor in this same
+            // transaction rather than waiting for another device's sync path.
+            self.storage
+                .set_vault_epoch_floor(&self.vault_id, key_epoch)?;
             Ok::<(), VaultError>(())
         })?;
         // Raise the in-memory epoch, so that put_item on THIS same instance after
@@ -840,6 +845,13 @@ impl<'a> Vault<'a> {
         let records = self
             .storage
             .list_items_including_tombstones(&self.vault_id)?;
+        let current = self
+            .storage
+            .latest_membership_epoch(&self.vault_id)?
+            .map(|epoch| {
+                verify_chain_to_epoch(self.storage, &self.vault_id, epoch, &self.genesis_owner)
+            })
+            .transpose()?;
         let mut out = Vec::with_capacity(records.len());
         for record in records {
             if matches!(
@@ -853,7 +865,7 @@ impl<'a> Vault<'a> {
             {
                 return Err(VaultError::Format);
             }
-            self.verify_reanchor_authority(&record)?;
+            self.verify_reanchor_authority(&record, current.as_ref())?;
             let updated = if record.tombstone {
                 let mut tombstone = self.tombstone_record(
                     &record.item_id,
@@ -875,14 +887,24 @@ impl<'a> Vault<'a> {
     /// revoked/demoted signer cannot launder a fresh delete through an old
     /// epoch. Live content must also decrypt with the current VK before it is
     /// reissued. This is never an alternative read/sync authorization path.
-    fn verify_reanchor_authority(&self, record: &ItemRecord) -> Result<(), VaultError> {
+    fn verify_reanchor_authority(
+        &self,
+        record: &ItemRecord,
+        current: Option<&VerifiedMembers>,
+    ) -> Result<(), VaultError> {
+        // Also gate above-floor rows: older owner clients did not always arm
+        // the floor when publishing a membership change.
+        if current.is_some_and(|members| !members.can_write(&record.author_pubkey)) {
+            return Err(VaultError::AuthorityInvalid);
+        }
         if record.key_epoch == 0 && record.author_pubkey == self.genesis_owner {
             return Ok(());
         }
         let floor = self
             .storage
             .get_vault_epoch_floor(&self.vault_id)?
-            .unwrap_or(0);
+            .unwrap_or(0)
+            .max(current.map_or(0, VerifiedMembers::epoch));
         if record.key_epoch >= floor {
             return verify_record_authority(
                 self.storage,
@@ -898,17 +920,9 @@ impl<'a> Vault<'a> {
             record.key_epoch,
             &self.genesis_owner,
         )?;
-        let current_epoch = self
-            .storage
-            .latest_membership_epoch(&self.vault_id)?
-            .ok_or(VaultError::EpochInvalid)?;
-        let current = verify_chain_to_epoch(
-            self.storage,
-            &self.vault_id,
-            current_epoch,
-            &self.genesis_owner,
-        )?;
-        if historical.can_write(&record.author_pubkey) && current.can_write(&record.author_pubkey) {
+        if historical.can_write(&record.author_pubkey)
+            && current.is_some_and(|members| members.can_write(&record.author_pubkey))
+        {
             Ok(())
         } else {
             Err(VaultError::AuthorityInvalid)
@@ -1470,7 +1484,14 @@ pub fn verify_record_authority(
     }
     // membership mode (vault-level): a downgrade to owner==author is forbidden.
     // (b) anti-rollback: the epoch floor (default 0).
-    let floor = storage.get_vault_epoch_floor(vault_id)?.unwrap_or(0);
+    // Old owner clients could persist a verified manifest without arming its
+    // floor. Known later membership must still prevent replay while offline.
+    // An unverified higher local row can only cause refusal here: accepting a
+    // record still requires the full signed chain at its epoch below.
+    let floor = storage
+        .get_vault_epoch_floor(vault_id)?
+        .unwrap_or(0)
+        .max(storage.latest_membership_epoch(vault_id)?.unwrap_or(0));
     if record_epoch < floor {
         return Err(VaultError::EpochInvalid);
     }
