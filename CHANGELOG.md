@@ -32,6 +32,8 @@ starts with `0.`:
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-10-30
+
 ### Breaking changes
 
 **Legacy shared vaults may need an owner repair.** Reads now enforce the latest
@@ -248,6 +250,13 @@ this check. The vault format and server wire encoding are unchanged.
   recipient key; vault-key rotation refreshes the remembered keys of all
   remaining members so later grants never use obsolete encryption keys.
 
+
+- Sharing a vault reissues its verified current items and tombstones at the new
+  membership epoch, in the same transaction as its manifest and grants. Notes,
+  keys and hosts created before the first share now reach trusted recipients;
+  changing membership again repairs legacy owner-authored epoch-zero records.
+  Invalid signatures and unauthorized member edits abort the membership change.
+
 - Sharing an existing vault reissues its current items and tombstones at the
   new membership epoch in the same transaction as the manifest and grants.
   Previously, items created before the first share stayed at epoch 0 and
@@ -366,6 +375,7 @@ this check. The vault format and server wire encoding are unchanged.
   An identical manifest re-pull repairs legacy floor metadata only after its
   authority chain verifies; an unverified cached row cannot establish trust.
 
+
 - A connection refuses a jump host that is a saved host of another vault. A
   synced host of a team vault could name a host of a member's personal vault
   as its jump host, and connecting would then log in to it with the member's
@@ -418,6 +428,15 @@ hosts already did.
 **Mixed-version caveat.** An older client keeps a host's colour and icon when it
 edits the host, but editing a *group* in an older client clears that group's
 colour and icon: older builds rewrote every group field they did not know.
+
+**View-only members.** This version refuses, on the device, an edit to a shared
+vault the account can only view. An older client still stores such an edit and
+then cannot push it (the server refuses it), which stops that device's sync
+until the change is dropped (#166); upgrade the clients of view-only members.
+
+The command-line client keeps its MCP integrations, grants and limits in its
+own data directory on that machine (`mcp.json`, `mcp-limits.json`); nothing of
+them is synced, and `unissh logout` deletes them.
 
 ## [0.6.1] — 2026-10-16
 
