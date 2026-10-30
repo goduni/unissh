@@ -32,7 +32,7 @@ starts with `0.`:
 
 ## [Unreleased]
 
-## [0.7.0] — 2026-10-27
+## [0.7.0] — 2026-10-30
 
 ### Added
 
@@ -209,6 +209,12 @@ starts with `0.`:
   `FfiError::InvalidHost`; `new_item_id` is gone.
 
 ### Fixed
+
+- Sharing a vault reissues its verified current items and tombstones at the new
+  membership epoch, in the same transaction as its manifest and grants. Notes,
+  keys and hosts created before the first share now reach trusted recipients;
+  changing membership again repairs legacy owner-authored epoch-zero records.
+  Invalid signatures and unauthorized member edits abort the membership change.
 
 - Sharing an existing vault reissues its current items and tombstones at the
   new membership epoch in the same transaction as the manifest and grants.
