@@ -831,11 +831,11 @@ impl<'a> Vault<'a> {
             .list_items_including_tombstones(&self.vault_id)?;
         let mut out = Vec::with_capacity(records.len());
         for record in records {
-            match check_item_record(&record, &self.genesis_owner) {
-                Some(IntegrityFailure::Malformed | IntegrityFailure::SignatureInvalid) => {
-                    return Err(VaultError::SignatureInvalid)
-                }
-                _ => {}
+            if matches!(
+                check_item_record(&record, &self.genesis_owner),
+                Some(IntegrityFailure::Malformed | IntegrityFailure::SignatureInvalid)
+            ) {
+                return Err(VaultError::SignatureInvalid);
             }
             let legacy_owner = record.key_epoch == 0 && record.author_pubkey == self.genesis_owner;
             if !legacy_owner {

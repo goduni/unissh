@@ -158,6 +158,7 @@ fn sharing_does_not_promote_a_record_with_a_tampered_signature() {
     let v = Vault::create(&st, &owner, b"bad-share".to_vec(), b"shared").unwrap();
     v.put_item(b"note", 6, b"existing note").unwrap();
     let mut record = st.get_item(v.vault_id(), b"note").unwrap().unwrap();
+    record.version += 1;
     record.signature[0] ^= 1;
     st.put_item(&record).unwrap();
     let members = [Member {
@@ -171,7 +172,7 @@ fn sharing_does_not_promote_a_record_with_a_tampered_signature() {
     assert!(st.latest_membership_epoch(v.vault_id()).unwrap().is_none());
     assert_eq!(
         st.get_item(v.vault_id(), b"note").unwrap().unwrap().version,
-        1
+        2
     );
 }
 
