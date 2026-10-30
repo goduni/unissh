@@ -110,3 +110,119 @@ fn put_item_after_rotate_vk_roundtrips() {
     let report = v2.verify_chain().unwrap();
     assert!(report.ok, "verify_chain must be green: {:?}", report);
 }
+
+#[test]
+fn sharing_reanchors_existing_items_and_keeps_deleted_items_deleted() {
+    let st = storage();
+    let owner = keyset();
+    let v = Vault::create(&st, &owner, b"share-old".to_vec(), b"shared").unwrap();
+    v.put_item(b"before-share", 6, b"existing note").unwrap();
+    v.put_item(b"deleted", 6, b"do not resurrect").unwrap();
+    v.delete_item(b"deleted").unwrap();
+    let members = [Member {
+        ed25519_pub: ed_of(&owner),
+        role: MemberRole::Admin,
+    }];
+    let xkeys = [(ed_of(&owner), x_of(&owner))];
+    for epoch in [1, 2] {
+        assert_eq!(
+            v.establish_or_extend_membership(&owner, &members, &xkeys)
+                .unwrap(),
+            epoch
+        );
+        assert_eq!(
+            v.get_item(b"before-share")
+                .unwrap()
+                .unwrap()
+                .content
+                .as_slice(),
+            b"existing note"
+        );
+        let record = st.get_item(v.vault_id(), b"before-share").unwrap().unwrap();
+        assert_eq!(record.key_epoch, epoch);
+        assert_eq!(record.version, epoch + 1);
+        assert!(
+            st.get_item(v.vault_id(), b"deleted")
+                .unwrap()
+                .unwrap()
+                .tombstone
+        );
+        assert!(v.verify_chain().unwrap().ok);
+    }
+}
+
+#[test]
+fn sharing_does_not_promote_a_record_with_a_tampered_signature() {
+    let st = storage();
+    let owner = keyset();
+    let v = Vault::create(&st, &owner, b"bad-share".to_vec(), b"shared").unwrap();
+    v.put_item(b"note", 6, b"existing note").unwrap();
+    let mut record = st.get_item(v.vault_id(), b"note").unwrap().unwrap();
+    record.signature[0] ^= 1;
+    st.put_item(&record).unwrap();
+    let members = [Member {
+        ed25519_pub: ed_of(&owner),
+        role: MemberRole::Admin,
+    }];
+    let xkeys = [(ed_of(&owner), x_of(&owner))];
+    assert!(v
+        .establish_or_extend_membership(&owner, &members, &xkeys)
+        .is_err());
+    assert!(st.latest_membership_epoch(v.vault_id()).unwrap().is_none());
+    assert_eq!(
+        st.get_item(v.vault_id(), b"note").unwrap().unwrap().version,
+        1
+    );
+}
+
+#[test]
+fn membership_change_does_not_launder_a_viewers_signed_edit() {
+    use unissh_crypto::{sign_version, AssociatedData, VersionedObject};
+    let st = storage();
+    let owner = keyset();
+    let viewer = keyset();
+    let v = Vault::create(&st, &owner, b"viewer-share".to_vec(), b"shared").unwrap();
+    let members = [
+        Member {
+            ed25519_pub: ed_of(&owner),
+            role: MemberRole::Admin,
+        },
+        Member {
+            ed25519_pub: ed_of(&viewer),
+            role: MemberRole::Viewer,
+        },
+    ];
+    let xkeys = [
+        (ed_of(&owner), x_of(&owner)),
+        (ed_of(&viewer), x_of(&viewer)),
+    ];
+    v.establish_or_extend_membership(&owner, &members, &xkeys)
+        .unwrap();
+    v.put_item(b"note", 6, b"owner's note").unwrap();
+    let mut record = st.get_item(v.vault_id(), b"note").unwrap().unwrap();
+    record.version += 1;
+    record.author_pubkey = ed_of(&viewer);
+    let aad = AssociatedData::new(
+        v.vault_id().to_vec(),
+        record.item_id.clone(),
+        record.version,
+    );
+    record.signature = sign_version(
+        &viewer.signing.signing,
+        &VersionedObject::from_content(aad, &record.content_blob),
+    )
+    .unwrap();
+    st.put_item(&record).unwrap();
+    assert!(matches!(
+        v.establish_or_extend_membership(&owner, &members, &xkeys),
+        Err(unissh_vault::VaultError::AuthorityInvalid)
+    ));
+    assert_eq!(st.latest_membership_epoch(v.vault_id()).unwrap(), Some(1));
+    assert_eq!(
+        st.get_item(v.vault_id(), b"note")
+            .unwrap()
+            .unwrap()
+            .author_pubkey,
+        ed_of(&viewer)
+    );
+}

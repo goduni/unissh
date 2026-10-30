@@ -208,6 +208,12 @@ starts with `0.`:
 
 ### Fixed
 
+- Sharing an existing vault reissues its current items and tombstones at the
+  new membership epoch in the same transaction as the manifest and grants.
+  Previously, items created before the first share stayed at epoch 0 and
+  could not be read or synced after sharing. Versions advance normally;
+  signatures are verified before reissuing, and deleted items stay deleted.
+
 - Saving a host in the app preserves its entire jump chain, including hops
   the editor does not show. Turning ProxyJump off removes the whole chain.
 - Host imports, imported-key attachment and tag edits use the core host-save

@@ -1586,6 +1586,8 @@ fn connection_profiles_crud_and_import() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
+    core.set_account_default_username("root".to_owned())
+        .unwrap();
     core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
 
     let prof = unissh_ffi::ConnectionProfile {
@@ -1726,6 +1728,8 @@ fn import_ssh_config_ipv6_proxyjump() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
+    core.set_account_default_username("root".to_owned())
+        .unwrap();
     core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let cfg = "Host h\n  HostName 2001:db8::5\n  ProxyJump j@[2001:db8::1]:2200\n";
     core.import_ssh_config("v".to_owned(), cfg.to_owned())
@@ -3206,6 +3210,8 @@ fn export_ssh_config_round_trips() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
+    core.set_account_default_username("root".to_owned())
+        .unwrap();
     core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let cfg = "Host web\n  HostName 192.168.1.10\n  User deploy\n  Port 2222\n\
                Host gw\n  HostName gw.example.com\n  ProxyJump jumpuser@jump.example.com:2200\n";

@@ -960,6 +960,7 @@ pub async fn key_rotation_start(
         ));
     }
     current.driver = Some(Arc::new(driver));
+    drop(current);
     Ok(Some(run))
 }
 
