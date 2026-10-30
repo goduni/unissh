@@ -625,7 +625,7 @@ fn atomic_download(
     let parent = local
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
+        .unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(parent)?;
     let part = tempfile::Builder::new()
         .prefix(".unissh-")
