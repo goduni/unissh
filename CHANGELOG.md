@@ -208,6 +208,13 @@ starts with `0.`:
 
 ### Fixed
 
+- Vault-key rotation reissues deleted markers as well as live items before
+  advancing the epoch floor, so later membership updates and integrity checks
+  keep working. Owner-directed repair of a legacy below-floor row requires
+  its signer to have write permission both then and now; live content must
+  still decrypt with the current vault key. Revoked/demoted edits and malformed
+  deletion markers are refused. Read and sync epoch-floor checks stay strict.
+
 - Adding or re-granting a vault member issues fresh grants for all remaining
   members. Their public encryption keys are pinned on the granting device from
   the operator's explicit inputs. On an older or newly paired device, re-grant

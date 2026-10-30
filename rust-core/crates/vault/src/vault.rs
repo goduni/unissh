@@ -751,7 +751,7 @@ impl<'a> Vault<'a> {
         }
         // Verify and prepare the current snapshot BEFORE membership mode or
         // its floor changes. Otherwise epoch-0 items become unreadable first.
-        let reanchored = self.reanchor_membership_items(key_epoch)?;
+        let reanchored = self.reanchor_items(&self.vk, key_epoch)?;
         self.storage.transaction(|| {
             let verified = add_member(
                 self.storage,
@@ -821,11 +821,14 @@ impl<'a> Vault<'a> {
         Ok(key_epoch)
     }
 
-    /// Reissues the verified current snapshot at the new membership epoch,
-    /// with ordinary version increments and unchanged plaintext/VK. Only an
-    /// authenticated genesis-owner record can repair a legacy epoch-0 row;
-    /// an unauthorized member's edit is never promoted into an owner's write.
-    fn reanchor_membership_items(&self, epoch: u64) -> Result<Vec<ItemRecord>, VaultError> {
+    /// Reissues the verified current snapshot, including deletions, at a new
+    /// epoch. Both membership changes and VK rotation use this owner write
+    /// path; ordinary reads/pulls retain their strict epoch-floor checks.
+    fn reanchor_items(
+        &self,
+        target_vk: &SymmetricKey,
+        epoch: u64,
+    ) -> Result<Vec<ItemRecord>, VaultError> {
         let records = self
             .storage
             .list_items_including_tombstones(&self.vault_id)?;
@@ -837,16 +840,12 @@ impl<'a> Vault<'a> {
             ) {
                 return Err(VaultError::SignatureInvalid);
             }
-            let legacy_owner = record.key_epoch == 0 && record.author_pubkey == self.genesis_owner;
-            if !legacy_owner {
-                verify_record_authority(
-                    self.storage,
-                    &self.vault_id,
-                    &record.author_pubkey,
-                    record.key_epoch,
-                    &self.genesis_owner,
-                )?;
+            if record.tombstone
+                && (!record.content_blob.is_empty() || !record.wrapped_item_key.is_empty())
+            {
+                return Err(VaultError::Format);
             }
+            self.verify_reanchor_authority(&record)?;
             let updated = if record.tombstone {
                 let mut tombstone = self.tombstone_record(
                     &record.item_id,
@@ -856,11 +855,56 @@ impl<'a> Vault<'a> {
                 tombstone.key_epoch = epoch;
                 tombstone
             } else {
-                self.rewrap_item(&record, &self.vk, epoch)?
+                self.rewrap_item(&record, target_vk, epoch)?
             };
             out.push(updated);
         }
         Ok(out)
+    }
+
+    /// A legacy below-floor row may be reissued only if its authenticated
+    /// author could write THEN and can STILL write now. In particular, a
+    /// revoked/demoted signer cannot launder a fresh delete through an old
+    /// epoch. Live content must also decrypt with the current VK before it is
+    /// reissued. This is never an alternative read/sync authorization path.
+    fn verify_reanchor_authority(&self, record: &ItemRecord) -> Result<(), VaultError> {
+        if record.key_epoch == 0 && record.author_pubkey == self.genesis_owner {
+            return Ok(());
+        }
+        let floor = self
+            .storage
+            .get_vault_epoch_floor(&self.vault_id)?
+            .unwrap_or(0);
+        if record.key_epoch >= floor {
+            return verify_record_authority(
+                self.storage,
+                &self.vault_id,
+                &record.author_pubkey,
+                record.key_epoch,
+                &self.genesis_owner,
+            );
+        }
+        let historical = verify_chain_to_epoch(
+            self.storage,
+            &self.vault_id,
+            record.key_epoch,
+            &self.genesis_owner,
+        )?;
+        let current_epoch = self
+            .storage
+            .latest_membership_epoch(&self.vault_id)?
+            .ok_or(VaultError::EpochInvalid)?;
+        let current = verify_chain_to_epoch(
+            self.storage,
+            &self.vault_id,
+            current_epoch,
+            &self.genesis_owner,
+        )?;
+        if historical.can_write(&record.author_pubkey) && current.can_write(&record.author_pubkey) {
+            Ok(())
+        } else {
+            Err(VaultError::AuthorityInvalid)
+        }
     }
 
     /// Changes the vault's cache-policy (server-tz §6.6): version+1, re-signing the record,
@@ -1043,12 +1087,10 @@ impl<'a> Vault<'a> {
             vrec.sync_tenant,
         )?;
 
-        // 5) re-wrap live items under VK' (in advance, to keep the transaction short).
-        let live = self.storage.list_items(&self.vault_id)?;
-        let mut rewrapped = Vec::with_capacity(live.len());
-        for it in &live {
-            rewrapped.push(self.rewrap_item(it, &vk_prime, new_epoch)?);
-        }
+        // 5) reissue the verified current snapshot under VK', including
+        // tombstones. Leaving a deleted row below the new floor breaks the
+        // audit and the next membership update.
+        let rewrapped = self.reanchor_items(&vk_prime, new_epoch)?;
 
         // ATOMICALLY: manifest + grants + items + vault record + epoch floor.
         self.storage.transaction(|| {

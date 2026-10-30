@@ -227,3 +227,204 @@ fn membership_change_does_not_launder_a_viewers_signed_edit() {
         ed_of(&viewer)
     );
 }
+
+#[test]
+fn vault_key_rotation_keeps_deleted_records_current_and_deleted() {
+    let st = storage();
+    let owner = keyset();
+    let v = Vault::create(&st, &owner, b"rotate-deleted".to_vec(), b"shared").unwrap();
+    let members = [Member {
+        ed25519_pub: ed_of(&owner),
+        role: MemberRole::Admin,
+    }];
+    let xkeys = [(ed_of(&owner), x_of(&owner))];
+    v.establish_or_extend_membership(&owner, &members, &xkeys)
+        .unwrap();
+    v.put_item(b"deleted", 6, b"never resurrect").unwrap();
+    v.delete_item(b"deleted").unwrap();
+    let grants = [(x_of(&owner), ed_of(&owner), MemberRole::Admin)];
+    v.rotate_vk(&owner, &members, &grants).unwrap();
+    let reopened = Vault::open(&st, &owner, v.vault_id()).unwrap();
+    let record = st.get_item(v.vault_id(), b"deleted").unwrap().unwrap();
+    assert!(record.tombstone);
+    assert_eq!(record.key_epoch, 2);
+    assert!(reopened.verify_chain().unwrap().ok);
+    // Simulate an older client's signed deletion left below the trusted floor.
+    signed_stale_delete(&st, v.vault_id(), &owner, 1);
+    reopened
+        .establish_or_extend_membership(&owner, &members, &xkeys)
+        .unwrap();
+    assert!(reopened.get_item(b"deleted").unwrap().is_none());
+    assert_eq!(
+        st.get_item(v.vault_id(), b"deleted")
+            .unwrap()
+            .unwrap()
+            .key_epoch,
+        3
+    );
+    assert!(reopened.verify_chain().unwrap().ok);
+}
+
+/// Reconstruct an older client's below-floor row without weakening the
+/// ordinary read path. A membership-only update retains the VK; rotation does not.
+#[test]
+fn legacy_live_reissue_requires_the_current_vault_key() {
+    for rotated in [false, true] {
+        let st = storage();
+        let owner = keyset();
+        let v = Vault::create(&st, &owner, b"legacy-live".to_vec(), b"shared").unwrap();
+        let members = [Member {
+            ed25519_pub: ed_of(&owner),
+            role: MemberRole::Admin,
+        }];
+        let xkeys = [(ed_of(&owner), x_of(&owner))];
+        v.establish_or_extend_membership(&owner, &members, &xkeys)
+            .unwrap();
+        v.put_item(b"note", 6, b"existing note").unwrap();
+        let legacy = st.get_item(v.vault_id(), b"note").unwrap().unwrap();
+        if rotated {
+            v.rotate_vk(
+                &owner,
+                &members,
+                &[(x_of(&owner), ed_of(&owner), MemberRole::Admin)],
+            )
+            .unwrap();
+        } else {
+            v.establish_or_extend_membership(&owner, &members, &xkeys)
+                .unwrap();
+        }
+        let current = st.get_item(v.vault_id(), b"note").unwrap().unwrap();
+        assert!(st
+            .discard_unpushed_item(v.vault_id(), b"note", current.version, &ed_of(&owner))
+            .unwrap());
+        st.put_item(&legacy).unwrap();
+        st.set_vault_epoch_floor(v.vault_id(), 2).unwrap();
+        let reopened = Vault::open(&st, &owner, v.vault_id()).unwrap();
+        assert!(matches!(
+            reopened.get_item(b"note"),
+            Err(unissh_vault::VaultError::EpochInvalid)
+        ));
+        let repaired = reopened.establish_or_extend_membership(&owner, &members, &xkeys);
+        if rotated {
+            assert!(
+                repaired.is_err(),
+                "old-VK ciphertext must never be reissued under VK prime"
+            );
+            assert_eq!(st.latest_membership_epoch(v.vault_id()).unwrap(), Some(2));
+        } else {
+            assert_eq!(repaired.unwrap(), 3);
+            assert_eq!(
+                reopened
+                    .get_item(b"note")
+                    .unwrap()
+                    .unwrap()
+                    .content
+                    .as_slice(),
+                b"existing note"
+            );
+            assert!(reopened.verify_chain().unwrap().ok);
+        }
+        assert!(
+            unissh_vault::verify_record_authority(
+                &st,
+                v.vault_id(),
+                &ed_of(&owner),
+                1,
+                &ed_of(&owner)
+            )
+            .is_err(),
+            "ordinary authority checks must still enforce the floor"
+        );
+    }
+}
+
+fn signed_stale_delete(st: &Storage, vault_id: &[u8], signer: &UnlockedKeyset, epoch: u64) {
+    use unissh_crypto::{sign_version, AssociatedData, VersionedObject};
+    let mut record = st.get_item(vault_id, b"deleted").unwrap().unwrap();
+    assert!(
+        record.tombstone && record.content_blob.is_empty() && record.wrapped_item_key.is_empty()
+    );
+    record.version += 1;
+    record.key_epoch = epoch;
+    record.author_pubkey = ed_of(signer);
+    let aad = AssociatedData::new(vault_id.to_vec(), record.item_id.clone(), record.version);
+    record.signature = sign_version(
+        &signer.signing.signing,
+        &VersionedObject::from_content(aad, &record.content_blob),
+    )
+    .unwrap();
+    st.put_item(&record).unwrap();
+}
+
+#[test]
+fn old_epoch_deletes_from_revoked_or_demoted_signers_are_not_promoted() {
+    for remaining_role in [None, Some(MemberRole::Viewer)] {
+        let st = storage();
+        let owner = keyset();
+        let writer = keyset();
+        let v = Vault::create(&st, &owner, b"revoked-delete".to_vec(), b"shared").unwrap();
+        let members = [
+            Member {
+                ed25519_pub: ed_of(&owner),
+                role: MemberRole::Admin,
+            },
+            Member {
+                ed25519_pub: ed_of(&writer),
+                role: MemberRole::Editor,
+            },
+        ];
+        let xkeys = [
+            (ed_of(&owner), x_of(&owner)),
+            (ed_of(&writer), x_of(&writer)),
+        ];
+        v.establish_or_extend_membership(&owner, &members, &xkeys)
+            .unwrap();
+        v.put_item(b"deleted", 6, b"deleted").unwrap();
+        v.delete_item(b"deleted").unwrap();
+        let mut remaining = vec![members[0].clone()];
+        let mut grants = vec![(x_of(&owner), ed_of(&owner), MemberRole::Admin)];
+        if let Some(role) = remaining_role {
+            remaining.push(Member {
+                ed25519_pub: ed_of(&writer),
+                role,
+            });
+            grants.push((x_of(&writer), ed_of(&writer), role));
+        }
+        v.rotate_vk(&owner, &remaining, &grants).unwrap();
+        signed_stale_delete(&st, v.vault_id(), &writer, 1);
+        let reopened = Vault::open(&st, &owner, v.vault_id()).unwrap();
+        assert!(matches!(
+            reopened.establish_or_extend_membership(&owner, &remaining, &xkeys),
+            Err(unissh_vault::VaultError::AuthorityInvalid)
+        ));
+        assert!(matches!(
+            reopened.rotate_vk(&owner, &remaining, &grants),
+            Err(unissh_vault::VaultError::AuthorityInvalid)
+        ));
+        assert_eq!(st.latest_membership_epoch(v.vault_id()).unwrap(), Some(2));
+    }
+}
+
+#[test]
+fn reissuing_a_snapshot_refuses_an_unsigned_flip_of_the_deleted_flag() {
+    let st = storage();
+    let owner = keyset();
+    let v = Vault::create(&st, &owner, b"flipped-delete".to_vec(), b"shared").unwrap();
+    v.put_item(b"note", 6, b"keep this note").unwrap();
+    let mut record = st.get_item(v.vault_id(), b"note").unwrap().unwrap();
+    assert!(st
+        .discard_unpushed_item(v.vault_id(), b"note", record.version, &ed_of(&owner))
+        .unwrap());
+    // The signature covers the ciphertext, not this clear metadata flag.
+    record.tombstone = true;
+    st.put_item(&record).unwrap();
+    let members = [Member {
+        ed25519_pub: ed_of(&owner),
+        role: MemberRole::Admin,
+    }];
+    assert!(matches!(
+        v.establish_or_extend_membership(&owner, &members, &[(ed_of(&owner), x_of(&owner))]),
+        Err(unissh_vault::VaultError::Format)
+    ));
+    assert!(st.latest_membership_epoch(v.vault_id()).unwrap().is_none());
+}
