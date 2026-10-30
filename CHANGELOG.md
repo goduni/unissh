@@ -208,6 +208,12 @@ starts with `0.`:
 
 ### Fixed
 
+- Adding or re-granting a vault member issues fresh grants for all remaining
+  members. Their public encryption keys are pinned on the granting device from
+  the operator's explicit inputs. On an older or newly paired device, re-grant
+  members whose keys are missing before retrying; membership stays unchanged
+  while those keys are collected. A changed pinned encryption key is refused.
+
 - Sharing an existing vault reissues its current items and tombstones at the
   new membership epoch in the same transaction as the manifest and grants.
   Previously, items created before the first share stayed at epoch 0 and

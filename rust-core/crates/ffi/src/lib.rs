@@ -65,6 +65,7 @@ mod item_ids;
 mod key_rotation;
 pub mod key_rotation_plan;
 mod key_usage;
+mod membership_keys;
 mod password_fill;
 mod shared_vault;
 pub mod snippet_params;
@@ -2258,7 +2259,13 @@ impl Core {
                 role: role.to_core(),
             });
 
-            let x25519_by_ed = vec![(owner_ed, owner_x), (member_ed.clone(), member_x)];
+            let x25519_by_ed = membership_keys::recipients(
+                &state.storage,
+                &vid,
+                &members,
+                (owner_ed, owner_x),
+                (member_ed.clone(), member_x),
+            )?;
             vault
                 .establish_or_extend_membership(&state.keyset, &members, &x25519_by_ed)
                 .map_err(map_vault_err)?;
