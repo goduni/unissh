@@ -400,14 +400,26 @@ export async function resolveConnection(
   vaultId: string,
   promptedPassword?: string,
 ): Promise<ConnectArgs> {
+  return (await resolveConnectionProfile(profile.profileId, vaultId, promptedPassword)).connection;
+}
+
+/** Resolve destination and session policy from the same saved profile snapshot. */
+export async function resolveConnectionProfile(
+  profileId: string,
+  vaultId: string,
+  promptedPassword?: string,
+): Promise<{ connection: ConnectArgs; profile: ConnectionProfile }> {
   const r = await invoke<ResolvedConnect>("resolve_connection", {
     vaultId,
-    profileId: profile.profileId,
+    profileId,
   });
   const auth: AuthMethod = r.askPassword
     ? { type: "password", password: promptedPassword ?? "" }
     : r.auth;
-  return { host: r.host, port: r.port, user: r.user, auth, jumps: r.jumps, proxy: r.proxy };
+  return {
+    connection: { host: r.host, port: r.port, user: r.user, auth, jumps: r.jumps, proxy: r.proxy },
+    profile: r.profile,
+  };
 }
 export interface SkippedDirective {
   line: number;

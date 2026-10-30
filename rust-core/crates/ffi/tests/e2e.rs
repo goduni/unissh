@@ -4541,6 +4541,25 @@ fn resolve_connection_fills_the_default_user_and_flags_a_typed_password() {
     );
     assert!(!by_key.ask_password);
 
+    let mut edited = by_key.profile;
+    edited.host = "gateway.example".to_owned();
+    edited.username_template = Some("%u:prod".to_owned());
+    edited.record_sessions = true;
+    edited.agent_forward = false;
+    core.save_connection("v".to_owned(), edited).unwrap();
+    let current = core
+        .resolve_connection("v".to_owned(), "by-key".to_owned())
+        .unwrap();
+    assert_eq!(current.host, current.profile.host);
+    assert_eq!(current.host, "gateway.example");
+    assert_eq!(current.user, "ops:prod");
+    assert_eq!(
+        current.profile.username_template.as_deref(),
+        Some("%u:prod")
+    );
+    assert!(current.profile.record_sessions);
+    assert!(!current.profile.agent_forward);
+
     let typed = core
         .resolve_connection("v".to_owned(), "typed".to_owned())
         .unwrap();

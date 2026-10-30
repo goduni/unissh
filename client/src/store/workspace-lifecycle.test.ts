@@ -218,6 +218,18 @@ describe("workspace in the app lifecycle", () => {
     expect(useApp.getState().terminals[0].panes[0].status).toBe("restored");
   });
 
+  it("refreshes a closed pane before reconnecting an edited gateway host", async () => {
+    await useApp.getState().reloadVaults();
+    const tab = useApp.getState().terminals[0];
+    useApp.getState().updatePane(tab.id, tab.activePaneId, { status: "closed" });
+    const latest = { ...host, host: "gateway.example", usernameTemplate: "%u:db", agentForward: false, recordSessions: true };
+    useApp.setState({ hosts: [latest] });
+    useApp.getState().reconnectPane(tab.id, tab.activePaneId, true);
+    expect(useApp.getState().terminals[0].panes[0]).toMatchObject({
+      status: "connecting", target: { kind: "ssh", profile: latest },
+    });
+  });
+
   it("does not restore or write from a vault load that finishes after lock", async () => {
     let finish!: (hosts: ConnectionProfile[]) => void;
     io.connections.mockImplementation(() => new Promise<ConnectionProfile[]>((resolve) => { finish = resolve; }));
