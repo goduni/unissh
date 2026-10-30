@@ -428,3 +428,38 @@ fn reissuing_a_snapshot_refuses_an_unsigned_flip_of_the_deleted_flag() {
     ));
     assert!(st.latest_membership_epoch(v.vault_id()).unwrap().is_none());
 }
+
+#[test]
+fn owner_repair_cannot_replace_a_missing_manifest_at_the_trusted_floor() {
+    let st = storage();
+    let owner = keyset();
+    let v = Vault::create(&st, &owner, b"missing-manifest".to_vec(), b"shared").unwrap();
+    let members = [Member {
+        ed25519_pub: ed_of(&owner),
+        role: MemberRole::Admin,
+    }];
+    let xkeys = [(ed_of(&owner), x_of(&owner))];
+    v.establish_or_extend_membership(&owner, &members, &xkeys)
+        .unwrap();
+    v.put_item(b"note", 6, b"existing note").unwrap();
+    // A trusted floor says epoch 2 has already been seen, but its manifest
+    // is missing. Neither owner operation may invent a replacement epoch 2.
+    st.set_vault_epoch_floor(v.vault_id(), 2).unwrap();
+    assert!(matches!(
+        v.establish_or_extend_membership(&owner, &members, &xkeys),
+        Err(unissh_vault::VaultError::EpochInvalid)
+    ));
+    assert!(matches!(
+        v.rotate_vk(
+            &owner,
+            &members,
+            &[(x_of(&owner), ed_of(&owner), MemberRole::Admin)]
+        ),
+        Err(unissh_vault::VaultError::EpochInvalid)
+    ));
+    assert!(st
+        .get_membership_manifest(v.vault_id(), 2)
+        .unwrap()
+        .is_none());
+    assert_eq!(st.get_vault_epoch_floor(v.vault_id()).unwrap(), Some(2));
+}
