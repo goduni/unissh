@@ -342,7 +342,8 @@ fn signed_stale_delete(st: &Storage, vault_id: &[u8], signer: &UnlockedKeyset, e
     use unissh_crypto::{sign_version, AssociatedData, VersionedObject};
     let mut record = st.get_item(vault_id, b"deleted").unwrap().unwrap();
     assert!(
-        record.tombstone && record.content_blob.is_empty() && record.wrapped_item_key.is_empty()
+        record.tombstone && record.content_blob.is_empty() && record.wrapped_item_key.is_empty(),
+        "the stale-deletion fixture must start from a canonical tombstone"
     );
     record.version += 1;
     record.key_epoch = epoch;
