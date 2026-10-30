@@ -2510,9 +2510,13 @@ impl Core {
             }
 
             let vault = Vault::open(&state.storage, &state.keyset, &vid).map_err(map_vault_err)?;
-            vault
-                .rotate_vk(&state.keyset, &members, &grants)
-                .map_err(map_vault_err)
+            state.storage.transaction(|| {
+                let epoch = vault
+                    .rotate_vk(&state.keyset, &members, &grants)
+                    .map_err(map_vault_err)?;
+                membership_keys::remember_rotation(&state.storage, &vid, &grants)?;
+                Ok(epoch)
+            })
         })
     }
 

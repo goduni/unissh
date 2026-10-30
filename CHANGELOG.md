@@ -229,10 +229,12 @@ this check. The vault format and server wire encoding are unchanged.
   deletion markers are refused. Read and sync epoch-floor checks stay strict.
 
 - Adding or re-granting a vault member issues fresh grants for all remaining
-  members. Their public encryption keys are pinned on the granting device from
+  members. Their public encryption keys are remembered on the granting device from
   the operator's explicit inputs. On an older or newly paired device, re-grant
   members whose keys are missing before retrying; membership stays unchanged
-  while those keys are collected. A changed pinned encryption key is refused.
+  while those keys are collected. An explicit re-grant updates its supplied
+  recipient key; vault-key rotation refreshes the remembered keys of all
+  remaining members so later grants never use obsolete encryption keys.
 
 - Sharing an existing vault reissues its current items and tombstones at the
   new membership epoch in the same transaction as the manifest and grants.
