@@ -685,6 +685,9 @@ fn binding_item_id(team_vault_id: &str, profile_uid: &str) -> String {
 /// ([`Core::resolve_connection`]).
 #[derive(uniffi::Record, Clone)]
 pub struct ResolvedConnection {
+    /// The saved profile used for this resolution. Session policy and display
+    /// must use this snapshot too, rather than an older pane's profile.
+    pub profile: ConnectionProfile,
     /// Host to connect to.
     pub host: String,
     /// Port.
@@ -8151,6 +8154,7 @@ impl Core {
             )
         };
         Ok(ResolvedConnection {
+            profile: p.clone(),
             host: p.host.clone(),
             port: p.port,
             user: apply_username_template(&user, p.username_template.as_deref()),
@@ -11445,6 +11449,30 @@ async fn await_sftp_open(
 }
 
 impl SftpFfi {
+    /// Rust callers can download into an exclusively created private file
+    /// without reopening its pathname. The caller owns publication/cleanup.
+    pub fn sftp_download_to_file(
+        &self,
+        remote_path: String,
+        file: std::fs::File,
+        progress: Option<Arc<dyn SftpProgressObserver>>,
+    ) -> Result<bool, FfiError> {
+        let progress = progress.map(|p| -> Arc<dyn unissh_ssh_transport::SftpProgress> {
+            Arc::new(ProgressBridge(p))
+        });
+        self.with_sftp(|rt, s| {
+            let outcome = rt
+                .block_on(s.download_to_file(
+                    &remote_path,
+                    tokio::fs::File::from_std(file),
+                    progress,
+                    None,
+                ))
+                .map_err(map_transport_err)?;
+            Ok(outcome == unissh_ssh_transport::TransferOutcome::Completed)
+        })
+    }
+
     /// Leases a channel from the pool, runs `f`, returns the channel. Up to `SftpPool::max`
     /// operations run in parallel; when saturated it blocks the calling blocking thread
     /// until a channel is freed. The channel is returned to the pool if its thread is not

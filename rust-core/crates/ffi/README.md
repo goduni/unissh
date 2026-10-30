@@ -100,6 +100,7 @@ open_sftp(host, port, user, vault_id, auth, jumps[]) -> SftpFfi
 SftpFfi::{list_dir, read_file, write_file, remove, mkdir, rmdir, rename, stat, realpath, close}
 // resumable transfers with progress/cancellation (CancelToken, SftpProgressObserver)
 SftpFfi::sftp_download(remote, local, offset, progress?, cancel?) -> completed: bool
+SftpFfi::sftp_download_to_file(remote, file, progress?) -> completed: bool // Rust-only; already-open private file
 SftpFfi::sftp_upload(local, remote, offset, progress?, cancel?) -> completed: bool   // no TRUNC when resuming
 sftp_put_multi(targets[], remote_path, data, make_parent_dirs, max_concurrency, timeout_secs)
     -> [{host, error?}]   // fleet push: one blob to many hosts
@@ -156,6 +157,9 @@ save_host(vault_id, HostSave{profile, new_password?, group, identity?, move_iden
 //   hosts trimmed; the username template is kept for a personal login only. The connect (and
 //   resolve_connection) refuse a hop_ref into another vault with InvalidHost{HopOtherVault}.
 get_connection(vault_id, profile_id) / delete_connection(vault_id, profile_id)
+resolve_connection(vault_id, profile_id) -> ResolvedConnection
+//   Includes the exact saved profile used to resolve the destination, so session policy
+//   (recording, forwarding, gateway password-fill exclusions) and display use the same snapshot.
 import_ssh_config(vault_id, config_text) -> [created_profile_ids]        // pasted text; Include is reported, not followed
 import_ssh_config_at_path(vault_id, path, only?) -> [{alias, origin_file}] // a FILE: Include followed as ssh follows it,
                                                                           // `only` = the aliases the preview left ticked

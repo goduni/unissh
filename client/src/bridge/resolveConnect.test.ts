@@ -3,12 +3,29 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke, Channel: class {} }));
 
-import { resolveConnection } from "./api";
+import { resolveConnection, resolveConnectionProfile } from "./api";
+import { passwordFillMode } from "@/views/terminal/paneSession";
 import type { ConnectionProfile } from "./types";
 
 beforeEach(() => invoke.mockReset());
 
 describe("resolveConnection", () => {
+  it("uses the resolved gateway profile for session policy as well as destination", async () => {
+    const profile = {
+      profileId: "db", host: "gateway.example", label: "Production gateway",
+      usernameTemplate: "%u:db", agentForward: false, recordSessions: true,
+    } as ConnectionProfile;
+    invoke.mockResolvedValue({
+      profile, host: profile.host, port: 22, user: "alice:db",
+      auth: { type: "vaultPassword", vaultId: "personal", passwordItemId: "pw" },
+      jumps: [], proxy: null, askPassword: false,
+    });
+    const resolved = await resolveConnectionProfile("db", "team");
+    expect(resolved.connection).toMatchObject({ host: "gateway.example", user: "alice:db" });
+    expect(resolved.profile).toEqual(profile);
+    expect(passwordFillMode(resolved.profile, true, true)).toBe("off");
+    expect(resolved.profile).toMatchObject({ agentForward: false, recordSessions: true });
+  });
   it("asks the core's resolver and fills in a password typed for the connection", async () => {
     const profile = { profileId: "web", host: "web.example", port: 22, jumps: [] } as unknown as ConnectionProfile;
     invoke.mockResolvedValue({

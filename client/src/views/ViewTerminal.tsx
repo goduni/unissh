@@ -914,6 +914,7 @@ async function runStartupSnippets(
     // connect is in flight, `cancelled` tells the resolving promise to abandon and
     // close its session so it never leaks or double-opens.
     let cancelled = false;
+    let sessionProfile = target.kind === "ssh" ? target.profile : null;
     // We're (re)connecting now: cancel any pending auto-reconnect timer so an
     // auto-retry and a manual/store-driven reconnect can't both fire.
     if (autoTimerRef.current != null) {
@@ -991,9 +992,13 @@ async function runStartupSnippets(
           // never to `target.profile`, which a pane keeps from when it opened
           // and which may have changed since.
           api
-            .resolveConnection(target.profile, vaultId, pw ?? undefined)
-            .then((dest) => {
-              void fillCredentialLabel(target.profile, dest.auth).then((label) => {
+            .resolveConnectionProfile(target.profile.profileId, vaultId, pw ?? undefined)
+            .then(({ connection: dest, profile: current }) => {
+              if (cancelled) throw new Error("connection superseded");
+              sessionProfile = current;
+              updatePane(tabId, pane.id, { target: { kind: "ssh", profile: current } });
+              useApp.getState().setPaneTitle(pane.id, current.label);
+              void fillCredentialLabel(current, dest.auth).then((label) => {
                 if (!cancelled) setFillCredential(label);
               });
               const fill = useApp.getState();
@@ -1008,16 +1013,16 @@ async function runStartupSnippets(
                 // A recording per connection, not per pane: a reconnect is a new
                 // session with its own start time, and appending it to the previous
                 // document would produce one recording whose timeline lies.
-                target.profile.recordSessions && vaultId
+                current.recordSessions && vaultId
                   ? {
                       vaultId,
-                      recordingId: `rec-${target.profile.profileId}-${Date.now()}`,
-                      label: target.profile.label,
+                      recordingId: `rec-${current.profileId}-${Date.now()}`,
+                      label: current.label,
                     }
                   : undefined,
-                target.profile.agentForward,
+                current.agentForward,
                 // Fixed for the session's life: the core binds it at open.
-                passwordFillMode(target.profile, fill.offerPasswordFill, fill.offerPasswordFillGeneric),
+                passwordFillMode(current, fill.offerPasswordFill, fill.offerPasswordFillGeneric),
               );
             });
 
@@ -1034,10 +1039,10 @@ async function runStartupSnippets(
         lastSentSizeRef.current = { cols, rows };
         updatePane(tabId, pane.id, { sessionId: id, status: "online", lastOnlineAt: Date.now() });
         term.focus();
-        if (target.kind === "local") return;
+        if (!sessionProfile) return;
         // Refresh the host's "recently connected" timestamp on every (re)connect.
-        useApp.getState().markConnected(target.profile.profileId);
-        void runStartupSnippets(id, target.profile, vaultId, () => !cancelled && sessionIdRef.current === id);
+        useApp.getState().markConnected(sessionProfile.profileId);
+        void runStartupSnippets(id, sessionProfile, vaultId, () => !cancelled && sessionIdRef.current === id);
       })
       .catch((err) => {
         if (cancelled) return;

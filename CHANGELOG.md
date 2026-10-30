@@ -223,6 +223,18 @@ this check. The vault format and server wire encoding are unchanged.
 
 ### Fixed
 
+- Terminal reconnects refresh their displayed host and session options from the
+  same saved profile used to resolve the destination. Recording, agent
+  forwarding, startup snippets and gateway password-fill exclusions follow the
+  current profile rather than the pane's old snapshot.
+- CLI downloads use an exclusively created private temporary file passed by
+  handle, and publish it only after completion. Without `--force`, a file that
+  appears during the download is preserved too. Failed copies leave no partial
+  file and successful Unix downloads remain owner-only (0600).
+- Recursive CLI copies report incompatible or colliding ordinary file and
+  directory names as failures and exit non-zero. Intentional skips of symbolic
+  links and special files remain informational.
+
 - Vault-key rotation reissues deleted markers as well as live items before
   advancing the epoch floor, so later membership updates and integrity checks
   keep working. Owner-directed repair of a legacy below-floor row requires

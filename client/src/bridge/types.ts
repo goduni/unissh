@@ -214,6 +214,8 @@ export interface PersonalAuth {
  *  destination read from the vault, which a Personal host's anti-redirect check
  *  was made against — connect to this, not to a cached profile. */
 export interface ResolvedConnect {
+  /** The exact saved profile used to resolve this connection and its policy. */
+  profile: ConnectionProfile;
   host: string;
   port: number;
   user: string;

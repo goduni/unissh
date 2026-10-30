@@ -531,7 +531,7 @@ fn transfer(sftp: &SftpFfi, direction: Direction, force: bool, recursive: Option
             if local.exists() && !force {
                 return Err(exists(&local.display().to_string()));
             }
-            download(sftp, remote.clone(), &local, None, progress).map_err(|e| {
+            download(sftp, remote.clone(), &local, force, progress).map_err(|e| {
                 if recursive.is_none() && is_dir() {
                     Failure::msg(format!(
                         "{} is a directory; pass -r to copy it",
@@ -600,41 +600,51 @@ fn dir_name(local: &Path) -> Res<String> {
 /// Downloads into a file beside `local` and renames it over `local` only once
 /// the whole file is there: a copy that fails — a remote file that cannot be
 /// read, a connection that drops — leaves whatever `local` was untouched and
-/// no partial file behind. `known_size` is the size a listing gave, which
-/// spares the core a `stat` for its progress.
+/// no partial file behind. The temporary file is exclusively created and
+/// passed by handle; its pathname is never reopened by the transport.
 pub fn download(
     sftp: &SftpFfi,
     remote: String,
     local: &Path,
-    known_size: Option<u64>,
+    overwrite: bool,
     progress: Option<Arc<dyn SftpProgressObserver>>,
 ) -> Res<bool> {
-    let name = local
-        .file_name()
-        .map_or_else(|| "download".into(), |n| n.to_string_lossy());
-    let part = local.with_file_name(format!(".{name}.{}.unissh-part", std::process::id()));
-    let result = sftp.sftp_download(
-        remote,
-        part.to_string_lossy().into_owned(),
-        0,
-        known_size,
-        progress,
-        None,
-    );
-    let completed = match result {
-        Ok(true) => std::fs::rename(&part, local).map(|()| true).map_err(|e| {
-            Failure::msg(format!(
-                "the file arrived but could not be moved to {}: {e}",
-                local.display()
-            ))
-        }),
-        Ok(false) => Ok(false),
-        Err(e) => Err(e.into()),
-    };
-    if !matches!(completed, Ok(true)) {
-        best_effort(std::fs::remove_file(&part));
+    atomic_download(local, overwrite, |file| {
+        sftp.sftp_download_to_file(remote, file, progress)
+            .map_err(Into::into)
+    })
+}
+
+/// Publish a private download only after completion. `persist_noclobber`
+/// also refuses a destination created while the transfer was in flight.
+fn atomic_download(
+    local: &Path,
+    overwrite: bool,
+    transfer: impl FnOnce(std::fs::File) -> Res<bool>,
+) -> Res<bool> {
+    let parent = local
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    std::fs::create_dir_all(parent)?;
+    let part = tempfile::Builder::new()
+        .prefix(".unissh-")
+        .tempfile_in(parent)?;
+    if !transfer(part.as_file().try_clone()?)? {
+        return Ok(false);
     }
-    completed
+    let published = if overwrite {
+        part.persist(local)
+    } else {
+        part.persist_noclobber(local)
+    };
+    published.map(|_| true).map_err(|e| {
+        Failure::msg(format!(
+            "the file arrived but could not be moved to {}: {}",
+            local.display(),
+            e.error
+        ))
+    })
 }
 
 pub fn exists(path: &str) -> Failure {
@@ -689,7 +699,8 @@ pub fn human(bytes: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{base_name, exit_code, human, join_remote, Endpoint};
+    use super::{atomic_download, base_name, exit_code, human, join_remote, Endpoint};
+    use std::io::Write;
     use std::path::PathBuf;
 
     #[test]
@@ -711,6 +722,81 @@ mod tests {
             Endpoint::parse("notes.txt"),
             Endpoint::Local(PathBuf::from("notes.txt"))
         );
+    }
+
+    #[test]
+    fn download_does_not_reuse_an_existing_part_or_its_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("secret");
+        let old_part = dir
+            .path()
+            .join(format!(".secret.{}.unissh-part", std::process::id()));
+        std::fs::write(&old_part, b"unrelated").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&old_part, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        assert!(atomic_download(&target, false, |mut file| {
+            file.write_all(b"downloaded")?;
+            Ok(true)
+        })
+        .unwrap());
+        assert_eq!(std::fs::read(&old_part).unwrap(), b"unrelated");
+        assert_eq!(std::fs::read(&target).unwrap(), b"downloaded");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn unsuccessful_downloads_preserve_the_destination_and_remove_the_partial() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("file");
+        std::fs::write(&target, b"original").unwrap();
+        for fail in [false, true] {
+            let result = atomic_download(&target, true, |mut file| {
+                file.write_all(b"partial")?;
+                if fail {
+                    Err(crate::failure::Failure::msg("interrupted"))
+                } else {
+                    Ok(false)
+                }
+            });
+            if fail {
+                assert!(result.is_err());
+            } else {
+                assert!(!result.unwrap());
+            }
+            assert_eq!(std::fs::read(&target).unwrap(), b"original");
+            assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+        }
+    }
+
+    #[test]
+    fn download_requires_force_even_when_destination_appears_during_transfer() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("file");
+        let result = atomic_download(&target, false, |mut file| {
+            file.write_all(b"downloaded")?;
+            std::fs::write(&target, b"created meanwhile")?;
+            Ok(true)
+        });
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"created meanwhile");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+        assert!(atomic_download(&target, true, |mut file| {
+            file.write_all(b"replacement")?;
+            Ok(true)
+        })
+        .unwrap());
+        assert_eq!(std::fs::read(&target).unwrap(), b"replacement");
     }
 
     #[test]
