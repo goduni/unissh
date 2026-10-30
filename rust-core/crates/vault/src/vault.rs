@@ -741,6 +741,14 @@ impl<'a> Vault<'a> {
             }
             None => (1_u64, None),
         };
+        if key_epoch
+            <= self
+                .storage
+                .get_vault_epoch_floor(&self.vault_id)?
+                .unwrap_or(0)
+        {
+            return Err(VaultError::EpochInvalid);
+        }
         // grants: (recipient_x25519, member_ed25519, role) for each member
         // whose x25519 is known.
         let mut grants: Vec<(Vec<u8>, Vec<u8>, MemberRole)> = Vec::new();
@@ -1027,6 +1035,14 @@ impl<'a> Vault<'a> {
         let new_epoch = current_epoch
             .checked_add(1)
             .ok_or(VaultError::EpochInvalid)?;
+        if new_epoch
+            <= self
+                .storage
+                .get_vault_epoch_floor(&self.vault_id)?
+                .unwrap_or(0)
+        {
+            return Err(VaultError::EpochInvalid);
+        }
 
         // 1) VK'
         let vk_prime = SymmetricKey::generate();
