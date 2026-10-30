@@ -532,3 +532,48 @@ fn a_personal_host_saves_with_a_teammates_vault_present() {
     let saved = member.save_host("v", save(edit)).unwrap();
     assert!(!saved.identity_linked, "linked without an identity");
 }
+
+/// Extending membership must not silently revoke the previous recipient.
+#[test]
+fn adding_another_member_reissues_grants_for_every_existing_member() {
+    let dirs = [
+        tempfile::tempdir().unwrap(),
+        tempfile::tempdir().unwrap(),
+        tempfile::tempdir().unwrap(),
+    ];
+    let (owner, first, second) = (
+        account(dirs[0].path()),
+        account(dirs[1].path()),
+        account(dirs[2].path()),
+    );
+    let team = share_with(&owner, &first);
+    let fingerprint = owner.own_fingerprint().unwrap();
+    assert_eq!(trust(&first, &team, &fingerprint), FfiTrustOutcome::Trusted);
+    let (ed, x) = member_keys(&second);
+    owner
+        .add_member(team.vault_id.clone(), ed, x, FfiMemberRole::Viewer)
+        .unwrap();
+    owner
+        .save_password(team.vault_id.clone(), "db-pw".into(), "updated".into())
+        .unwrap();
+    owner
+        .sync_now(team.server.clone(), TENANT.into(), FfiSyncMode::Full)
+        .unwrap();
+    for member in [&first, &second] {
+        assert_eq!(inspected(member, &team).epoch, 2);
+        assert!(matches!(
+            trust(member, &team, &fingerprint),
+            FfiTrustOutcome::Trusted | FfiTrustOutcome::AlreadyTrusted
+        ));
+        let objects = team.server.vault_objects(&team.vault_id);
+        member
+            .pull_vault_paged(TENANT, |_| Ok((objects.clone(), None)))
+            .unwrap();
+        assert_eq!(
+            member
+                .get_password(team.vault_id.clone(), "db-pw".into())
+                .unwrap(),
+            "updated"
+        );
+    }
+}
