@@ -1480,9 +1480,106 @@ impl Core {
         vault_id: String,
         key_id: String,
     ) -> Result<RotationPlan, FfiError> {
-        let hosts = self.list_connections(vault_id.clone())?;
+        let mut hosts = self.list_connections(vault_id.clone())?;
+        for host in &mut hosts {
+            if let Some(resolved) =
+                self.personal_key_profile(&vault_id, host, &vault_id, &key_id)?
+            {
+                *host = resolved;
+            }
+        }
+        for other in self.list_vaults()? {
+            if self.same_vault_id(&other.vault_id, &vault_id)? {
+                continue;
+            }
+            for host in self.list_connections(other.vault_id.clone())? {
+                if let Some(mut resolved) =
+                    self.personal_key_profile(&other.vault_id, &host, &vault_id, &key_id)?
+                {
+                    if resolved.jumps.iter().any(|j| j.hop_ref.is_some()) {
+                        return Err(FfiError::other(format!(
+                            "{} / {} uses this key through a personal identity and saved jump hosts; move that route to inline hops before rotating",
+                            other.name, host.label
+                        )));
+                    }
+                    resolved.label = format!("{} / {}", other.name, resolved.label);
+                    hosts.push(resolved);
+                }
+            }
+        }
         let same_vault = self.names_of_vault(&vault_id, &hosts)?;
         Ok(plan_rotation_in(hosts, &vault_id, &key_id, same_vault))
+    }
+
+    /// Whether two external ids name the same vault.
+    pub(crate) fn same_vault_id(&self, left: &str, right: &str) -> Result<bool, FfiError> {
+        self.with_state(|state| {
+            Ok(crate::resolve_vid(&state.storage, left)
+                == crate::resolve_vid(&state.storage, right))
+        })
+    }
+
+    /// A personal host using this key, resolved through the ordinary pinned
+    /// identity path. A broken pin is an error, never a silently skipped target.
+    pub(crate) fn personal_key_profile(
+        &self,
+        host_vault: &str,
+        host: &ConnectionProfile,
+        key_vault: &str,
+        key_id: &str,
+    ) -> Result<Option<ConnectionProfile>, FfiError> {
+        if !matches!(host.auth, ProfileAuth::Personal) {
+            return Ok(None);
+        }
+        let Some(personal_vault) = self.find_binding_vault(host_vault, &host.uid)? else {
+            return Ok(None);
+        };
+        if !self.same_vault_id(&personal_vault, key_vault)? {
+            return Ok(None);
+        }
+        let Some(binding) = self.get_binding(
+            personal_vault.clone(),
+            host_vault.to_owned(),
+            host.uid.clone(),
+        )?
+        else {
+            return Ok(None);
+        };
+        let identity = self.get_identity(personal_vault, binding.identity_item_id)?;
+        if identity.key_item_id.as_deref() != Some(key_id) {
+            return Ok(None);
+        }
+        let resolved = self.resolve_profile(host_vault, host)?;
+        let mut target = host.clone();
+        target.user = resolved.user;
+        target.username_template = None;
+        target.auth = ProfileAuth::Key {
+            key_item_id: key_id.to_owned(),
+        };
+        Ok(Some(target))
+    }
+
+    /// Restricts a run to already pinned machines. Omitted targets remain
+    /// unproven in the finish outlook, so finishing still needs the lockout warning.
+    pub fn pinned_rotation_scope(
+        &self,
+        plan: &RotationPlan,
+        scope: &RunScope,
+    ) -> Result<RunScope, FfiError> {
+        let unpinned: BTreeSet<String> = self.key_rotation_unpinned(plan)?.into_iter().collect();
+        let only = plan
+            .targets
+            .iter()
+            .filter(|t| {
+                scope.only.as_ref().is_none_or(|ids| ids.contains(&t.id))
+                    && !unpinned.contains(&t.id)
+            })
+            .map(|t| t.id.clone())
+            .collect();
+        Ok(RunScope {
+            only: Some(only),
+            ..scope.clone()
+        })
     }
 
     /// The targets of `plan` reached over a machine whose host key is not
@@ -1493,6 +1590,18 @@ impl Core {
     /// way. The proxy is no SSH endpoint and has no host key.
     pub fn key_rotation_unpinned(&self, plan: &RotationPlan) -> Result<Vec<String>, FfiError> {
         let m = Routes::of(plan);
+        for target in &plan.targets {
+            if target
+                .jumps
+                .iter()
+                .any(|j| j.hop_ref.is_some() && m.ref_profile(j).is_none())
+            {
+                return Err(FfiError::other(format!(
+                    "{} has a missing or foreign saved jump host; repair its route before rotating",
+                    target.label()
+                )));
+            }
+        }
         let endpoints = |t: &RotationTarget| -> Vec<(String, u16)> {
             let hops = t.jumps.iter().map(|j| match m.ref_profile(j) {
                 Some(r) => (r.host.clone(), r.port),
@@ -2972,6 +3081,66 @@ mod tests {
             ),
             ("k".to_owned(), true, vec!["cand".to_owned()]),
             "old key at the target, the candidate on the switched hop"
+        );
+    }
+    #[test]
+    fn a_personal_host_using_the_rotated_key_is_a_target_with_its_resolved_user() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = Core::new(
+            dir.path().join("i.db").to_string_lossy().into_owned(),
+            dir.path().join("i.keyset").to_string_lossy().into_owned(),
+        );
+        core.create_account(None).unwrap();
+        core.create_vault("v".into(), "V".into()).unwrap();
+        core.create_identity(
+            "v".into(),
+            crate::Identity {
+                identity_id: "me".into(),
+                label: "Me".into(),
+                user: "alice".into(),
+                key_item_id: Some("k".into()),
+                password_item_id: None,
+            },
+        )
+        .unwrap();
+        let profile = host("personal", ProfileAuth::Personal, Vec::new());
+        core.save_connection("v".into(), profile.clone()).unwrap();
+        let pin =
+            core.personal_destination(profile.host.clone(), profile.port, None, Vec::new(), None);
+        core.set_binding(
+            "v".into(),
+            crate::IdentityBinding {
+                team_vault_id: "v".into(),
+                profile_uid: profile.uid,
+                identity_item_id: "me".into(),
+                destination_pin: pin,
+            },
+            false,
+        )
+        .unwrap();
+        let plan = core.plan_key_rotation("v".into(), "k".into()).unwrap();
+        assert_eq!(plan.targets.len(), 1);
+        assert_eq!(plan.targets[0].user, "alice");
+        assert!(plan.skipped.is_empty());
+    }
+    #[test]
+    fn an_unpinned_target_is_not_contacted_but_remains_in_the_lockout_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = Core::new(
+            dir.path().join("i.db").to_string_lossy().into_owned(),
+            dir.path().join("i.keyset").to_string_lossy().into_owned(),
+        );
+        core.create_account(None).unwrap();
+        let plan = plan(vec![host("retired", key(), Vec::new())]);
+        let scope = core
+            .pinned_rotation_scope(&plan, &RunScope::full())
+            .unwrap();
+        let run = RotationRun::start(&plan, &scope);
+        assert!(run.startable().is_empty());
+        assert!(run.settled());
+        assert_eq!(
+            run.finish_outlook(&plan).unproven,
+            vec!["root@retired.example:22"]
         );
     }
 }

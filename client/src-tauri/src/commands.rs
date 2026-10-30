@@ -930,10 +930,10 @@ pub async fn key_rotation_start(
         plan.key_item_id.clone(),
         plan.clone(),
     );
-    let (keys, unpinned) = blocking(move || {
+    let (keys, scope) = blocking(move || {
         let keys = core.key_rotation_keys(vault, key)?;
-        let unpinned = core.key_rotation_unpinned(&check)?;
-        Ok((keys, unpinned))
+        let scope = core.pinned_rotation_scope(&check, &RunScope::full())?;
+        Ok((keys, scope))
     })
     .await?;
     if keys.candidate_id != candidate_id {
@@ -942,18 +942,25 @@ pub async fn key_rotation_start(
     if keys.committed() {
         return Ok(None);
     }
-    if !unpinned.is_empty() {
-        return Err(ApiError::other(
-            "connect to each machine once first, so that its host key is pinned",
-        ));
-    }
-    let driver = RotationDriver::new((*plan).clone(), keys, resumed, &RunScope::full());
+    let driver = RotationDriver::new((*plan).clone(), keys, resumed, &scope);
     let run = dto::KeyRotationRun::new(&plan, &driver.snapshot());
-    state
+    let mut current = state
         .key_rotations
         .get_mut(&handle)
-        .ok_or_else(|| ApiError::not_found("key rotation"))?
-        .driver = Some(Arc::new(driver));
+        .ok_or_else(|| ApiError::not_found("key rotation"))?;
+    // Check again under the insertion guard: another start may have won
+    // while the blocking key/pin lookup above was awaited.
+    if current
+        .driver
+        .as_ref()
+        .is_some_and(|d| !d.snapshot().settled())
+    {
+        return Err(ApiError::other(
+            "the previous rotation run is still going: stop it and let it settle first",
+        ));
+    }
+    current.driver = Some(Arc::new(driver));
+    drop(current);
     Ok(Some(run))
 }
 
@@ -1047,6 +1054,20 @@ pub async fn key_rotation_close(handle: String, state: State<'_, AppState>) -> A
 #[tauri::command]
 pub async fn authorized_keys_append_command(openssh: String) -> ApiResult<String> {
     Ok(unissh_ffi::key_rotation_plan::authorized_keys_append_command(&openssh))
+}
+
+/// Usage of every item of a vault, read from one shared snapshot.
+#[tauri::command]
+pub async fn key_usages(
+    vault_id: String,
+    state: State<'_, AppState>,
+) -> ApiResult<std::collections::BTreeMap<String, dto::KeyUsage>> {
+    let core = state.core.clone();
+    let usages = blocking(move || core.key_usages(vault_id)).await?;
+    Ok(usages
+        .into_iter()
+        .map(|(id, usage)| (id, usage.into()))
+        .collect())
 }
 
 /// What in a vault uses a key or password item: hosts (own login, inline or

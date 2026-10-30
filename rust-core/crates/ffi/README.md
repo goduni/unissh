@@ -133,10 +133,11 @@ import_vault(bytes, passphrase, new_vault_id)   // items are re-encrypted under 
 //   | PromptPassword (ask on connect); ConnectionProfile.tags[] — selection labels.
 //   The profile JSON holds references only; a jump host with an inline password cannot be saved
 //   (error). The legacy format (without tags/password_item_id) is read without migration.
-save_connection(vault_id, profile) -> profile_id / list_connections(vault_id)
+save_connection(vault_id, profile) -> profile_id / list_connections(vault_id) // low-level/internal; product writes use save_host
 //   An empty profile_id (and group_id / snippet_id in save_group / save_snippet) is a new item:
 //   the core mints `slug(label)-<millis>` (collision-checked in the vault, tombstones included)
-//   and returns it. Clients do not mint ids.
+//   and returns it. Clients do not mint ids. SSH config imports use the same
+//   validation and preserve groups; missing User needs the account default.
 save_host(vault_id, HostSave{profile, new_password?, group, identity?, move_identity_pin}) -> HostSaved   // Rust-only
 //   The one host-save path of the app's host editor and `unissh hosts add|edit`: checks the
 //   HostRule set (label, address, user unless personal; a hop by address has one; a referenced

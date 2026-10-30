@@ -278,6 +278,10 @@ fn begin(device: &Device, offline: bool, vault: &VaultArg, name: &str) -> Res<()
         )));
     }
     print!("{}", plan_text(&plan));
+    let unpinned = core.key_rotation_unpinned(&plan)?;
+    if !unpinned.is_empty() {
+        eprintln!("unissh: {}", unpinned_refusal(&plan, &unpinned).message);
+    }
     let candidate = stored(
         &key.vault_name,
         core.begin_key_rotation(key.vault_id.clone(), id.clone()),
@@ -500,6 +504,16 @@ fn select(plan: &RotationPlan, names: &[String]) -> Res<Option<BTreeSet<String>>
             )));
         }
     }
+    // A scoped target must bring the key-bearing hops it needs with it:
+    // after an interrupted finish they may accept only the candidate.
+    loop {
+        let before = chosen.len();
+        let hops: Vec<String> = chosen.iter().flat_map(|id| plan.key_hops(id)).collect();
+        chosen.extend(hops);
+        if chosen.len() == before {
+            break;
+        }
+    }
     Ok(Some(chosen))
 }
 
@@ -653,7 +667,18 @@ fn run(core: &Core, vault: &VaultArg, name: &str, names: &[String], json: bool) 
         last: RotationStep::Verify,
         only: select(&plan, names)?,
     };
-    refuse_unpinned(core, &plan, scope.only.as_ref())?;
+    if !names.is_empty() {
+        refuse_unpinned(core, &plan, scope.only.as_ref())?;
+    } else {
+        let unpinned = core.key_rotation_unpinned(&plan)?;
+        if !unpinned.is_empty() {
+            eprintln!(
+                "unissh: skipping unpinned machines; {}",
+                unpinned_refusal(&plan, &unpinned).message
+            );
+        }
+    }
+    let scope = core.pinned_rotation_scope(&plan, &scope)?;
     // Begun by `unissh keys rotation begin` (or the app) before this run: a
     // machine an earlier run got to is tried with the new key first.
     let driver = RotationDriver::new(plan, keys, true, &scope);
@@ -740,12 +765,12 @@ fn finish(
         // Prove the candidate on every machine first, removing nothing: the
         // confirmation has to say which machines a finish locks out.
         let plan = core.plan_key_rotation(vault_id.clone(), link.key_id.clone())?;
-        refuse_unpinned(core, &plan, None)?;
         let scope = RunScope {
             first: RotationStep::Verify,
             last: RotationStep::Verify,
             only: None,
         };
+        let scope = core.pinned_rotation_scope(&plan, &scope)?;
         let driver = RotationDriver::new(plan, keys, true, &scope);
         signals::watch(signals::STOP, &signal)?;
         let verified = drive(core, &driver, false, &signal);
@@ -998,5 +1023,22 @@ mod tests {
              `unissh ssh \"web\"`, `unissh ssh \"db\"`",
             "a hop is pinned through the host it is a hop of"
         );
+    }
+    #[test]
+    fn a_scoped_target_includes_its_key_bearing_jump_hosts() {
+        let hop = JumpHost {
+            host: "jump.example".into(),
+            port: 22,
+            user: "ops".into(),
+            auth: AuthMethod::Agent {
+                vault_id: "v".into(),
+                key_item_id: "k".into(),
+            },
+            hop_ref: None,
+        };
+        let plan = plan_rotation(vec![host("web", key(), vec![hop])], "v", "k");
+        let chosen = select(&plan, &names(&["web"])).unwrap().unwrap();
+        assert!(chosen.contains("ops@jump.example:22"));
+        assert_eq!(chosen.len(), 2);
     }
 }

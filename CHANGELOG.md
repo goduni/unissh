@@ -32,6 +32,19 @@ starts with `0.`:
 
 ## [Unreleased]
 
+### Breaking changes
+
+**Legacy shared vaults may need an owner repair.** Reads now enforce the latest
+known membership even if an older owner client did not persist its epoch floor.
+If old shared records report an invalid/rolled-back epoch, the owner should use
+the vault's Members panel to re-grant existing members with their verified
+public keys and intended roles. This reissues the authenticated current snapshot
+and every remaining member's grant. Upgrade granting devices before changing
+membership. Records from revoked/demoted signers or an obsolete vault key are
+not automatically re-signed: recover the intended content from a trusted backup
+or recreate it explicitly as the owner. Never lower the epoch floor to bypass
+this check. The vault format and server wire encoding are unchanged.
+
 ### Added
 
 - In the app's host editor, a saved host that logs in through the system SSH
@@ -208,6 +221,44 @@ starts with `0.`:
 
 ### Fixed
 
+- Vault-key rotation reissues deleted markers as well as live items before
+  advancing the epoch floor, so later membership updates and integrity checks
+  keep working. Owner-directed repair of a legacy below-floor row requires
+  its signer to have write permission both then and now; live content must
+  still decrypt with the current vault key. Revoked/demoted edits and malformed
+  deletion markers are refused. Read and sync epoch-floor checks stay strict.
+
+- Adding or re-granting a vault member issues fresh grants for all remaining
+  members. Their public encryption keys are remembered on the granting device from
+  the operator's explicit inputs. On an older or newly paired device, re-grant
+  members whose keys are missing before retrying; membership stays unchanged
+  while those keys are collected. An explicit re-grant updates its supplied
+  recipient key; vault-key rotation refreshes the remembered keys of all
+  remaining members so later grants never use obsolete encryption keys.
+
+- Sharing an existing vault reissues its current items and tombstones at the
+  new membership epoch in the same transaction as the manifest and grants.
+  Previously, items created before the first share stayed at epoch 0 and
+  could not be read or synced after sharing. Versions advance normally;
+  signatures are verified before reissuing, and deleted items stay deleted.
+
+- Saving a host in the app preserves its entire jump chain, including hops
+  the editor does not show. Turning ProxyJump off removes the whole chain.
+- Host imports, imported-key attachment and tag edits use the core host-save
+  rules. An SSH config without `User` uses the account's default username;
+  without either, the import is refused without partially writing the batch.
+  A saved bastion cannot switch to an interactive or Personal login while
+  other hosts reference it; the error names those hosts.
+- Guided key rotation includes Personal hosts whose bound identity uses the
+  key, through the ordinary destination-pin check. Broken relevant bindings
+  stop planning instead of silently omitting a machine. Unpinned machines
+  are skipped and remain in the explicit finish lockout warning; a scoped
+  CLI run includes its key-bearing jump hosts. Concurrent app starts cannot
+  replace a run still in flight.
+- Key usage and delete warnings inspect references from other readable
+  vaults, qualify host ids by vault, and name vaults not inspected. The Keys
+  tab fetches all usage counts in one call.
+
 - A teammate could never receive a vault shared with them, in the app or the
   CLI: their device rejected it, because it did not know the vault's owner and
   nothing let them say who that was. Now they confirm the owner's fingerprint
@@ -296,6 +347,12 @@ starts with `0.`:
     transport returns it for the server's own HTTP 403 `forbidden`).
 
 ### Security
+
+- Owner devices arm the epoch floor when publishing membership changes.
+  Reads and sync enforce known later membership even when an older device left
+  that floor unarmed, closing replay of old-epoch writes by demoted members.
+  An identical manifest re-pull repairs legacy floor metadata only after its
+  authority chain verifies; an unverified cached row cannot establish trust.
 
 - A connection refuses a jump host that is a saved host of another vault. A
   synced host of a team vault could name a host of a member's personal vault

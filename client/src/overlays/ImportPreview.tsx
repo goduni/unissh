@@ -408,9 +408,9 @@ function ImportPreviewBody() {
 
             try {
               const prof = await api.getConnection(vaultId, h.host);
-              await api.saveConnection(vaultId, { ...prof, auth: { type: "key", keyItemId } });
-            } catch {
-              /* leave the host with its default (password-prompt) auth */
+              await api.saveHost(vaultId, { ...prof, auth: { type: "key", keyItemId } }, null, { type: "unchanged" }, null);
+            } catch (e) {
+              skips.push({ host: h.host, reason: classifySkip(apiErrorMessage(e)), raw: apiErrorMessage(e) });
             }
           }
         }

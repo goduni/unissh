@@ -15,8 +15,8 @@ use unissh_crypto::{KdfParams, SymmetricKey};
 use unissh_keychain::{create_account, keyset_gen_floor, UnlockedKeyset};
 use unissh_storage::{MemberRole, Storage};
 use unissh_sync::{
-    sync_pull, AccountStateObject, AuditObject, InMemoryTransport, RejectReason, SyncContext,
-    SyncObject, SyncTransport,
+    apply_pulled_objects, sync_pull, AccountStateObject, AuditObject, InMemoryTransport,
+    RejectReason, SyncContext, SyncObject, SyncTransport,
 };
 use unissh_vault::{
     build_grant, build_manifest, sign_account_state, verify_manifest, Member, Vault,
@@ -288,6 +288,61 @@ fn applying_manifest_arms_epoch_floor() {
         Some(1),
         "the epoch floor must rise to the applied manifest epoch"
     );
+}
+
+#[test]
+fn identical_manifest_repairs_a_legacy_owners_unarmed_floor() {
+    let (storage, owner) = account(&[44_u8; 32]);
+    let vid = b"legacy-owner-floor".to_vec();
+    let manifest = build_manifest(
+        &owner,
+        &vid,
+        1,
+        &[Member {
+            ed25519_pub: genesis(&owner),
+            role: MemberRole::Admin,
+        }],
+    )
+    .unwrap();
+    // Old owner clients persisted the manifest without a floor; its echo
+    // previously returned early, leaving old-epoch writes acceptable.
+    storage.put_membership_manifest(&manifest).unwrap();
+    let report = apply_pulled_objects(
+        &storage,
+        &ctx(&owner),
+        vec![(1, SyncObject::MembershipManifest(manifest))],
+    )
+    .unwrap();
+    assert!(report.rejected.is_empty());
+    assert_eq!(report.applied, 0, "an identical manifest stays idempotent");
+    assert_eq!(storage.get_vault_epoch_floor(&vid).unwrap(), Some(1));
+}
+
+#[test]
+fn identical_unverified_local_manifest_cannot_arm_a_floor() {
+    let (storage, owner) = account(&[45_u8; 32]);
+    let (_, attacker) = account(&[46_u8; 32]);
+    let vid = b"forged-cached-floor".to_vec();
+    let manifest = build_manifest(
+        &attacker,
+        &vid,
+        1,
+        &[Member {
+            ed25519_pub: genesis(&attacker),
+            role: MemberRole::Admin,
+        }],
+    )
+    .unwrap();
+    storage.put_membership_manifest(&manifest).unwrap();
+    let report = apply_pulled_objects(
+        &storage,
+        &ctx(&owner),
+        vec![(1, SyncObject::MembershipManifest(manifest))],
+    )
+    .unwrap();
+    assert_eq!(report.rejected.len(), 1);
+    assert_eq!(report.rejected[0].reason, RejectReason::AuthorityFailed);
+    assert!(storage.get_vault_epoch_floor(&vid).unwrap().is_none());
 }
 
 // ---------------------------------------------------------------------------

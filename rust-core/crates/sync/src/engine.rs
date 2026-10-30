@@ -706,6 +706,22 @@ fn process_manifest(
     // equal-version records), do NOT overwrite. An identical re-pull is idempotent.
     if let Some(local) = storage.get_membership_manifest(&m.vault_id, m.key_epoch)? {
         if manifest_content_eq(&local, m) {
+            // Older owner clients stored their new manifest without arming
+            // its floor. Repair that metadata on an identical re-pull, but
+            // never promote an unverified local row into a trusted floor.
+            if m.key_epoch > floor {
+                let anchor = vault_anchor(storage, &m.vault_id, ctx)?;
+                if verify_chain_to_epoch(storage, &m.vault_id, m.key_epoch, &anchor).is_err() {
+                    reject(
+                        report,
+                        seq,
+                        Some(&m.vault_id),
+                        RejectReason::AuthorityFailed,
+                    );
+                    return Ok(());
+                }
+                storage.set_vault_epoch_floor(&m.vault_id, m.key_epoch)?;
+            }
             return Ok(()); // idempotent re-pull of the already-trusted manifest
         }
         report.conflicts.push(Conflict {

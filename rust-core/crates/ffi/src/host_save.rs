@@ -279,7 +279,11 @@ fn destination(p: &ConnectionProfile) -> String {
     )
 }
 
-fn save_locked(state: &CoreState, vault_id: &str, save: HostSave) -> Result<HostSaved, FfiError> {
+pub(crate) fn save_locked(
+    state: &CoreState,
+    vault_id: &str,
+    save: HostSave,
+) -> Result<HostSaved, FfiError> {
     let HostSave {
         mut profile,
         new_password,
@@ -299,6 +303,30 @@ fn save_locked(state: &CoreState, vault_id: &str, save: HostSave) -> Result<Host
     check_fields(&profile)?;
     check_new_password(&profile, new_password.as_deref().map(String::as_str))?;
     check_hops(state, vault_id, &mut profile, &hosts)?;
+    if let Some(old) = &before {
+        if !can_be_a_hop(&profile.auth) {
+            let vid = resolve_vid(&state.storage, vault_id);
+            let dependents: Vec<&str> = hosts
+                .iter()
+                .filter(|h| h.profile_id != old.profile_id)
+                .filter(|h| {
+                    h.jumps.iter().any(|j| {
+                        j.hop_ref.as_ref().is_some_and(|r| {
+                            r.profile_uid == old.uid
+                                && resolve_vid(&state.storage, &r.vault_id) == vid
+                        })
+                    })
+                })
+                .map(|h| h.label.as_str())
+                .collect();
+            if !dependents.is_empty() {
+                return Err(FfiError::other(format!(
+                    "this host is a jump host for {}; keep a key, stored password or system-agent login, or remove those references first",
+                    dependents.join(", ")
+                )));
+            }
+        }
+    }
     let group = checked_group(state, vault_id, group, before.is_none())?;
     let link = link_to_pin(state, vault_id, &profile, before.is_some(), identity)?;
     let pin = destination(&profile);
@@ -1569,5 +1597,71 @@ mod tests {
                 rule: HostRule::HopOtherVault
             })
         ));
+    }
+    #[test]
+    fn a_bastions_dependents_prevent_removing_its_hop_credential() {
+        let (core, _dir) = core();
+        let saved = core.save_host("v", plain(host("bastion", key()))).unwrap();
+        let bastion = core
+            .get_connection("v".into(), saved.profile_id.clone())
+            .unwrap();
+        let mut target = host("production", key());
+        target.jumps.push(JumpHost {
+            host: String::new(),
+            port: 22,
+            user: String::new(),
+            auth: AuthMethod::Agent {
+                vault_id: "v".into(),
+                key_item_id: String::new(),
+            },
+            hop_ref: Some(HopRef {
+                vault_id: "v".into(),
+                profile_uid: bastion.uid.clone(),
+            }),
+        });
+        core.save_host("v", plain(target)).unwrap();
+        for auth in [ProfileAuth::PromptPassword, ProfileAuth::Personal] {
+            let mut edited = bastion.clone();
+            edited.auth = auth;
+            let err = core.save_host("v", plain(edited)).err().unwrap();
+            assert!(err.to_string().contains("production"), "{err}");
+            assert!(matches!(
+                core.get_connection("v".into(), saved.profile_id.clone())
+                    .unwrap()
+                    .auth,
+                ProfileAuth::Key { .. }
+            ));
+        }
+    }
+    #[test]
+    fn imported_hosts_take_the_account_username_when_ssh_config_omits_it() {
+        let (core, _dir) = core();
+        core.set_account_default_username("deploy".into()).unwrap();
+        core.import_ssh_config(
+            "v".into(),
+            "Host imported\n  HostName imported.example\n".into(),
+        )
+        .unwrap();
+        assert_eq!(
+            core.get_connection("v".into(), "imported".into())
+                .unwrap()
+                .user,
+            "deploy"
+        );
+    }
+
+    #[test]
+    fn an_import_with_a_missing_required_user_rolls_back_the_whole_batch() {
+        let (core, _dir) = core();
+        assert!(matches!(
+            core.import_ssh_config(
+                "v".into(),
+                "Host good\n  User root\nHost missing-user\n".into()
+            ),
+            Err(FfiError::InvalidHost {
+                rule: HostRule::UserRequired
+            })
+        ));
+        assert!(core.list_connections("v".into()).unwrap().is_empty());
     }
 }

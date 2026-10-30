@@ -1785,7 +1785,7 @@ export const useApp = create<AppStore>((set, get) => ({
     let changed = false;
     for (const h of get().hosts) {
       if (target.has(h.profileId) && !h.tags.includes(tg)) {
-        await api.saveConnection(vault, { ...h, tags: [...h.tags, tg] });
+        await api.saveHost(vault, { ...h, tags: [...h.tags, tg] }, null, { type: "unchanged" }, null);
         changed = true;
       }
     }
@@ -1799,7 +1799,7 @@ export const useApp = create<AppStore>((set, get) => ({
     let changed = false;
     for (const h of get().hosts) {
       if (target.has(h.profileId) && h.tags.includes(tg)) {
-        await api.saveConnection(vault, { ...h, tags: h.tags.filter((x) => x !== tg) });
+        await api.saveHost(vault, { ...h, tags: h.tags.filter((x) => x !== tg) }, null, { type: "unchanged" }, null);
         changed = true;
       }
     }

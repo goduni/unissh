@@ -18,7 +18,7 @@
 //! rotation's planner (`key_rotation_plan`) finds the machines to move with
 //! these same predicates.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use super::{
     resolve_vid, AuthMethod, ConnectionProfile, Core, FfiError, Identity, ProfileAuth,
@@ -42,6 +42,8 @@ pub enum KeyUseRole {
 /// [`KeyUseRole`] order).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostKeyUse {
+    /// The vault holding this host.
+    pub vault_id: String,
     /// The host's profile id.
     pub profile_id: String,
     /// The host's label.
@@ -66,6 +68,8 @@ pub struct KeyUsage {
     pub hosts: Vec<HostKeyUse>,
     /// Identities referencing it, in the vault's listing order.
     pub identities: Vec<IdentityKeyUse>,
+    /// Vaults whose hosts could not be inspected. Counts are incomplete.
+    pub unscanned_vaults: Vec<String>,
 }
 
 impl KeyUsage {
@@ -149,6 +153,7 @@ pub(crate) fn usage_in(
         }
         if !roles.is_empty() {
             out.hosts.push(HostKeyUse {
+                vault_id: String::new(),
                 profile_id: h.profile_id.clone(),
                 label: h.label.clone(),
                 roles: roles.into_iter().collect(),
@@ -193,6 +198,15 @@ fn named_vaults(hosts: &[ConnectionProfile]) -> BTreeSet<String> {
     out
 }
 
+struct UsageSnapshot {
+    hosts: Vec<ConnectionProfile>,
+    identities: Vec<Identity>,
+    same: BTreeSet<String>,
+    others: Vec<(String, String, Vec<ConnectionProfile>)>,
+    unscanned: Vec<String>,
+    personal: Vec<(String, ConnectionProfile, Identity)>,
+}
+
 impl Core {
     /// The vault ids `hosts`' references name that are vault `vault_id`. A
     /// reference may name the vault by any id `resolve_vid` accepts, so this
@@ -212,20 +226,154 @@ impl Core {
         })
     }
 
-    /// What in vault `vault_id` uses the key or password item `item_id`: hosts
-    /// (own login, inline hop, hop referencing a saved profile of this vault,
-    /// proxy password) and identities. See the module docs for the rules. An
-    /// id nothing references (or no item at all) is an empty usage.
+    /// Uses across every readable vault, with any vaults not inspected named
+    /// explicitly. Host ids are qualified by their vault, never conflated.
     pub fn key_usage(&self, vault_id: String, item_id: String) -> Result<KeyUsage, FfiError> {
-        let hosts = self.list_connections(vault_id.clone())?;
-        let identities = self.list_identities(vault_id.clone())?;
-        let same = self.names_of_vault(&vault_id, &hosts)?;
-        Ok(usage_in(
-            &item_id,
-            |v| same.contains(v),
-            &hosts,
-            &identities,
-        ))
+        let snapshot = self.usage_snapshot(&vault_id)?;
+        Ok(Self::usage_from_snapshot(&vault_id, &item_id, &snapshot))
+    }
+
+    /// All item usages in one snapshot: frontends need one IPC call per vault,
+    /// rather than decrypting and listing every host again for each key row.
+    pub fn key_usages(&self, vault_id: String) -> Result<BTreeMap<String, KeyUsage>, FfiError> {
+        let snapshot = self.usage_snapshot(&vault_id)?;
+        Ok(self
+            .list_items(vault_id.clone())?
+            .into_iter()
+            .map(|item| {
+                let usage = Self::usage_from_snapshot(&vault_id, &item.item_id, &snapshot);
+                (item.item_id, usage)
+            })
+            .collect())
+    }
+
+    fn usage_snapshot(&self, vault_id: &str) -> Result<UsageSnapshot, FfiError> {
+        let hosts = self.list_connections(vault_id.to_owned())?;
+        let identities = self.list_identities(vault_id.to_owned())?;
+        let mut others = Vec::new();
+        let mut unscanned = Vec::new();
+        for v in self.list_vaults()? {
+            if self.same_vault_id(&v.vault_id, vault_id)? {
+                continue;
+            }
+            match self.list_connections(v.vault_id.clone()) {
+                Ok(hosts) => others.push((v.vault_id, v.name, hosts)),
+                Err(_) => unscanned.push(v.name),
+            }
+        }
+        let all: Vec<ConnectionProfile> = hosts
+            .iter()
+            .chain(others.iter().flat_map(|(_, _, hs)| hs))
+            .cloned()
+            .collect();
+        let mut personal = Vec::new();
+        let source_hosts = std::iter::once((vault_id, "", &hosts));
+        let foreign_hosts = others
+            .iter()
+            .map(|(id, name, hosts)| (id.as_str(), name.as_str(), hosts));
+        for (host_vault, name, profiles) in source_hosts.chain(foreign_hosts) {
+            for host in profiles
+                .iter()
+                .filter(|h| matches!(h.auth, ProfileAuth::Personal))
+            {
+                let Some(binding_vault) = self.find_binding_vault(host_vault, &host.uid)? else {
+                    continue;
+                };
+                if !self.same_vault_id(&binding_vault, vault_id)? {
+                    continue;
+                }
+                let Some(binding) =
+                    self.get_binding(binding_vault, host_vault.to_owned(), host.uid.clone())?
+                else {
+                    continue;
+                };
+                if let Some(identity) = identities
+                    .iter()
+                    .find(|i| i.identity_id == binding.identity_item_id)
+                {
+                    let mut shown = host.clone();
+                    if !name.is_empty() {
+                        shown.label = format!("{name} / {}", shown.label);
+                    }
+                    personal.push((host_vault.to_owned(), shown, identity.clone()));
+                }
+            }
+        }
+        Ok(UsageSnapshot {
+            hosts,
+            identities,
+            same: self.names_of_vault(vault_id, &all)?,
+            others,
+            unscanned,
+            personal,
+        })
+    }
+
+    fn usage_from_snapshot(vault_id: &str, item_id: &str, snapshot: &UsageSnapshot) -> KeyUsage {
+        let same = |v: &str| snapshot.same.contains(v);
+        let mut out = usage_in(item_id, same, &snapshot.hosts, &snapshot.identities);
+        for h in &mut out.hosts {
+            h.vault_id = vault_id.to_owned();
+        }
+        let login_uids: HashSet<&str> = snapshot
+            .hosts
+            .iter()
+            .filter(|h| logs_in_with(&h.auth, item_id))
+            .map(|h| h.uid.as_str())
+            .collect();
+        for (other_id, other_name, hosts) in &snapshot.others {
+            for host in hosts {
+                let mut roles = BTreeSet::new();
+                for hop in &host.jumps {
+                    let role = match &hop.hop_ref {
+                        Some(r) => (same(&r.vault_id)
+                            && login_uids.contains(r.profile_uid.as_str()))
+                        .then_some(KeyUseRole::ReferencedHop),
+                        None => {
+                            auth_uses(&hop.auth, item_id, &same).then_some(KeyUseRole::InlineHop)
+                        }
+                    };
+                    roles.extend(role);
+                }
+                if matches!(host.proxy.as_ref().and_then(|p| p.password.as_ref()), Some(ProxyPassword::Vault {vault_id: v, password_item_id}) if same(v) && password_item_id == item_id)
+                {
+                    roles.insert(KeyUseRole::ProxyPassword);
+                }
+                if !roles.is_empty() {
+                    out.hosts.push(HostKeyUse {
+                        vault_id: other_id.clone(),
+                        profile_id: host.profile_id.clone(),
+                        label: format!("{other_name} / {}", host.label),
+                        roles: roles.into_iter().collect(),
+                    });
+                }
+            }
+        }
+        for (host_vault, host, identity) in &snapshot.personal {
+            if identity.key_item_id.as_deref() != Some(item_id)
+                && identity.password_item_id.as_deref() != Some(item_id)
+            {
+                continue;
+            }
+            if let Some(found) = out
+                .hosts
+                .iter_mut()
+                .find(|h| &h.vault_id == host_vault && h.profile_id == host.profile_id)
+            {
+                if !found.roles.contains(&KeyUseRole::Login) {
+                    found.roles.insert(0, KeyUseRole::Login);
+                }
+            } else {
+                out.hosts.push(HostKeyUse {
+                    vault_id: host_vault.clone(),
+                    profile_id: host.profile_id.clone(),
+                    label: host.label.clone(),
+                    roles: vec![KeyUseRole::Login],
+                });
+            }
+        }
+        out.unscanned_vaults.clone_from(&snapshot.unscanned);
+        out
     }
 }
 
@@ -498,5 +646,29 @@ mod tests {
                 ("db", vec![KeyUseRole::ReferencedHop]),
             ]
         );
+    }
+    #[test]
+    fn usage_includes_foreign_bastion_dependents_without_confusing_equal_item_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = Core::new(
+            dir.path().join("i.db").to_string_lossy().into_owned(),
+            dir.path().join("i.keyset").to_string_lossy().into_owned(),
+        );
+        core.create_account(None).unwrap();
+        core.create_vault("v".into(), "Keys".into()).unwrap();
+        core.create_vault("other".into(), "Fleet".into()).unwrap();
+        core.generate_ssh_key("v".into(), "k".into()).unwrap();
+        core.save_connection("v".into(), host("bastion", key("k"), Vec::new()))
+            .unwrap();
+        core.save_connection(
+            "other".into(),
+            host("db", key("k"), vec![ref_hop("v", "bastion")]),
+        )
+        .unwrap();
+        let usage = core.key_usage("v".into(), "k".into()).unwrap();
+        let foreign = usage.hosts.iter().find(|h| h.vault_id == "other").unwrap();
+        assert_eq!(foreign.roles, vec![KeyUseRole::ReferencedHop]);
+        assert!(foreign.label.contains("Fleet"));
+        assert_eq!(core.key_usages("v".into()).unwrap().get("k"), Some(&usage));
     }
 }

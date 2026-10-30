@@ -1541,6 +1541,7 @@ impl From<ffi::KeyUseRole> for KeyUseRole {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HostKeyUse {
+    pub vault_id: String,
     pub profile_id: String,
     pub label: String,
     pub roles: Vec<KeyUseRole>,
@@ -1558,16 +1559,19 @@ pub struct IdentityKeyUse {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KeyUsage {
+    pub unscanned_vaults: Vec<String>,
     pub hosts: Vec<HostKeyUse>,
     pub identities: Vec<IdentityKeyUse>,
 }
 impl From<ffi::KeyUsage> for KeyUsage {
     fn from(u: ffi::KeyUsage) -> Self {
         Self {
+            unscanned_vaults: u.unscanned_vaults,
             hosts: u
                 .hosts
                 .into_iter()
                 .map(|h| HostKeyUse {
+                    vault_id: h.vault_id,
                     profile_id: h.profile_id,
                     label: h.label,
                     roles: h.roles.into_iter().map(Into::into).collect(),

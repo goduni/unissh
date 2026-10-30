@@ -522,6 +522,12 @@ fn remove<S>(device: &Device, offline: bool, entry: &Entry<S>, yes: bool) -> Res
         // The core's one answer (#169): hosts by login, inline or referenced
         // hop and proxy, plus identities.
         let usage = core.key_usage(vault_id.clone(), id.clone())?;
+        if !usage.unscanned_vaults.is_empty() {
+            warning.push_str(&format!(
+                "Unchecked vaults: {}. The usage count may be incomplete.\n",
+                one_line(&usage.unscanned_vaults.join(", "))
+            ));
+        }
         if usage.count() > 0 {
             warning.push_str(&format!(
                 "It is used by {}. Deleting it will break their login.\n",
@@ -783,6 +789,25 @@ fn rotate(device: &Device, offline: bool, key: &Entry<Key>, yes: bool) -> Res<()
          install the new one. To switch without a lockout: `unissh keys rotation begin`.\n",
         one_line(id)
     );
+    let usage = core.key_usage(key.vault_id.clone(), id.clone())?;
+    if !usage.hosts.is_empty() || !usage.identities.is_empty() {
+        let names: Vec<String> = usage
+            .hosts
+            .iter()
+            .map(|h| h.label.clone())
+            .chain(usage.identities.iter().map(|i| i.label.clone()))
+            .collect();
+        warning.push_str(&format!(
+            "Used by: {} (including personal-identity logins).\n",
+            one_line(&names.join(", "))
+        ));
+    }
+    if !usage.unscanned_vaults.is_empty() {
+        warning.push_str(&format!(
+            "Unchecked vaults: {}. The list may be incomplete.\n",
+            one_line(&usage.unscanned_vaults.join(", "))
+        ));
+    }
     if key.info.has_certificate {
         warning.push_str("Its certificate certifies the old key and is removed.\n");
     }

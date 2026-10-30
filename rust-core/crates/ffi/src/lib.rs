@@ -65,6 +65,7 @@ mod item_ids;
 mod key_rotation;
 pub mod key_rotation_plan;
 mod key_usage;
+mod membership_keys;
 mod password_fill;
 mod shared_vault;
 pub mod snippet_params;
@@ -2258,7 +2259,13 @@ impl Core {
                 role: role.to_core(),
             });
 
-            let x25519_by_ed = vec![(owner_ed, owner_x), (member_ed.clone(), member_x)];
+            let x25519_by_ed = membership_keys::recipients(
+                &state.storage,
+                &vid,
+                &members,
+                (owner_ed, owner_x),
+                (member_ed.clone(), member_x),
+            )?;
             vault
                 .establish_or_extend_membership(&state.keyset, &members, &x25519_by_ed)
                 .map_err(map_vault_err)?;
@@ -2503,9 +2510,13 @@ impl Core {
             }
 
             let vault = Vault::open(&state.storage, &state.keyset, &vid).map_err(map_vault_err)?;
-            vault
-                .rotate_vk(&state.keyset, &members, &grants)
-                .map_err(map_vault_err)
+            state.storage.transaction(|| {
+                let epoch = vault
+                    .rotate_vk(&state.keyset, &members, &grants)
+                    .map_err(map_vault_err)?;
+                membership_keys::remember_rotation(&state.storage, &vid, &grants)?;
+                Ok(epoch)
+            })
         })
     }
 
@@ -6788,82 +6799,96 @@ impl Core {
         only: Option<Vec<String>>,
     ) -> Result<Vec<ImportedSshHost>, FfiError> {
         let only: Option<std::collections::HashSet<String>> = only.map(|v| v.into_iter().collect());
+        let default_username = self.get_account_default_username()?;
         self.with_state_mut(|state| {
-            let vault = Vault::open(
-                &state.storage,
-                &state.keyset,
-                &resolve_vid(&state.storage, &vault_id),
-            )
-            .map_err(FfiError::other)?;
-            let mut created = Vec::new();
-            for host in cfg.host_aliases_with_origin() {
-                let alias = &host.alias;
-                if only.as_ref().is_some_and(|o| !o.contains(alias)) {
-                    continue;
-                }
-                // Don't overwrite an existing item of another type (e.g. a key with the same id):
-                // we skip such an alias, not counting it among the created ones.
-                if ensure_item_type(
+            state.storage.transaction(|| {
+                let vault = Vault::open(
                     &state.storage,
-                    &vault_id,
-                    alias.as_bytes(),
-                    ITEM_TYPE_CONNECTION,
+                    &state.keyset,
+                    &resolve_vid(&state.storage, &vault_id),
                 )
-                .is_err()
-                {
-                    continue;
+                .map_err(FfiError::other)?;
+                let mut created = Vec::new();
+                for host in cfg.host_aliases_with_origin() {
+                    let alias = &host.alias;
+                    if only.as_ref().is_some_and(|o| !o.contains(alias)) {
+                        continue;
+                    }
+                    // Don't overwrite an existing item of another type (e.g. a key with the same id):
+                    // we skip such an alias, not counting it among the created ones.
+                    if ensure_item_type(
+                        &state.storage,
+                        &vault_id,
+                        alias.as_bytes(),
+                        ITEM_TYPE_CONNECTION,
+                    )
+                    .is_err()
+                    {
+                        continue;
+                    }
+                    // #9: overwriting an existing profile MUST preserve its
+                    // immutable uid — personal bindings and hop_refs depend on it
+                    // (B2.1/B2.2); a fresh uid would orphan them. We reuse the existing
+                    // profile's uid, otherwise we mint a new one.
+                    // The colour/icon are the user's own markings, not part of the
+                    // ssh config, so an overwrite carries them over as well.
+                    let existing = vault
+                        .get_item(alias.as_bytes())
+                        .ok()
+                        .flatten()
+                        .and_then(|it| serde_json::from_slice::<StoredProfile>(&it.content).ok());
+                    let (existing_uid, color, icon) = match existing {
+                        Some(sp) => (
+                            sp.uid.filter(|u| !u.is_empty()),
+                            stored_appearance_id(sp.color),
+                            stored_appearance_id(sp.icon),
+                        ),
+                        None => (None, None, None),
+                    };
+                    let s = cfg.resolve(alias);
+                    let stored = StoredProfile {
+                        uid: Some(existing_uid.unwrap_or_else(mint_profile_uid)),
+                        label: alias.clone(),
+                        host: s.hostname.unwrap_or_else(|| alias.clone()),
+                        port: s.port.unwrap_or(22),
+                        user: s
+                            .user
+                            .or_else(|| default_username.clone())
+                            .unwrap_or_default(),
+                        key_item_id: None,
+                        password_item_id: None,
+                        personal: false,
+                        username_template: None,
+                        jumps: parse_proxy_jump(s.proxy_jump.as_deref()),
+                        proxy: None,
+                        tags: Vec::new(),
+                        startup_snippet_ids: Vec::new(),
+                        record_sessions: false,
+                        agent_forward: false,
+                        system_agent_public_key: None,
+                        color,
+                        icon,
+                        extra: BTreeMap::new(),
+                    };
+                    let profile = stored_to_profile(&vault_id, alias.clone(), stored);
+                    host_save::save_locked(
+                        state,
+                        &vault_id,
+                        HostSave {
+                            profile,
+                            new_password: None,
+                            group: HostGroup::Unchanged,
+                            identity: None,
+                            move_identity_pin: false,
+                        },
+                    )?;
+                    created.push(ImportedSshHost {
+                        alias: host.alias,
+                        origin_file: host.origin,
+                    });
                 }
-                // #9: overwriting an existing profile MUST preserve its
-                // immutable uid — personal bindings and hop_refs depend on it
-                // (B2.1/B2.2); a fresh uid would orphan them. We reuse the existing
-                // profile's uid, otherwise we mint a new one.
-                // The colour/icon are the user's own markings, not part of the
-                // ssh config, so an overwrite carries them over as well.
-                let existing = vault
-                    .get_item(alias.as_bytes())
-                    .ok()
-                    .flatten()
-                    .and_then(|it| serde_json::from_slice::<StoredProfile>(&it.content).ok());
-                let (existing_uid, color, icon) = match existing {
-                    Some(sp) => (
-                        sp.uid.filter(|u| !u.is_empty()),
-                        stored_appearance_id(sp.color),
-                        stored_appearance_id(sp.icon),
-                    ),
-                    None => (None, None, None),
-                };
-                let s = cfg.resolve(alias);
-                let stored = StoredProfile {
-                    uid: Some(existing_uid.unwrap_or_else(mint_profile_uid)),
-                    label: alias.clone(),
-                    host: s.hostname.unwrap_or_else(|| alias.clone()),
-                    port: s.port.unwrap_or(22),
-                    user: s.user.unwrap_or_default(),
-                    key_item_id: None,
-                    password_item_id: None,
-                    personal: false,
-                    username_template: None,
-                    jumps: parse_proxy_jump(s.proxy_jump.as_deref()),
-                    proxy: None,
-                    tags: Vec::new(),
-                    startup_snippet_ids: Vec::new(),
-                    record_sessions: false,
-                    agent_forward: false,
-                    system_agent_public_key: None,
-                    color,
-                    icon,
-                    extra: BTreeMap::new(),
-                };
-                let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
-                vault
-                    .put_item(alias.as_bytes(), ITEM_TYPE_CONNECTION, &json)
-                    .map_err(map_vault_err)?;
-                created.push(ImportedSshHost {
-                    alias: host.alias,
-                    origin_file: host.origin,
-                });
-            }
-            Ok(created)
+                Ok(created)
+            })
         })
     }
 

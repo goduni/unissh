@@ -24,7 +24,7 @@ use unissh_storage::{
 use crate::error::VaultError;
 use crate::membership::{
     add_member, build_grant, build_manifest, open_own_grant, verify_chain_to_epoch, verify_grant,
-    verify_manifest, Member,
+    verify_manifest, Member, VerifiedMembers,
 };
 
 /// How many past versions of a secret to keep in history (per-item retention).
@@ -741,6 +741,14 @@ impl<'a> Vault<'a> {
             }
             None => (1_u64, None),
         };
+        if key_epoch
+            <= self
+                .storage
+                .get_vault_epoch_floor(&self.vault_id)?
+                .unwrap_or(0)
+        {
+            return Err(VaultError::EpochInvalid);
+        }
         // grants: (recipient_x25519, member_ed25519, role) for each member
         // whose x25519 is known.
         let mut grants: Vec<(Vec<u8>, Vec<u8>, MemberRole)> = Vec::new();
@@ -749,65 +757,176 @@ impl<'a> Vault<'a> {
                 grants.push((x.clone(), m.ed25519_pub.clone(), m.role));
             }
         }
-        let verified = add_member(
-            self.storage,
-            admin_keyset,
-            &self.vault_id,
-            key_epoch,
-            prev.as_ref(),
-            &genesis_owner,
-            members,
-            &grants,
-            &self.vk,
-        )?;
-
-        // Re-anchor the vault record onto the fresh `key_epoch` (server-tz §5/§6.2): otherwise
-        // the record stays at key_epoch=0 while the vault is already in membership mode — then
-        // `verify_record_authority` looks for a nonexistent manifest@0 and the audit fails.
-        // The VK does not change (this is not a rotation) — we re-sign the same wrapping with
-        // version+1 and the new epoch. We do this ONLY when the record's owner
-        // (`self.keyset` = genesis_owner, the author and recipient of `wrapped_vk`) is in
-        // the verified set@key_epoch AND CAN WRITE TO IT (`can_write`, not just
-        // `contains`) — otherwise a record they re-sign would be authorized as a Viewer and
-        // `verify_record_authority` would reject it (the vault becomes unreadable). The owner is always Admin on
-        // the normal path; the check is defense-in-depth against a Viewer-owner set.
-        if verified.can_write(&genesis_owner) {
-            let vrec = self
-                .storage
-                .get_vault(&self.vault_id)?
-                .ok_or(VaultError::NotFound)?;
-            let v_version = next_version(vrec.version)?;
-            let name_blob = aead_encrypt(
-                &self.vk,
-                self.name.as_slice(),
-                &name_aad(&self.vault_id, v_version),
-            )?;
-            let owner_ed = self.keyset.signing.verifying.to_bytes();
-            let wrapped_vk = seal_key_to_public(
-                &self.keyset.encryption.public,
-                &self.vk,
-                &vk_wrap_info(&self.vault_id, &owner_ed, key_epoch)?,
-            )?;
-            let new_vrec = build_vault_record_epoch(
-                self.keyset,
+        // Verify and prepare the current snapshot BEFORE membership mode or
+        // its floor changes. Otherwise epoch-0 items become unreadable first.
+        let reanchored = self.reanchor_items(&self.vk, key_epoch)?;
+        self.storage.transaction(|| {
+            let verified = add_member(
+                self.storage,
+                admin_keyset,
                 &self.vault_id,
-                &name_blob,
-                &wrapped_vk,
-                v_version,
-                false,
                 key_epoch,
-                vrec.sync_target,
-                vrec.cache_policy,
-                vrec.sync_tenant,
+                prev.as_ref(),
+                &genesis_owner,
+                members,
+                &grants,
+                &self.vk,
             )?;
-            self.storage.put_vault(&new_vrec)?;
-            self.storage.mark_vault_dirty(&self.vault_id)?; // re-anchored record → push
-        }
+
+            // Re-anchor the vault record onto the fresh `key_epoch` (server-tz §5/§6.2): otherwise
+            // the record stays at key_epoch=0 while the vault is already in membership mode — then
+            // `verify_record_authority` looks for a nonexistent manifest@0 and the audit fails.
+            // The VK does not change (this is not a rotation) — we re-sign the same wrapping with
+            // version+1 and the new epoch. We do this ONLY when the record's owner
+            // (`self.keyset` = genesis_owner, the author and recipient of `wrapped_vk`) is in
+            // the verified set@key_epoch AND CAN WRITE TO IT (`can_write`, not just
+            // `contains`) — otherwise a record they re-sign would be authorized as a Viewer and
+            // `verify_record_authority` would reject it (the vault becomes unreadable). The owner is always Admin on
+            // the normal path; the check is defense-in-depth against a Viewer-owner set.
+            if verified.can_write(&genesis_owner) {
+                let vrec = self
+                    .storage
+                    .get_vault(&self.vault_id)?
+                    .ok_or(VaultError::NotFound)?;
+                let v_version = next_version(vrec.version)?;
+                let name_blob = aead_encrypt(
+                    &self.vk,
+                    self.name.as_slice(),
+                    &name_aad(&self.vault_id, v_version),
+                )?;
+                let owner_ed = self.keyset.signing.verifying.to_bytes();
+                let wrapped_vk = seal_key_to_public(
+                    &self.keyset.encryption.public,
+                    &self.vk,
+                    &vk_wrap_info(&self.vault_id, &owner_ed, key_epoch)?,
+                )?;
+                let new_vrec = build_vault_record_epoch(
+                    self.keyset,
+                    &self.vault_id,
+                    &name_blob,
+                    &wrapped_vk,
+                    v_version,
+                    false,
+                    key_epoch,
+                    vrec.sync_target,
+                    vrec.cache_policy,
+                    vrec.sync_tenant,
+                )?;
+                self.storage.put_vault(&new_vrec)?;
+                self.storage.mark_vault_dirty(&self.vault_id)?; // re-anchored record → push
+                for record in &reanchored {
+                    self.storage.put_item(record)?;
+                    self.storage
+                        .mark_item_dirty(&self.vault_id, &record.item_id)?;
+                }
+            }
+            // This owner already has the manifest locally, so an identical
+            // re-pull need not apply it again. Arm its floor in this same
+            // transaction rather than waiting for another device's sync path.
+            self.storage
+                .set_vault_epoch_floor(&self.vault_id, key_epoch)?;
+            Ok::<(), VaultError>(())
+        })?;
         // Raise the in-memory epoch, so that put_item on THIS same instance after
         // establishing membership stamps the current epoch (not 0). A re-opened
         // vault reads it from the vault record in Vault::open.
         self.key_epoch.set(key_epoch);
         Ok(key_epoch)
+    }
+
+    /// Reissues the verified current snapshot, including deletions, at a new
+    /// epoch. Both membership changes and VK rotation use this owner write
+    /// path; ordinary reads/pulls retain their strict epoch-floor checks.
+    fn reanchor_items(
+        &self,
+        target_vk: &SymmetricKey,
+        epoch: u64,
+    ) -> Result<Vec<ItemRecord>, VaultError> {
+        let records = self
+            .storage
+            .list_items_including_tombstones(&self.vault_id)?;
+        let current = self
+            .storage
+            .latest_membership_epoch(&self.vault_id)?
+            .map(|epoch| {
+                verify_chain_to_epoch(self.storage, &self.vault_id, epoch, &self.genesis_owner)
+            })
+            .transpose()?;
+        let mut out = Vec::with_capacity(records.len());
+        for record in records {
+            if matches!(
+                check_item_record(&record, &self.genesis_owner),
+                Some(IntegrityFailure::Malformed | IntegrityFailure::SignatureInvalid)
+            ) {
+                return Err(VaultError::SignatureInvalid);
+            }
+            if record.tombstone
+                && (!record.content_blob.is_empty() || !record.wrapped_item_key.is_empty())
+            {
+                return Err(VaultError::Format);
+            }
+            self.verify_reanchor_authority(&record, current.as_ref())?;
+            let updated = if record.tombstone {
+                let mut tombstone = self.tombstone_record(
+                    &record.item_id,
+                    record.item_type,
+                    next_version(record.version)?,
+                )?;
+                tombstone.key_epoch = epoch;
+                tombstone
+            } else {
+                self.rewrap_item(&record, target_vk, epoch)?
+            };
+            out.push(updated);
+        }
+        Ok(out)
+    }
+
+    /// A legacy below-floor row may be reissued only if its authenticated
+    /// author could write THEN and can STILL write now. In particular, a
+    /// revoked/demoted signer cannot launder a fresh delete through an old
+    /// epoch. Live content must also decrypt with the current VK before it is
+    /// reissued. This is never an alternative read/sync authorization path.
+    fn verify_reanchor_authority(
+        &self,
+        record: &ItemRecord,
+        current: Option<&VerifiedMembers>,
+    ) -> Result<(), VaultError> {
+        // Also gate above-floor rows: older owner clients did not always arm
+        // the floor when publishing a membership change.
+        if current.is_some_and(|members| !members.can_write(&record.author_pubkey)) {
+            return Err(VaultError::AuthorityInvalid);
+        }
+        if record.key_epoch == 0 && record.author_pubkey == self.genesis_owner {
+            return Ok(());
+        }
+        let floor = self
+            .storage
+            .get_vault_epoch_floor(&self.vault_id)?
+            .unwrap_or(0)
+            .max(current.map_or(0, VerifiedMembers::epoch));
+        if record.key_epoch >= floor {
+            return verify_record_authority(
+                self.storage,
+                &self.vault_id,
+                &record.author_pubkey,
+                record.key_epoch,
+                &self.genesis_owner,
+            );
+        }
+        let historical = verify_chain_to_epoch(
+            self.storage,
+            &self.vault_id,
+            record.key_epoch,
+            &self.genesis_owner,
+        )?;
+        if historical.can_write(&record.author_pubkey)
+            && current.is_some_and(|members| members.can_write(&record.author_pubkey))
+        {
+            Ok(())
+        } else {
+            Err(VaultError::AuthorityInvalid)
+        }
     }
 
     /// Changes the vault's cache-policy (server-tz §6.6): version+1, re-signing the record,
@@ -930,6 +1049,14 @@ impl<'a> Vault<'a> {
         let new_epoch = current_epoch
             .checked_add(1)
             .ok_or(VaultError::EpochInvalid)?;
+        if new_epoch
+            <= self
+                .storage
+                .get_vault_epoch_floor(&self.vault_id)?
+                .unwrap_or(0)
+        {
+            return Err(VaultError::EpochInvalid);
+        }
 
         // 1) VK'
         let vk_prime = SymmetricKey::generate();
@@ -990,12 +1117,10 @@ impl<'a> Vault<'a> {
             vrec.sync_tenant,
         )?;
 
-        // 5) re-wrap live items under VK' (in advance, to keep the transaction short).
-        let live = self.storage.list_items(&self.vault_id)?;
-        let mut rewrapped = Vec::with_capacity(live.len());
-        for it in &live {
-            rewrapped.push(self.rewrap_item(it, &vk_prime, new_epoch)?);
-        }
+        // 5) reissue the verified current snapshot under VK', including
+        // tombstones. Leaving a deleted row below the new floor breaks the
+        // audit and the next membership update.
+        let rewrapped = self.reanchor_items(&vk_prime, new_epoch)?;
 
         // ATOMICALLY: manifest + grants + items + vault record + epoch floor.
         self.storage.transaction(|| {
@@ -1359,7 +1484,14 @@ pub fn verify_record_authority(
     }
     // membership mode (vault-level): a downgrade to owner==author is forbidden.
     // (b) anti-rollback: the epoch floor (default 0).
-    let floor = storage.get_vault_epoch_floor(vault_id)?.unwrap_or(0);
+    // Old owner clients could persist a verified manifest without arming its
+    // floor. Known later membership must still prevent replay while offline.
+    // An unverified higher local row can only cause refusal here: accepting a
+    // record still requires the full signed chain at its epoch below.
+    let floor = storage
+        .get_vault_epoch_floor(vault_id)?
+        .unwrap_or(0)
+        .max(storage.latest_membership_epoch(vault_id)?.unwrap_or(0));
     if record_epoch < floor {
         return Err(VaultError::EpochInvalid);
     }

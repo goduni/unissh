@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ConnectionProfile, ProfileAuth } from "@/bridge/types";
-import { NEW_GROUP, groupChoice, hopCandidates, identityToLink } from "./hostSave";
+import { NEW_GROUP, groupChoice, hopCandidates, identityToLink, editedJumpChain } from "./hostSave";
 
 function host(profileId: string, auth: ProfileAuth, uid = `uid-${profileId}`): ConnectionProfile {
   return {
@@ -50,5 +50,20 @@ describe("identityToLink", () => {
     expect(identityToLink(false, "pv", "me")).toBeNull();
     expect(identityToLink(true, null, "me")).toBeNull();
     expect(identityToLink(true, "pv", "")).toBeNull();
+  });
+});
+
+describe("editedJumpChain", () => {
+  const hop = (host: string): import("@/bridge/types").JumpHost => ({ host, port: 22, user: "ops", auth: { type: "agent", vaultId: "v", keyItemId: "k" } });
+  it("keeps every hop when unrelated host fields change", () => {
+    const chain = [hop("first"), hop("second"), hop("third")];
+    expect(editedJumpChain(chain, hop("first"), true, false)).toEqual(chain);
+  });
+  it("keeps subsequent hops when the first hop is edited", () => {
+    const chain = [hop("first"), hop("second")];
+    expect(editedJumpChain(chain, hop("new-first"), true, true)).toEqual([hop("new-first"), chain[1]]);
+  });
+  it("removes the whole route when jumps are explicitly disabled", () => {
+    expect(editedJumpChain([hop("first"), hop("second")], hop("first"), false, false)).toEqual([]);
   });
 });

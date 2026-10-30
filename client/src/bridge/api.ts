@@ -207,6 +207,7 @@ export const abandonKeyRotation = (vaultId: string, candidateId: string) =>
 export const listKeyRotations = (vaultId: string) =>
   invoke<KeyRotationLink[]>("list_key_rotations", { vaultId });
 /** What in the vault uses a key or password item (hosts by role, identities). */
+export const keyUsages = (vaultId: string) => invoke<Record<string, KeyUsage>>("key_usages", { vaultId });
 export const keyUsage = (vaultId: string, itemId: string) =>
   invoke<KeyUsage>("key_usage", { vaultId, itemId });
 /** Guided rotation: the core's plan for rotating `keyId`, frozen until `keyRotationClose`. */
