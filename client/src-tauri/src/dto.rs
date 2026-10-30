@@ -640,6 +640,7 @@ impl From<ffi::PersonalAuth> for PersonalAuth {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedConnect {
+    pub profile: ConnectionProfile,
     pub host: String,
     pub port: u16,
     pub user: String,
@@ -651,6 +652,7 @@ pub struct ResolvedConnect {
 impl From<ffi::ResolvedConnection> for ResolvedConnect {
     fn from(r: ffi::ResolvedConnection) -> Self {
         Self {
+            profile: r.profile.into(),
             host: r.host,
             port: r.port,
             user: r.user,

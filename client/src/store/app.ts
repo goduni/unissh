@@ -2031,7 +2031,7 @@ export const useApp = create<AppStore>((set, get) => ({
       // Look the pane up by its unique id (a merge can move it to another tab).
       const pane = s.terminals.flatMap((t) => t.panes).find((p) => p.id === paneId);
       let target = pane?.target;
-      if (pane?.status === "restored" && target?.kind === "ssh") {
+      if (target?.kind === "ssh") {
         const profileId = target.profile.profileId;
         const profile = s.hosts.find((host) => host.profileId === profileId);
         if (!profile) {

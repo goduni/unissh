@@ -167,7 +167,7 @@ struct Tree {
     files: Vec<(String, Option<u64>)>,
     /// What is not copied, and why.
     skipped: Vec<(String, &'static str)>,
-    /// Directories that could not be read (`""` is the root), and why.
+    /// Entries that could not be read or represented (`""` is the root), and why.
     unread: Vec<(String, String)>,
 }
 
@@ -194,13 +194,20 @@ fn walk(names: Names, mut list: impl FnMut(&str) -> Result<Vec<Entry>, String>) 
                 continue;
             }
             let rel = rel_join(&dir, &entry.name);
-            if !names.holds(&entry.name) {
-                tree.skipped.push((rel, "a name this system cannot hold"));
+            if let Some(why) = entry.kind.skipped() {
+                if entry.kind == Kind::BadName {
+                    tree.unread.push((rel, why.to_owned()));
+                } else {
+                    tree.skipped.push((rel, why));
+                }
+            } else if !names.holds(&entry.name) {
+                tree.unread
+                    .push((rel, "a name this system cannot hold".to_owned()));
             } else if names.fold_case && !folded.insert(entry.name.to_lowercase()) {
-                tree.skipped
-                    .push((rel, "differs only in case from another name here"));
-            } else if let Some(why) = entry.kind.skipped() {
-                tree.skipped.push((rel, why));
+                tree.unread.push((
+                    rel,
+                    "differs only in case from another name here".to_owned(),
+                ));
             } else if entry.kind == Kind::Dir {
                 tree.dirs.push(rel.clone());
                 queue.push_back(rel);
@@ -501,7 +508,7 @@ pub fn download_tree(
         .iter()
         .filter(|(rel, _)| !under(&cut, rel))
         .collect();
-    pool::each(&files, parallel, |(rel, size)| {
+    pool::each(&files, parallel, |(rel, _)| {
         let to = local_path(local, rel);
         let shown = to.display().to_string();
         let leg = Leg::new(&board);
@@ -512,7 +519,7 @@ pub fn download_tree(
             (shown, Err(refused))
         } else {
             let from = remote_path(remote, rel);
-            let outcome = download(sftp, from.clone(), &to, *size, Some(leg.observer()));
+            let outcome = download(sftp, from.clone(), &to, force, Some(leg.observer()));
             (from, outcome)
         };
         board.settle(&named, outcome, leg.sent());
@@ -681,8 +688,8 @@ mod tests {
         });
         assert_eq!(tree.files, vec![("ok".into(), Some(3))]);
         assert_eq!(
-            tree.skipped,
-            vec![(r"..\up".into(), "a name this system cannot hold")]
+            tree.unread,
+            vec![(r"..\up".into(), "a name this system cannot hold".into())]
         );
     }
 
@@ -712,8 +719,8 @@ mod tests {
             Tree {
                 dirs: vec!["A".into()],
                 files: vec![("B.TXT".into(), Some(3)), ("A/a".into(), Some(3))],
-                skipped: vec![("a".into(), why), ("b.txt".into(), why)],
-                unread: vec![],
+                skipped: vec![],
+                unread: vec![("a".into(), why.into()), ("b.txt".into(), why.into())],
             }
         );
     }
@@ -732,6 +739,51 @@ mod tests {
             failure.message,
             "copied 1 of 2 files to out; 1 could not be copied (see above)"
         );
+    }
+
+    #[test]
+    fn incompatible_names_fail_the_copy_but_links_do_not() {
+        for entries in [
+            vec![entry("A.txt", Kind::File), entry("a.txt", Kind::File)],
+            vec![entry("A", Kind::Dir), entry("a", Kind::Dir)],
+            vec![entry("NUL", Kind::File)],
+            vec![entry("bad-name", Kind::BadName)],
+        ] {
+            let mut root = Some(entries);
+            let tree = walk(
+                Names {
+                    windows: true,
+                    fold_case: true,
+                },
+                |dir| {
+                    Ok(if dir.is_empty() {
+                        root.take().unwrap()
+                    } else {
+                        vec![]
+                    })
+                },
+            );
+            let board = Board::new(&tree);
+            board.preface(&tree, str::to_owned);
+            let error = board.finish(tree.skipped.len(), "out").unwrap_err();
+            assert_eq!(error.exit, EXIT_FAILURE);
+        }
+        let tree = walk(
+            Names {
+                windows: true,
+                fold_case: true,
+            },
+            |_| Ok(vec![entry("A.txt", Kind::Link), entry("a.txt", Kind::File)]),
+        );
+        assert_eq!(
+            tree.files.len(),
+            1,
+            "a skipped link must not hide a regular file"
+        );
+        let board = Board::new(&tree);
+        board.preface(&tree, str::to_owned);
+        board.settle("a.txt", Ok(true), 0);
+        assert!(board.finish(tree.skipped.len(), "out").is_ok());
     }
 
     #[cfg(unix)]
