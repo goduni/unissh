@@ -10,6 +10,9 @@ use unissh_vault::Member;
 
 use crate::{decode_pubkey32, FfiError};
 
+/// A member's public signing key and public encryption key, in that order.
+pub(crate) type RecipientKey = (Vec<u8>, Vec<u8>);
+
 fn slot(vault_id: &[u8]) -> String {
     format!("membership.recipient-keys.v1:{}", hex::encode(vault_id))
 }
@@ -21,9 +24,9 @@ pub(crate) fn recipients(
     storage: &Storage,
     vault_id: &[u8],
     members: &[Member],
-    owner: (Vec<u8>, Vec<u8>),
-    supplied: (Vec<u8>, Vec<u8>),
-) -> Result<Vec<(Vec<u8>, Vec<u8>)>, FfiError> {
+    owner: RecipientKey,
+    supplied: RecipientKey,
+) -> Result<Vec<RecipientKey>, FfiError> {
     let key = slot(vault_id);
     let mut pins: BTreeMap<String, String> = match storage.get_meta(&key)? {
         Some(bytes) => serde_json::from_slice(&bytes).map_err(FfiError::other)?,
