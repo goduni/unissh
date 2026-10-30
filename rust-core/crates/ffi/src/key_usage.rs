@@ -300,12 +300,12 @@ impl Core {
             }
         }
         Ok(UsageSnapshot {
-            personal,
-            same: self.names_of_vault(vault_id, &all)?,
             hosts,
             identities,
+            same: self.names_of_vault(vault_id, &all)?,
             others,
             unscanned,
+            personal,
         })
     }
 
@@ -325,13 +325,15 @@ impl Core {
             for host in hosts {
                 let mut roles = BTreeSet::new();
                 for hop in &host.jumps {
-                    if let Some(r) = &hop.hop_ref {
-                        if same(&r.vault_id) && login_uids.contains(r.profile_uid.as_str()) {
-                            roles.insert(KeyUseRole::ReferencedHop);
+                    let role = match &hop.hop_ref {
+                        Some(r) => (same(&r.vault_id)
+                            && login_uids.contains(r.profile_uid.as_str()))
+                        .then_some(KeyUseRole::ReferencedHop),
+                        None => {
+                            auth_uses(&hop.auth, item_id, &same).then_some(KeyUseRole::InlineHop)
                         }
-                    } else if auth_uses(&hop.auth, item_id, &same) {
-                        roles.insert(KeyUseRole::InlineHop);
-                    }
+                    };
+                    roles.extend(role);
                 }
                 if matches!(host.proxy.as_ref().and_then(|p| p.password.as_ref()), Some(ProxyPassword::Vault {vault_id: v, password_item_id}) if same(v) && password_item_id == item_id)
                 {

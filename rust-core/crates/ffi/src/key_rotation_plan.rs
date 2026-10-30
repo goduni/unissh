@@ -3113,7 +3113,7 @@ mod tests {
                 team_vault_id: "v".into(),
                 profile_uid: profile.uid,
                 identity_item_id: "me".into(),
-                destination_pin: Some(pin),
+                destination_pin: pin,
             },
             false,
         )

@@ -614,7 +614,7 @@ function KeyRow({
                 hosts={usedHosts((r) => r.includes("inlineHop") || r.includes("referencedHop"))}
               />
               <KeyIdentityList label={t("secrets.keyUsedIdentity")} identities={usage.identities} />
-              {(usage.unscannedVaults?.length ?? 0) > 0 && <p style={{ color: p.amber, fontSize: TEXT.small }}>{t("secrets.usageIncomplete", { vaults: usage.unscannedVaults?.join(", ") })}</p>}
+              {(usage.unscannedVaults?.length ?? 0) > 0 && <p style={{ color: p.amber, fontSize: TEXT.small }}>{t("secrets.usageIncomplete", { vaults: usage.unscannedVaults?.join(", ") ?? "" })}</p>}
             </>
           ) : null}
         </div>
@@ -707,7 +707,7 @@ function KeyIdentityList({ label, identities }: { label: string; identities: Key
  *  apart (each pluralised); empty for an unused one. */
 function usedBy(t: TFunction, u: KeyUsage): string {
   return [
-    (u.unscannedVaults?.length ?? 0) > 0 && t("secrets.usageIncomplete", { vaults: u.unscannedVaults?.join(", ") }),
+    (u.unscannedVaults?.length ?? 0) > 0 && t("secrets.usageIncomplete", { vaults: u.unscannedVaults?.join(", ") ?? "" }),
     u.hosts.length > 0 && t("secrets.usedByHosts", { count: u.hosts.length }),
     u.identities.length > 0 && t("secrets.usedByIdentities", { count: u.identities.length }),
   ]
