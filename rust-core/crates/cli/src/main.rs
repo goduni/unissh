@@ -30,6 +30,7 @@ mod picker;
 mod pool;
 mod recordings;
 mod replay;
+mod rotation;
 mod secrets;
 mod server;
 mod signals;
@@ -39,12 +40,15 @@ mod system_lock;
 mod tree;
 mod tty;
 mod tunnel;
+mod vaults;
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{ArgGroup, Args, Parser, Subcommand};
+use clap::error::{ContextKind, ContextValue, ErrorKind};
+use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand};
 use unissh_ffi::snippet_params::{builtins_from_profile, resolve_command};
 use unissh_ffi::Core;
 
@@ -104,7 +108,12 @@ enum Command {
     /// What this machine is signed in to.
     Status,
     /// Sync the vaults with the server now.
-    Sync,
+    Sync {
+        /// Send again the changes the server refused before (too large, or not
+        /// permitted), instead of leaving them out until they change.
+        #[arg(long)]
+        retry_refused: bool,
+    },
     /// List the hosts, or add, change or delete one.
     #[command(args_conflicts_with_subcommands = true)]
     Hosts {
@@ -173,6 +182,10 @@ enum Command {
     /// The host keys this machine has pinned.
     #[command(subcommand, name = "known-hosts")]
     KnownHosts(KnownHosts),
+    /// The vaults on this machine; trust the owner of a vault a teammate
+    /// shared, after comparing fingerprints.
+    #[command(subcommand)]
+    Vaults(vaults::VaultsAction),
     /// Host groups: list, add, change or delete them.
     #[command(subcommand)]
     Groups(GroupsAction),
@@ -239,7 +252,8 @@ struct HostSelection {
     /// The hosts with this tag; repeat for hosts with every one of them.
     #[arg(long, value_name = "TAG")]
     tag: Vec<String>,
-    /// The hosts of this group (label or vault/label), nested groups included.
+    /// The hosts of this group (label or vault/label), and of groups listed as
+    /// its members; not those of its subgroups (groups whose parent it is).
     #[arg(long, value_name = "GROUP")]
     group: Option<String>,
     /// Hosts by label (or vault/label, or address).
@@ -405,13 +419,50 @@ enum Recordings {
 }
 
 fn main() -> ExitCode {
-    match run(Cli::parse()) {
+    let cli = Cli::try_parse().unwrap_or_else(|e| plain_usage(e, std::env::args_os()).exit());
+    match run(cli) {
         Ok(code) => ExitCode::from(code),
         Err(failure) => {
             eprintln!("unissh: {failure}");
             ExitCode::from(failure.exit)
         }
     }
+}
+
+/// A missing-argument error with the command's own usage line. clap's echoes
+/// every option that was given, on the command line or from the environment,
+/// so `--home` and `--password-file` (from `UNISSH_HOME`, say) read as if the
+/// command required them.
+fn plain_usage(mut err: clap::Error, args: impl IntoIterator<Item = OsString>) -> clap::Error {
+    if err.kind() != ErrorKind::MissingRequiredArgument {
+        return err;
+    }
+    let Ok(matches) = Cli::command()
+        .ignore_errors(true)
+        .try_get_matches_from(args)
+    else {
+        return err;
+    };
+    let mut path = Vec::new();
+    let mut at = &matches;
+    while let Some((name, sub)) = at.subcommand() {
+        path.push(name.to_owned());
+        at = sub;
+    }
+    let mut root = Cli::command();
+    root.build();
+    let mut command = &mut root;
+    for name in &path {
+        match command.find_subcommand_mut(name) {
+            Some(sub) => command = sub,
+            None => return err,
+        }
+    }
+    err.insert(
+        ContextKind::Usage,
+        ContextValue::StyledStr(command.render_usage()),
+    );
+    err
 }
 
 fn run(cli: Cli) -> Res<u8> {
@@ -436,14 +487,19 @@ fn run(cli: Cli) -> Res<u8> {
             manage::status(&home)?;
             Ok(0)
         }
-        Command::Sync => {
+        Command::Sync { retry_refused } => {
             if offline {
                 return Err(Failure::msg("`sync` and --offline contradict each other"));
             }
             let device = unlocked(home, &credentials)?;
-            let report = server::sync(&device)?;
+            let report = if retry_refused {
+                server::sync_retrying_refused(&device)?
+            } else {
+                server::sync(&device)?
+            };
             println!("{}", server::summary(&report));
             server::warn_about(&report);
+            vaults::name_pending(&device);
             Ok(0)
         }
         Command::Hosts {
@@ -518,6 +574,11 @@ fn run(cli: Cli) -> Res<u8> {
                 KnownHosts::Forget { host } => KnownHostsAction::Forget { host },
             };
             manage::known_hosts(&device.core, action)?;
+            Ok(0)
+        }
+        Command::Vaults(action) => {
+            let device = unlocked(home, &credentials)?;
+            vaults::run(&device, offline, action)?;
             Ok(0)
         }
         Command::Groups(action) => edit(home, &credentials, offline, |d| {
@@ -694,6 +755,9 @@ fn ready(home: Home, credentials: &Credentials, offline: bool) -> Res<Device> {
     let device = unlocked(home, credentials)?;
     if !offline {
         server::sync_if_stale(&device);
+        // What is left out before the command writes anything: the sync after
+        // a write tells the write from these.
+        device.note_left_out();
     }
     Ok(device)
 }
@@ -823,8 +887,9 @@ fn copy(
 
 #[cfg(test)]
 mod tests {
-    use super::{split_user, Cli};
+    use super::{plain_usage, split_user, Cli};
     use clap::{CommandFactory, Parser};
+    use std::ffi::OsString;
 
     #[test]
     fn the_command_line_is_well_formed() {
@@ -837,6 +902,34 @@ mod tests {
             panic!("a tunnel without -L, -R or -D must be refused");
         };
         assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+    }
+
+    /// The usage line of a missing-argument error is the command's own: the
+    /// global options given do not appear in it as if they were required.
+    #[test]
+    fn a_missing_argument_shows_the_plain_usage() {
+        let args = [
+            "unissh",
+            "--home",
+            "/h",
+            "--password-file",
+            "/p",
+            "tunnel",
+            "web",
+        ];
+        let Err(err) = Cli::try_parse_from(args) else {
+            panic!("a tunnel without -L, -R or -D must be refused");
+        };
+        let text = plain_usage(err, args.map(OsString::from))
+            .render()
+            .to_string();
+        let usage = text
+            .lines()
+            .find(|line| line.starts_with("Usage:"))
+            .unwrap_or_default();
+        assert!(usage.starts_with("Usage: unissh tunnel "), "{text}");
+        assert!(!usage.contains("--home"), "{usage}");
+        assert!(!usage.contains("--password-file"), "{usage}");
     }
 
     #[test]

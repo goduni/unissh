@@ -5,8 +5,11 @@
 //! directly. These mirrors carry the same data with `camelCase` JSON, plus
 //! `From` conversions in both directions.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use unissh_ffi as ffi;
+use unissh_ffi::key_rotation_plan as rotation;
 
 // ---------- inputs (frontend -> core) ----------
 
@@ -822,6 +825,9 @@ pub struct SyncReport {
     pub pushed: u64,
     /// Items the server refuses as too large: not uploaded, everything else was.
     pub too_large: Vec<TooLargeItem>,
+    /// Edits no push can deliver (a Viewer's edit, an edit the server refuses):
+    /// not uploaded, everything else was.
+    pub unpushable: Vec<UnpushableItem>,
 }
 impl From<ffi::FfiSyncReport> for SyncReport {
     fn from(r: ffi::FfiSyncReport) -> Self {
@@ -832,6 +838,69 @@ impl From<ffi::FfiSyncReport> for SyncReport {
             rejected: r.rejected,
             pushed: r.pushed,
             too_large: r.too_large.into_iter().map(Into::into).collect(),
+            unpushable: r.unpushable.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// What discarding a vault's unsendable edits did (mirror of `FfiDiscardReport`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscardReport {
+    /// This account's edits that were dropped (the server's copy replaced them,
+    /// or the item is gone: `removed`).
+    pub dropped: u32,
+    /// Of `dropped`, the items the server does not have: removed.
+    pub removed: u32,
+    /// Other members' items no longer sent (kept as they are).
+    pub released: u32,
+}
+impl From<ffi::FfiDiscardReport> for DiscardReport {
+    fn from(r: ffi::FfiDiscardReport) -> Self {
+        Self {
+            dropped: r.dropped,
+            removed: r.removed,
+            released: r.released,
+        }
+    }
+}
+
+/// An edit no push can deliver (mirror of `FfiUnpushableItem`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnpushableItem {
+    pub vault_id: String,
+    pub vault_name: String,
+    pub item_id: String,
+    /// The core's item type (as in `ItemInfo`), so the UI can name the kind.
+    pub item_type: u32,
+    /// This account made the edit, so it can be discarded.
+    pub mine: bool,
+    /// `notAuthorized` (the author may not write the vault) or
+    /// `serverRefused` (the server refused it).
+    pub reason: UnpushableReason,
+}
+
+/// Why an edit cannot be pushed (mirror of `FfiUnpushableReason`).
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UnpushableReason {
+    NotAuthorized,
+    ServerRefused,
+}
+
+impl From<ffi::FfiUnpushableItem> for UnpushableItem {
+    fn from(u: ffi::FfiUnpushableItem) -> Self {
+        Self {
+            vault_id: u.vault_id,
+            vault_name: u.vault_name,
+            item_id: u.item_id,
+            item_type: u.item_type,
+            mine: u.mine,
+            reason: match u.reason {
+                ffi::FfiUnpushableReason::NotAuthorized => UnpushableReason::NotAuthorized,
+                ffi::FfiUnpushableReason::ServerRefused => UnpushableReason::ServerRefused,
+            },
         }
     }
 }
@@ -888,6 +957,158 @@ pub struct ServerVault {
     pub bound: bool,
     /// The local vault's name, if present locally (else `None` — pull to load it).
     pub local_name: Option<String>,
+}
+
+/// Where a vault shared with this account stands on this device, as the core's
+/// inspection of its membership chain and this device's pin say.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SharedVaultState {
+    /// No owner pinned here yet: the user has to confirm the owner's fingerprint.
+    Waiting,
+    /// The owner is pinned here, the vault is not fetched yet.
+    TrustedNotFetched,
+    /// ANOTHER owner is pinned here than the one the server now presents. Never
+    /// offer trust: the user must contact the owner.
+    OwnerChanged,
+    /// The vault's membership could not be verified (broken chain, no grant to
+    /// this account, a page that could not be read).
+    Unverifiable,
+}
+
+/// A vault a teammate shared with this account that is not on this device yet.
+/// Public facts only: the fingerprint of the key that created it (grouped by
+/// four, as the core formats it) and what the server CLAIMS about its owner,
+/// which is never verified and must be shown as a claim. No keys, no secrets.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingSharedVault {
+    /// hex vault id (validated: 32 hex digits, lowercase).
+    pub vault_id: String,
+    pub state: SharedVaultState,
+    /// Grouped fingerprint of the vault creator's key; `None` when unverifiable.
+    pub fingerprint: Option<String>,
+    /// This account's role at the chain's latest epoch; `None` when unverifiable.
+    pub role: Option<MemberRole>,
+    /// The handle the server's directory lists for the creator's key. UNVERIFIED.
+    pub claimed_handle: Option<String>,
+    /// The display name the server's directory lists for it. UNVERIFIED.
+    pub claimed_name: Option<String>,
+    /// Why the vault cannot be verified (`Unverifiable` only).
+    pub error: Option<String>,
+}
+
+/// The shared vaults waiting on this device, plus how many catalog entries the
+/// server sent under a malformed id (ignored, never shown).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingSharedVaults {
+    pub vaults: Vec<PendingSharedVault>,
+    pub malformed: u32,
+}
+
+/// What a trust attempt did (mirror of `ffi::FfiTrustOutcome`).
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TrustOutcome {
+    /// Pinned now: pull the vault next.
+    Trusted,
+    /// This owner was pinned already: pull the vault next.
+    AlreadyTrusted,
+    /// The fingerprint given is not the creator's. Nothing was pinned.
+    FingerprintMismatch,
+    /// Another owner is pinned here. Nothing changed.
+    PinnedToAnotherOwner,
+}
+
+impl From<ffi::FfiTrustOutcome> for TrustOutcome {
+    fn from(o: ffi::FfiTrustOutcome) -> Self {
+        match o {
+            ffi::FfiTrustOutcome::Trusted => Self::Trusted,
+            ffi::FfiTrustOutcome::AlreadyTrusted => Self::AlreadyTrusted,
+            ffi::FfiTrustOutcome::FingerprintMismatch => Self::FingerprintMismatch,
+            ffi::FfiTrustOutcome::PinnedToAnotherOwner => Self::PinnedToAnotherOwner,
+        }
+    }
+}
+
+/// At most this many characters of a server-claimed handle or name are passed
+/// on: enough to recognise someone, not a page of text (as the CLI does).
+const CLAIM_CHARS: usize = 64;
+
+/// Whether a character of a server-claimed handle or name may be shown: not a
+/// C0, DEL or C1 control, not a bidi embedding, override, isolate or mark
+/// (U+061C, U+200E/F, U+202A–U+202E, U+2066–U+2069), and not an invisible
+/// format character (U+00AD, U+200B–U+200D, U+2060–U+2064, U+FEFF): any of
+/// them could reorder or hide part of a name. The same set as the CLI's
+/// `tty::one_line`.
+fn shown(c: char) -> bool {
+    !c.is_control()
+        && !matches!(
+            c,
+            '\u{ad}'
+                | '\u{61c}'
+                | '\u{200b}'..='\u{200f}'
+                | '\u{202a}'..='\u{202e}'
+                | '\u{2060}'..='\u{2064}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{feff}'
+        )
+}
+
+/// A server-claimed handle or name as it may be shown: on one line, without
+/// the characters [`shown`] drops, trimmed, and cut at [`CLAIM_CHARS`] with
+/// "…" marking the cut. `None` when nothing is left to show.
+fn capped(claim: &str) -> Option<String> {
+    let cleaned: String = claim.chars().filter(|c| shown(*c)).collect();
+    let mut chars = cleaned.trim().chars();
+    let mut out: String = chars.by_ref().take(CLAIM_CHARS).collect();
+    if out.is_empty() {
+        return None;
+    }
+    if chars.next().is_some() {
+        out.push('…');
+    }
+    Some(out)
+}
+
+impl From<unissh_cloud::shared::PendingVault> for PendingSharedVault {
+    fn from(p: unissh_cloud::shared::PendingVault) -> Self {
+        let claimed_handle = p
+            .claimed_owner
+            .as_ref()
+            .and_then(|d| d.handle.as_deref())
+            .and_then(capped);
+        let claimed_name = p
+            .claimed_owner
+            .as_ref()
+            .and_then(|d| d.display_name.as_deref())
+            .and_then(capped);
+        match p.inspected {
+            Ok(info) => Self {
+                vault_id: p.vault_id,
+                state: match info.trust {
+                    ffi::FfiVaultTrust::NotPinned => SharedVaultState::Waiting,
+                    ffi::FfiVaultTrust::Pinned => SharedVaultState::TrustedNotFetched,
+                    ffi::FfiVaultTrust::PinnedToAnotherOwner => SharedVaultState::OwnerChanged,
+                },
+                fingerprint: Some(ffi::grouped_fingerprint(info.fingerprint)),
+                role: Some(info.my_role.into()),
+                claimed_handle,
+                claimed_name,
+                error: None,
+            },
+            Err(error) => Self {
+                vault_id: p.vault_id,
+                state: SharedVaultState::Unverifiable,
+                fingerprint: None,
+                role: None,
+                claimed_handle: None,
+                claimed_name: None,
+                error: Some(error),
+            },
+        }
+    }
 }
 
 // ---------- membership / sharing ----------
@@ -1055,6 +1276,406 @@ impl From<ffi::KeyRotationLink> for KeyRotationLink {
             key_id: l.key_id,
             candidate_id: l.candidate_id,
             started_elsewhere: l.started_elsewhere,
+        }
+    }
+}
+
+// ---------- guided key rotation ----------
+
+/// One step of a target's rotation.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RotationStep {
+    Deploy,
+    Verify,
+    Remove,
+    Confirm,
+}
+impl From<rotation::RotationStep> for RotationStep {
+    fn from(s: rotation::RotationStep) -> Self {
+        match s {
+            rotation::RotationStep::Deploy => Self::Deploy,
+            rotation::RotationStep::Verify => Self::Verify,
+            rotation::RotationStep::Remove => Self::Remove,
+            rotation::RotationStep::Confirm => Self::Confirm,
+        }
+    }
+}
+
+/// Why a step did not pass; the dialog words it.
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum RotationStepFailure {
+    NoResult,
+    TimedOut,
+    Error { message: String },
+    Locked,
+    OldKeyStillPresent,
+    NoAuthorizedKeys,
+    RemoveNeedsSecondFactor,
+    OldKeyStillAccepted,
+    OldKeyCheckFailed { message: Option<String> },
+}
+impl From<&rotation::StepFailure> for RotationStepFailure {
+    fn from(f: &rotation::StepFailure) -> Self {
+        use rotation::StepFailure as F;
+        match f {
+            F::NoResult => Self::NoResult,
+            F::TimedOut => Self::TimedOut,
+            F::Error { message } => Self::Error {
+                message: message.clone(),
+            },
+            F::Locked => Self::Locked,
+            F::OldKeyStillPresent => Self::OldKeyStillPresent,
+            F::NoAuthorizedKeys => Self::NoAuthorizedKeys,
+            F::RemoveNeedsSecondFactor => Self::RemoveNeedsSecondFactor,
+            F::OldKeyStillAccepted => Self::OldKeyStillAccepted,
+            F::OldKeyCheckFailed { message } => Self::OldKeyCheckFailed {
+                message: message.clone(),
+            },
+        }
+    }
+}
+
+/// One target's place in a run.
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum RotationTargetState {
+    Pending {
+        step: RotationStep,
+    },
+    Running {
+        step: RotationStep,
+    },
+    Failed {
+        step: RotationStep,
+        failure: RotationStepFailure,
+    },
+    Switched,
+    KeptOld {
+        after: Option<RotationStep>,
+    },
+    Unconfirmed,
+}
+impl From<&rotation::TargetState> for RotationTargetState {
+    fn from(s: &rotation::TargetState) -> Self {
+        use rotation::TargetState as T;
+        match s {
+            T::Pending { step } => Self::Pending {
+                step: (*step).into(),
+            },
+            T::Running { step } => Self::Running {
+                step: (*step).into(),
+            },
+            T::Failed { step, failure } => Self::Failed {
+                step: (*step).into(),
+                failure: failure.into(),
+            },
+            T::Switched => Self::Switched,
+            T::KeptOld { after } => Self::KeptOld {
+                after: after.map(Into::into),
+            },
+            T::Unconfirmed => Self::Unconfirmed,
+        }
+    }
+}
+
+/// A machine the candidate key goes to, as the dialog lists it.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RotationTarget {
+    pub id: String,
+    /// The host's label, or `user@host[:port]` for a bare hop.
+    pub label: String,
+    pub user: String,
+    pub host: String,
+    pub port: u16,
+    /// The hops in front of it, as the logins they land on.
+    pub route: Vec<String>,
+    /// For a hop: the label of the host whose chain it was found in.
+    pub via_label: Option<String>,
+    /// The first-dial proxy as `host:port`.
+    pub proxy: Option<String>,
+}
+
+/// A host that only hops with the key.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RotationDependent {
+    pub profile_id: String,
+    pub label: String,
+    pub target_ids: Vec<String>,
+}
+
+/// A host the rotation leaves alone.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RotationSkip {
+    pub profile_id: String,
+    pub label: String,
+    /// `personal`, `systemAgent` or `password`.
+    pub reason: &'static str,
+}
+
+/// The plan of a guided key rotation, kept in `AppState` under `handle`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyRotationPlan {
+    pub handle: String,
+    pub targets: Vec<RotationTarget>,
+    pub dependents: Vec<RotationDependent>,
+    pub skipped: Vec<RotationSkip>,
+    /// One login is reached over more than one route.
+    pub shared_endpoint: bool,
+    /// Targets reached over a machine whose host key is not pinned yet: the
+    /// rotation refuses to start until each was connected to once.
+    pub unpinned: Vec<String>,
+}
+impl KeyRotationPlan {
+    pub fn new(handle: String, plan: &rotation::RotationPlan, unpinned: Vec<String>) -> Self {
+        let targets = plan
+            .targets
+            .iter()
+            .map(|t| RotationTarget {
+                id: t.id.clone(),
+                label: t.label(),
+                user: t.user.clone(),
+                host: t.host.clone(),
+                port: t.port,
+                route: t.route.clone(),
+                via_label: t.via.as_ref().map(|h| h.label.clone()),
+                proxy: t.proxy.as_ref().map(|p| format!("{}:{}", p.host, p.port)),
+            })
+            .collect();
+        let dependents = plan
+            .dependents
+            .iter()
+            .map(|d| RotationDependent {
+                profile_id: d.host.profile_id.clone(),
+                label: d.host.label.clone(),
+                target_ids: d.target_ids.clone(),
+            })
+            .collect();
+        let skipped = plan
+            .skipped
+            .iter()
+            .map(|s| RotationSkip {
+                profile_id: s.host.profile_id.clone(),
+                label: s.host.label.clone(),
+                reason: match s.reason {
+                    rotation::RotationSkipReason::Personal => "personal",
+                    rotation::RotationSkipReason::SystemAgent => "systemAgent",
+                    rotation::RotationSkipReason::Password => "password",
+                },
+            })
+            .collect();
+        Self {
+            handle,
+            targets,
+            dependents,
+            skipped,
+            shared_endpoint: plan.has_shared_endpoint(),
+            unpinned,
+        }
+    }
+}
+
+/// A guided key rotation's run as it stands.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyRotationRun {
+    /// Target id → its state.
+    pub states: BTreeMap<String, RotationTargetState>,
+    /// Targets where a login with the candidate passed in this run.
+    pub verified: Vec<String>,
+    pub cancelled: bool,
+    /// Nothing in flight and nothing left to start.
+    pub settled: bool,
+    /// Targets finishing would lock out (the candidate was not proven there).
+    pub unproven: Vec<String>,
+    /// Targets finishing would cut off: proven, but reached through a hop in
+    /// `unproven`.
+    pub cut_off: Vec<String>,
+    /// Targets where the candidate works but the old key was not seen refused.
+    pub old_not_refused: Vec<String>,
+}
+impl KeyRotationRun {
+    pub fn new(plan: &rotation::RotationPlan, run: &rotation::RotationRun) -> Self {
+        let outlook = run.finish_outlook(plan);
+        Self {
+            states: run
+                .states()
+                .map(|(id, s)| (id.to_owned(), s.into()))
+                .collect(),
+            verified: run.verified().iter().cloned().collect(),
+            cancelled: run.cancelled(),
+            settled: run.settled(),
+            unproven: outlook.unproven,
+            cut_off: outlook.cut_off,
+            old_not_refused: outlook.old_not_refused,
+        }
+    }
+}
+
+/// How a host uses a key or password item (see `ffi::KeyUseRole`).
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum KeyUseRole {
+    Login,
+    InlineHop,
+    ReferencedHop,
+    ProxyPassword,
+}
+impl From<ffi::KeyUseRole> for KeyUseRole {
+    fn from(r: ffi::KeyUseRole) -> Self {
+        match r {
+            ffi::KeyUseRole::Login => Self::Login,
+            ffi::KeyUseRole::InlineHop => Self::InlineHop,
+            ffi::KeyUseRole::ReferencedHop => Self::ReferencedHop,
+            ffi::KeyUseRole::ProxyPassword => Self::ProxyPassword,
+        }
+    }
+}
+
+/// A host using a key or password item, with every way it does.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostKeyUse {
+    pub vault_id: String,
+    pub profile_id: String,
+    pub label: String,
+    pub roles: Vec<KeyUseRole>,
+}
+
+/// An identity referencing a key or password item.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentityKeyUse {
+    pub identity_id: String,
+    pub label: String,
+}
+
+/// What in a vault uses one key or password item (ids and labels only).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyUsage {
+    pub unscanned_vaults: Vec<String>,
+    pub hosts: Vec<HostKeyUse>,
+    pub identities: Vec<IdentityKeyUse>,
+}
+impl From<ffi::KeyUsage> for KeyUsage {
+    fn from(u: ffi::KeyUsage) -> Self {
+        Self {
+            unscanned_vaults: u.unscanned_vaults,
+            hosts: u
+                .hosts
+                .into_iter()
+                .map(|h| HostKeyUse {
+                    vault_id: h.vault_id,
+                    profile_id: h.profile_id,
+                    label: h.label,
+                    roles: h.roles.into_iter().map(Into::into).collect(),
+                })
+                .collect(),
+            identities: u
+                .identities
+                .into_iter()
+                .map(|i| IdentityKeyUse {
+                    identity_id: i.identity_id,
+                    label: i.label,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Which group a saved host is in (a host is in one at most).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum HostGroup {
+    /// Leave an existing host's groups as they are; a new host is in none.
+    Unchanged,
+    /// In no group.
+    Ungrouped,
+    /// In this group of the host's vault, out of every other.
+    #[serde(rename_all = "camelCase")]
+    Existing { group_id: String },
+    /// In a new group with this label, created by the save.
+    New { label: String },
+}
+impl From<HostGroup> for ffi::HostGroup {
+    fn from(g: HostGroup) -> Self {
+        match g {
+            HostGroup::Unchanged => Self::Unchanged,
+            HostGroup::Ungrouped => Self::Ungrouped,
+            HostGroup::Existing { group_id } => Self::Existing { group_id },
+            HostGroup::New { label } => Self::New { label },
+        }
+    }
+}
+
+/// The personal identity to link to a personal host.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentityLink {
+    pub vault_id: String,
+    pub identity_id: String,
+}
+impl From<IdentityLink> for ffi::IdentityLink {
+    fn from(l: IdentityLink) -> Self {
+        Self {
+            vault_id: l.vault_id,
+            identity_id: l.identity_id,
+        }
+    }
+}
+
+/// What a host save could not finish after the host itself was stored.
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum HostSaveGap {
+    /// The identity is not linked to the host (or not re-pinned).
+    IdentityNotLinked { message: String },
+    /// The identity is still pinned to an older address (the host had been
+    /// pointed elsewhere before this save): its connect is refused as
+    /// redirected until it is linked again.
+    IdentityPinKept { pinned: String, message: String },
+}
+
+/// A saved host (`Core::save_host`).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostSaved {
+    pub profile_id: String,
+    pub uid: String,
+    pub password_item_id: Option<String>,
+    pub group_id: Option<String>,
+    pub identity_linked: bool,
+    /// The vault the identity binding was written to, when the save wrote one.
+    pub binding_vault_id: Option<String>,
+    pub unfinished: Vec<HostSaveGap>,
+}
+impl From<ffi::HostSaved> for HostSaved {
+    fn from(s: ffi::HostSaved) -> Self {
+        Self {
+            profile_id: s.profile_id,
+            uid: s.uid,
+            password_item_id: s.password_item_id,
+            group_id: s.group_id,
+            identity_linked: s.identity_linked,
+            binding_vault_id: s.binding_vault_id,
+            unfinished: s
+                .unfinished
+                .into_iter()
+                .map(|gap| match gap {
+                    ffi::HostSaveGap::IdentityNotLinked { message } => {
+                        HostSaveGap::IdentityNotLinked { message }
+                    }
+                    ffi::HostSaveGap::IdentityPinKept { pinned, message } => {
+                        HostSaveGap::IdentityPinKept { pinned, message }
+                    }
+                })
+                .collect(),
         }
     }
 }
@@ -1699,5 +2320,37 @@ impl From<ffi::SystemAgentKeyFfi> for SystemAgentKey {
             comment: k.comment,
             algorithm: k.algorithm,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{capped, CLAIM_CHARS};
+
+    /// A server-claimed name loses the controls and bidi/invisible characters
+    /// that could reorder or hide part of it, and a long one says it was cut.
+    #[test]
+    fn a_claimed_name_is_cleaned_and_marks_a_cut() {
+        assert_eq!(
+            capped("Al\u{202e}ice\u{200b}\u{1b}[2J\n").as_deref(),
+            Some("Alice[2J"),
+            "controls, bidi overrides and zero-width characters are dropped"
+        );
+        assert_eq!(
+            capped("\u{2066}\u{feff} "),
+            None,
+            "nothing visible is no name"
+        );
+        let fits = "a".repeat(CLAIM_CHARS);
+        assert_eq!(
+            capped(&fits),
+            Some(fits.clone()),
+            "a name that fits is kept whole"
+        );
+        assert_eq!(
+            capped(&format!("{fits}b")),
+            Some(format!("{fits}…")),
+            "a cut name is marked"
+        );
     }
 }

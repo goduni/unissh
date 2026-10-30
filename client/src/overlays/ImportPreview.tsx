@@ -22,7 +22,7 @@ import { useIsMobile, useNarrow } from "@/store/responsive";
 import { useDialogFocus, useDialogKeys } from "@/components/a11y";
 import { toast } from "@/store/toast";
 import { guard } from "@/store/action";
-import { apiErrorMessage, ItemType } from "@/bridge/types";
+import { apiErrorMessage, isApiError, ItemType } from "@/bridge/types";
 import { defaultImportGroup } from "./importTarget";
 import { filterConfigToSelected } from "./configFilter";
 import {
@@ -383,7 +383,7 @@ function ImportPreviewBody() {
               try {
                 const base = (keyPath.split(/[/\\]/).pop() || "key").replace(/\.[^.]+$/, "");
                 const candidate = uniqueItemId(base, used);
-                const pub = await api.importSshKey(vaultId, candidate, keyText.trim());
+                const pub = await api.createImportedSshKey(vaultId, candidate, keyText.trim());
                 const np = normPub(pub);
                 const existing = idByPub.get(np);
                 if (existing && existing !== candidate) {
@@ -399,16 +399,18 @@ function ImportPreviewBody() {
                 pathToItem.set(keyPath, keyItemId);
               } catch (e) {
                 const raw = apiErrorMessage(e);
-                skips.push({ host: h.host, reason: classifySkip(raw), raw });
+                const encrypted =
+                  isApiError(e) && (e.kind === "passphraseRequired" || e.kind === "wrongPassphrase");
+                skips.push({ host: h.host, reason: encrypted ? "encrypted" : classifySkip(raw), raw });
                 continue;
               }
             }
 
             try {
               const prof = await api.getConnection(vaultId, h.host);
-              await api.saveConnection(vaultId, { ...prof, auth: { type: "key", keyItemId } });
-            } catch {
-              /* leave the host with its default (password-prompt) auth */
+              await api.saveHost(vaultId, { ...prof, auth: { type: "key", keyItemId } }, null, { type: "unchanged" }, null);
+            } catch (e) {
+              skips.push({ host: h.host, reason: classifySkip(apiErrorMessage(e)), raw: apiErrorMessage(e) });
             }
           }
         }
@@ -432,14 +434,22 @@ function ImportPreviewBody() {
         let groupLabel: string | null = null;
         let madeGroups = 0;
         try {
-          const stamp = Date.now();
+          // A new group is planned under a placeholder key and saved with an
+          // empty id, so the core mints its id under the lock of that write.
+          // (Ids minted up front could collide: two labels with the same slug —
+          // two non-Latin names, say — in the same millisecond get one id.)
+          // Nothing else in the plan names a new group: its parent is the
+          // target, which already exists.
+          const NEW = "\u0000new-group-";
           const writes = planIncludeGroupWrites(
             useApp.getState().groups,
             placement,
             target,
-            (_label, i) => `group-${stamp}-${i}`,
+            (_label, i) => `${NEW}${i}`,
           );
-          for (const g of writes) await api.saveGroup(vaultId, g);
+          for (const g of writes) {
+            await api.saveGroup(vaultId, g.groupId.startsWith(NEW) ? { ...g, groupId: "" } : g);
+          }
           // Only the ones this import actually created: a run that put its
           // hosts into groups that were already there created nothing, and
           // saying otherwise would send the user looking for them.

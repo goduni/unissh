@@ -24,6 +24,8 @@ fn vault(dir: &Path) -> std::sync::Arc<Core> {
         dir.join("keyset.bin").to_str().unwrap().to_owned(),
     );
     core.create_account(Some("pw".to_owned())).unwrap();
+    core.set_account_default_username("root".to_owned())
+        .unwrap();
     core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     core
 }

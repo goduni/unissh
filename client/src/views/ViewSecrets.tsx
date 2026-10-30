@@ -7,6 +7,7 @@ import { writeSecretToClipboard } from "@/bridge/clipboard";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { useTranslation } from "@/i18n";
+import type { TFunction } from "i18next";
 import { usePalette } from "@/theme/ThemeProvider";
 import { MONO, rem, TEXT, UI } from "@/theme/tokens";
 import { Btn, Icon, NO_AUTOCORRECT, Spinner, Tag, Toggle, VaultBadge } from "@/components/primitives";
@@ -16,15 +17,23 @@ import { useApp } from "@/store/app";
 import { useCtx } from "@/store/ctx";
 import { useNarrow } from "@/store/responsive";
 import * as api from "@/bridge/api";
-import { apiErrorMessage, ItemType } from "@/bridge/types";
+import { apiErrorMessage, isApiError, ItemType } from "@/bridge/types";
 import { logWarn } from "@/bridge/log";
-import type { ConnectionProfile, ItemInfo, Identity, KeyRotationLink, ServerStatus, VaultInfo } from "@/bridge/types";
+import type {
+  ItemInfo,
+  Identity,
+  KeyRotationLink,
+  KeyUsage,
+  KeyUseRole,
+  ServerStatus,
+  VaultInfo,
+} from "@/bridge/types";
 import { isOwnedCloud, serverShortLabel, vaultLoc, vaultServer } from "@/bridge/vaults";
 import { exportPath } from "@/support/paths";
 import { isDesktopOs } from "@/bridge/platform";
 import { systemAgentSetShared, systemAgentSharedKeys, systemAgentStatus } from "@/bridge/systemAgent";
 import { guard } from "@/store/action";
-import { isKeyOld, keyUsage, keyUsageCount } from "@/support/keyHygiene";
+import { isKeyOld, keyUsageCount } from "@/support/keyHygiene";
 import { keyRowRotationActions, type KeyRowRotationAction } from "@/support/keyRotation";
 import { useFmt } from "@/i18n/format";
 
@@ -227,7 +236,9 @@ function KeyRow({
   agentShared,
   onAgentShared,
   rotation,
+  usage,
 }: {
+  usage: KeyUsage | null;
   item: ItemInfo;
   isMobile: boolean;
   first?: boolean;
@@ -240,11 +251,10 @@ function KeyRow({
   const { t, i18n } = useTranslation();
   const ctx = useCtx();
   const { fmtDate } = useFmt();
-  const hosts = useApp((s) => s.hosts);
   const keyAgeDays = useApp((s) => s.keyAgeDays);
   const vault = useApp((s) => s.vaultId);
-  const usage = keyUsage(hosts, vault ?? "", item.itemId);
-  const uses = keyUsageCount(usage);
+  const uses = usage ? keyUsageCount(usage) : null;
+  const usedHosts = (pick: (roles: KeyUseRole[]) => boolean) => usage?.hosts.filter((u) => pick(u.roles)) ?? [];
   const old = isKeyOld(item.createdAt, keyAgeDays, Date.now());
   const [open, setOpen] = useState(false);
   const detailsId = `key-details-${item.itemId}`;
@@ -348,11 +358,13 @@ function KeyRow({
   // Rotate in place: new keypair under the same item id, so every host
   // referencing it follows automatically — but the old private key is replaced
   // at once, so hosts lacking the new public key refuse logins until updated.
-  const onRotate = () => {
+  const onRotate = async () => {
     if (!vault) return;
+    const now = await usageNow(vault, item.itemId);
+    const uses = now ? t("secrets.replaceUses", { hosts: now.hosts.map((h) => h.label).concat(now.identities.map((i) => i.label)).join(", ") }) : "";
     ctx.confirm({
       title: t("secrets.rotateKeyTitle"),
-      body: t("secrets.rotateKeyBody", { item: item.itemId }),
+      body: [t("secrets.rotateKeyBody", { item: item.itemId }), uses, now?.unscannedVaults?.length ? t("secrets.usageIncomplete", { vaults: now.unscannedVaults.join(", ") }) : ""].filter(Boolean).join("\n\n"),
       danger: true,
       confirmLabel: t("secrets.rotateKeyConfirm"),
       icon: "refresh",
@@ -380,13 +392,14 @@ function KeyRow({
     abandon: { label: t("secrets.abandonRotation"), icon: "x", onClick: onAbandonRotation },
   };
 
-  const onDelete = () => {
+  const onDelete = async () => {
     if (!vault) return;
-    // Warn if the key still backs any host login (direct auth or a jump hop), so
-    // deleting it doesn't silently break those connections.
+    // Warn if the key still backs any login (a host's own, a jump hop, an
+    // identity), so deleting it doesn't silently break those connections.
+    const now = await usageNow(vault, item.itemId);
     ctx.confirm({
       title: t("secrets.deleteKeyTitle"),
-      body: uses > 0 ? t("secrets.deleteKeyInUse", { item: item.itemId, count: uses }) : item.itemId,
+      body: now ? t("secrets.deleteKeyInUse", { item: item.itemId, uses: usedBy(t, now) }) : item.itemId,
       danger: true,
       confirmLabel: t("common.delete"),
       icon: "trash",
@@ -460,9 +473,11 @@ function KeyRow({
         >
           {fp ?? "…"}
         </span>
-        <MetaChip icon="link" tone={uses === 0 ? "warn" : "neutral"}>
-          {uses === 0 ? t("secrets.unused") : t("secrets.usedByHosts", { count: uses })}
-        </MetaChip>
+        {usage && (
+          <MetaChip icon="link" tone={uses === 0 ? "warn" : "neutral"}>
+            {uses === 0 ? t("secrets.unused") : usedBy(t, usage)}
+          </MetaChip>
+        )}
         {old && (
           <span title={t("secrets.keyOldTitle", { days: keyAgeDays })}>
             <MetaChip icon="clock">{t("secrets.keyOld")}</MetaChip>
@@ -591,12 +606,17 @@ function KeyRow({
           </div>
           {uses === 0 ? (
             <div>{t("secrets.keyNoHosts")}</div>
-          ) : (
+          ) : usage ? (
             <>
-              <KeyHostList label={t("secrets.keyUsedDirect")} hosts={usage.direct} />
-              <KeyHostList label={t("secrets.keyUsedJump")} hosts={usage.jump} />
+              <KeyHostList label={t("secrets.keyUsedDirect")} hosts={usedHosts((r) => r.includes("login"))} />
+              <KeyHostList
+                label={t("secrets.keyUsedJump")}
+                hosts={usedHosts((r) => r.includes("inlineHop") || r.includes("referencedHop"))}
+              />
+              <KeyIdentityList label={t("secrets.keyUsedIdentity")} identities={usage.identities} />
+              {(usage.unscannedVaults?.length ?? 0) > 0 && <p style={{ color: p.amber, fontSize: TEXT.small }}>{t("secrets.usageIncomplete", { vaults: usage.unscannedVaults?.join(", ") ?? "" })}</p>}
             </>
-          )}
+          ) : null}
         </div>
       )}
     </>
@@ -605,10 +625,12 @@ function KeyRow({
 
 /** One "where used" list in a key's details: each host is a button that opens
  *  its profile. Renders nothing when empty, so a key that only hops shows one. */
-function KeyHostList({ label, hosts }: { label: string; hosts: ConnectionProfile[] }) {
+function KeyHostList({ label, hosts }: { label: string; hosts: KeyUsage["hosts"] }) {
   const p = usePalette();
   const { t } = useTranslation();
   const ctx = useCtx();
+  const localHosts = useApp((state) => state.hosts);
+  const vault = useApp((state) => state.vaultId);
   if (hosts.length === 0) return null;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: rem(4) }}>
@@ -616,10 +638,13 @@ function KeyHostList({ label, hosts }: { label: string; hosts: ConnectionProfile
         {label}
       </div>
       <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexWrap: "wrap", gap: rem(6) }}>
-        {hosts.map((h) => (
-          <li key={h.profileId}>
+        {hosts.map((h) => {
+          const edit = (!h.vaultId || h.vaultId === vault) ? localHosts.find((host) => host.profileId === h.profileId) : undefined;
+          return (
+          <li key={`${h.vaultId ?? vault}/${h.profileId}`}>
             <button
-              onClick={() => ctx.openModal({ kind: "host", edit: h })}
+              disabled={!edit}
+              onClick={() => { if (edit) ctx.openModal({ kind: "host", edit }); }}
               aria-label={t("secrets.keyOpenHost", { host: h.label })}
               style={{
                 display: "inline-flex",
@@ -630,7 +655,7 @@ function KeyHostList({ label, hosts }: { label: string; hosts: ConnectionProfile
                 border: `1px solid ${p.line}`,
                 background: p.bg2,
                 color: p.txt,
-                cursor: "pointer",
+                cursor: edit ? "pointer" : "default",
                 fontSize: TEXT.small,
               }}
             >
@@ -638,10 +663,69 @@ function KeyHostList({ label, hosts }: { label: string; hosts: ConnectionProfile
               {h.label}
             </button>
           </li>
+        ); })}
+      </ul>
+    </div>
+  );
+}
+
+/** The identities in a key's details that reference it. Plain labels (they
+ *  live under the Identities tab); renders nothing when empty. */
+function KeyIdentityList({ label, identities }: { label: string; identities: KeyUsage["identities"] }) {
+  const p = usePalette();
+  if (identities.length === 0) return null;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: rem(4) }}>
+      <div style={{ fontSize: TEXT.micro, fontWeight: 700, color: p.txt3, textTransform: "uppercase" }}>
+        {label}
+      </div>
+      <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexWrap: "wrap", gap: rem(6) }}>
+        {identities.map((i) => (
+          <li
+            key={i.identityId}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: rem(6),
+              padding: `${rem(4)} ${rem(10)}`,
+              borderRadius: 8,
+              border: `1px solid ${p.line}`,
+              color: p.txt,
+              fontSize: TEXT.small,
+            }}
+          >
+            <Icon name="fingerprint" size={12} color={p.txt3} />
+            {i.label || i.identityId}
+          </li>
         ))}
       </ul>
     </div>
   );
+}
+
+/** "2 hosts, 1 identity": what uses a key or password, hosts and identities
+ *  apart (each pluralised); empty for an unused one. */
+function usedBy(t: TFunction, u: KeyUsage): string {
+  return [
+    (u.unscannedVaults?.length ?? 0) > 0 && t("secrets.usageIncomplete", { vaults: u.unscannedVaults?.join(", ") ?? "" }),
+    u.hosts.length > 0 && t("secrets.usedByHosts", { count: u.hosts.length }),
+    u.identities.length > 0 && t("secrets.usedByIdentities", { count: u.identities.length }),
+  ]
+    .filter(Boolean)
+    .join(", ");
+}
+
+/** A fresh usage right before a delete; null (the plain confirm) when nothing
+ *  uses the item or the core cannot answer, so a failed lookup never blocks
+ *  the delete. */
+async function usageNow(vaultId: string, itemId: string): Promise<KeyUsage | null> {
+  try {
+    const u = await api.keyUsage(vaultId, itemId);
+    return keyUsageCount(u) > 0 || (u.unscannedVaults?.length ?? 0) > 0 ? u : null;
+  } catch (e) {
+    logWarn(`key usage lookup before delete failed: ${apiErrorMessage(e)}`);
+    return null;
+  }
 }
 
 function KeysTab({ keys, isMobile }: { keys: ItemInfo[]; isMobile: boolean }) {
@@ -650,6 +734,18 @@ function KeysTab({ keys, isMobile }: { keys: ItemInfo[]; isMobile: boolean }) {
   const ctx = useCtx();
   const vault = useApp((s) => s.vaultId);
   const [links, setLinks] = useState<KeyRotationLink[]>([]);
+  const hosts = useApp((s) => s.hosts);
+  const items = useApp((s) => s.items);
+  const [usages, setUsages] = useState<Record<string, KeyUsage> | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setUsages(null);
+    if (vault) api.keyUsages(vault).then(
+      (value) => { if (alive) setUsages(value); },
+      (error) => logWarn(`key usage lookup failed: ${apiErrorMessage(error)}`),
+    );
+    return () => { alive = false; };
+  }, [vault, hosts, items]);
 
   // Staged rotations (device-local links + synced candidates); re-read whenever the
   // key set changes (begin/finish/abandon all reload the vault). Keyed on a
@@ -737,6 +833,7 @@ function KeysTab({ keys, isMobile }: { keys: ItemInfo[]; isMobile: boolean }) {
           <KeyRow
             key={k.itemId}
             item={k}
+            usage={usages?.[k.itemId] ?? null}
             isMobile={isMobile}
             first={i === 0}
             rotation={rotationOf(k.itemId)}
@@ -1028,11 +1125,13 @@ function PasswordCard({ item }: { item: ItemInfo }) {
     }
   };
 
-  const onDelete = () => {
+  const onDelete = async () => {
     if (!vault) return;
+    // Same warning as a key's: hosts (own login, hop, proxy) and identities.
+    const now = await usageNow(vault, item.itemId);
     ctx.confirm({
       title: t("secrets.deletePasswordTitle"),
-      body: item.itemId,
+      body: now ? t("secrets.deletePasswordInUse", { item: item.itemId, uses: usedBy(t, now) }) : item.itemId,
       danger: true,
       confirmLabel: t("common.delete"),
       icon: "trash",
@@ -1695,7 +1794,8 @@ function NewIdentityCard({
   const save = async () => {
     if (!vault || !name.trim() || !user.trim()) return;
     try {
-      await api.saveIdentity(vault, {
+      // Create-only: a name already taken is refused, never replaced.
+      await api.createIdentity(vault, {
         identityId: name.trim(),
         label: name.trim(),
         user: user.trim(),
@@ -1708,7 +1808,8 @@ function NewIdentityCard({
       setUser("");
       setCred("none");
     } catch (e) {
-      ctx.toast(apiErrorMessage(e), "err");
+      if (isApiError(e) && e.kind === "alreadyExists") ctx.toast(t("secrets.identityNameTaken"), "warn");
+      else ctx.toast(apiErrorMessage(e), "err");
     }
   };
 

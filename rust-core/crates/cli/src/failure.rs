@@ -102,11 +102,15 @@ impl From<FfiError> for Failure {
             | FfiError::ReadOnlyVault
             | FfiError::NoServer
             | FfiError::PayloadTooLarge { .. }
+            | FfiError::UploadForbidden { .. }
             | FfiError::RotationInProgress { .. }
             | FfiError::RotationPartlyFinished { .. }
             | FfiError::PublickeyOnlyNeedsKey
             | FfiError::KeyRefused
             | FfiError::KeyAcceptedMoreAuthRequired
+            | FfiError::PassphraseRequired
+            | FfiError::WrongPassphrase
+            | FfiError::InvalidHost { .. }
             | FfiError::Ssh { .. }
             | FfiError::Other { .. } => e.to_string(),
         };

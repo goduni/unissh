@@ -10,7 +10,9 @@
 //! - [`identity`] — accounts, devices, sessions, spaces, escrow and the pairing relay;
 //! - [`transport`] — the [`unissh_ffi::FfiSyncTransport`] the core's sync engine drives;
 //! - [`onboard`] — device-to-device pairing (the PAKE over the relay);
-//! - [`recovery`] — installing a recovered keyset.
+//! - [`recovery`] — installing a recovered keyset;
+//! - [`shared`] — vaults teammates shared with this account, waiting for the
+//!   user to trust their owner.
 //!
 //! Server access is optional and additive: local mode works without any of it.
 //! The server is untrusted for confidentiality — every blob it relays is built,
@@ -25,6 +27,7 @@ mod error;
 pub mod identity;
 pub mod onboard;
 pub mod recovery;
+pub mod shared;
 pub mod transport;
 
 #[cfg(test)]

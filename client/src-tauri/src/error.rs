@@ -13,8 +13,16 @@ pub enum ApiError {
     InvalidCredentials,
     /// Object not found.
     NotFound,
-    /// Instance / vault / item id collision.
+    /// Instance / vault / item id collision (incl. a create-only write over a
+    /// live item).
     AlreadyExists,
+    /// The private key is encrypted and no passphrase was given: ask, retry.
+    PassphraseRequired,
+    /// The passphrase given for an encrypted private key is wrong.
+    WrongPassphrase,
+    /// A host save broke one of the host rules; `rule` is its camelCase code
+    /// (`HostRule::code`), `msg` the core's words for it. Nothing was saved.
+    InvalidHost { rule: String, msg: String },
     /// The vault is already a cloud vault (a local-only operation was asked of it).
     AlreadyCloud,
     /// This account can only view the vault (Viewer): the write was refused.
@@ -68,6 +76,12 @@ impl From<FfiError> for ApiError {
             FfiError::InvalidCredentials => Self::InvalidCredentials,
             FfiError::NotFound => Self::NotFound,
             FfiError::AlreadyExists => Self::AlreadyExists,
+            FfiError::PassphraseRequired => Self::PassphraseRequired,
+            FfiError::WrongPassphrase => Self::WrongPassphrase,
+            FfiError::InvalidHost { rule } => Self::InvalidHost {
+                rule: rule.code().to_owned(),
+                msg: rule.to_string(),
+            },
             FfiError::AlreadyCloud => Self::AlreadyCloud,
             FfiError::ReadOnlyVault => Self::ReadOnlyVault,
             FfiError::NoServer => Self::NoServer,
@@ -84,6 +98,12 @@ impl From<FfiError> for ApiError {
             // without; an item that is too large comes back in the sync report.
             FfiError::PayloadTooLarge { msg } => Self::Server {
                 code: "payload_too_large".into(),
+                message: msg,
+            },
+            // Likewise only for an object a push cannot continue without; an
+            // item the server does not permit comes back in the sync report.
+            FfiError::UploadForbidden { msg } => Self::Server {
+                code: "forbidden".into(),
                 message: msg,
             },
             FfiError::RotationInProgress { candidate_id } => {

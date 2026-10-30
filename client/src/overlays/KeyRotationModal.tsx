@@ -1,9 +1,10 @@
 // Guided key rotation: show the plan, then on each machine deploy the candidate
 // key, verify a login with it, remove the old key only where that login passed,
 // and confirm that the old key is then refused; finish (commit the candidate
-// into the key item) when satisfied. The plan and the per-machine state machine
-// and what each step runs and means are the pure `support/keyRotation`; this
-// view supplies the SSH exec, words the failures and feeds the results back.
+// into the key item) when satisfied. The plan, the per-machine state machine
+// and the steps themselves are the core's (`api.keyRotation*`, shared with the
+// CLI); this view shows them, words the failures and offers stop, retry and
+// finish.
 //
 // Nothing about a run outlives the dialog — no progress is stored. Reopening it
 // for a rotation in progress starts every machine over; the steps are
@@ -19,32 +20,19 @@ import { useApp } from "@/store/app";
 import { useCtx } from "@/store/ctx";
 import { useIsMobile } from "@/store/responsive";
 import * as api from "@/bridge/api";
-import { apiErrorMessage, type MultiExecResult, type MultiExecTarget } from "@/bridge/types";
-import { EXEC_CONCURRENCY, EXEC_TIMEOUT_SECS } from "@/support/execLimits";
-import { confirmFinishRotation } from "./finishRotation";
 import {
-  beginStep,
-  cancelRun,
-  finishOutlook,
-  hasSharedEndpoint,
-  planRotation,
-  recordStep,
-  retryTarget,
-  ROTATION_STEPS,
-  rotationCommitted,
-  runSettled,
-  runStep,
-  startableSteps,
-  startRun,
-  stepConnect,
-  type RotationRun,
+  apiErrorMessage,
+  type KeyRotationPlan,
+  type KeyRotationRun,
   type RotationSkipReason,
   type RotationStep,
+  type RotationStepFailure,
   type RotationTarget,
-  type StepFailure,
-  type StepResult,
-  type TargetState,
-} from "@/support/keyRotation";
+  type RotationTargetState,
+} from "@/bridge/types";
+import { EXEC_CONCURRENCY, EXEC_TIMEOUT_SECS } from "@/support/execLimits";
+import { ROTATION_STEPS } from "@/support/keyRotation";
+import { confirmFinishRotation } from "./finishRotation";
 
 const STEP_KEY = {
   deploy: "keyRotation.stepDeploy",
@@ -61,7 +49,7 @@ const SKIP_KEY: Record<RotationSkipReason, "keyRotation.skipPersonal" | "keyRota
 type StepView = "waiting" | "running" | "done" | "failed";
 
 /** How one step of a target reads, from the target's state. */
-function stepView(s: TargetState, step: RotationStep): StepView {
+function stepView(s: RotationTargetState, step: RotationStep): StepView {
   const i = ROTATION_STEPS.indexOf(step);
   if (s.kind === "switched") return "done";
   if (s.kind === "unconfirmed") return step === "confirm" ? "waiting" : "done";
@@ -71,9 +59,6 @@ function stepView(s: TargetState, step: RotationStep): StepView {
   if (i > at) return "waiting";
   return s.kind === "running" ? "running" : s.kind === "failed" ? "failed" : "waiting";
 }
-
-const targetLabel = (tg: RotationTarget) =>
-  tg.profile ? tg.profile.label : `${tg.user}@${tg.host}${tg.port !== 22 ? `:${tg.port}` : ""}`;
 
 export function KeyRotationModal({
   keyItemId,
@@ -92,16 +77,13 @@ export function KeyRotationModal({
   const ctx = useCtx();
   const isMobile = useIsMobile();
   const liveVault = useApp((s) => s.vaultId) ?? "";
-  const hosts = useApp((s) => s.hosts);
-  // Frozen at open: the run works off this snapshot even if hosts sync or the
-  // active vault changes meanwhile — the key, its candidate and the plan all
-  // belong to the vault the dialog was opened for.
+  // Frozen at open: the run works off the core's plan of this moment even if
+  // hosts sync or the active vault changes meanwhile — the key, its candidate
+  // and the plan all belong to the vault the dialog was opened for.
   const [vault] = useState(liveVault);
-  const [plan] = useState(() => planRotation(hosts, vault, keyItemId));
+  const [plan, setPlan] = useState<KeyRotationPlan | null>(null);
   const [candidateId, setCandidateId] = useState<string | null>(resumeCandidate ?? null);
-  const [run, setRun] = useState<RotationRun | null>(null);
-  const runRef = useRef<RotationRun | null>(null);
-  const keysRef = useRef<{ old: string; cand: string } | null>(null);
+  const [run, setRun] = useState<KeyRotationRun | null>(null);
   const [starting, setStarting] = useState(false);
   const [driving, setDriving] = useState(false);
   // A rotation being continued may be one whose finish was interrupted after
@@ -109,40 +91,42 @@ export function KeyRotationModal({
   // `rotationPartlyFinished`). Then both items hold the same key and there is
   // nothing to run — only that finish to complete. null while it is looked up.
   const [committed, setCommitted] = useState<boolean | null>(resumeCandidate ? null : false);
+  const closed = useRef(false);
+
   useEffect(() => {
-    if (!resumeCandidate) return;
     let alive = true;
-    Promise.all([api.getPublicKey(vault, keyItemId), api.getPublicKey(vault, resumeCandidate)])
-      .then(([o, c]) => {
-        if (alive) setCommitted(rotationCommitted(o.openssh, c.openssh));
+    let handle: string | null = null;
+    api
+      .keyRotationPlan(vault, keyItemId)
+      .then(async (pl) => {
+        if (!alive) {
+          api.keyRotationClose(pl.handle).catch(() => undefined);
+          return;
+        }
+        handle = pl.handle;
+        setPlan(pl);
+        if (!resumeCandidate) return;
+        // Not known: `start` asks again and reports the error.
+        const done = await api.keyRotationCommitted(vault, keyItemId).catch(() => false);
+        if (alive) setCommitted(done);
       })
-      // Not known: `start` reads the keys again and reports the error.
-      .catch(() => {
-        if (alive) setCommitted(false);
+      .catch((e) => {
+        if (!alive) return;
+        ctx.toast(apiErrorMessage(e), "err");
+        onClose();
       });
     return () => {
       alive = false;
+      closed.current = true;
+      // The run, if any, settled before the dialog could close (see onClose).
+      if (handle) api.keyRotationClose(handle).catch(() => undefined);
     };
-  }, [vault, keyItemId, resumeCandidate]);
-
-  const apply = (f: (r: RotationRun) => RotationRun) => {
-    if (!runRef.current) return;
-    runRef.current = f(runRef.current);
-    setRun(runRef.current);
-  };
-
-  /** One command on one target. A call that throws (the vault locked mid-run)
-   *  reads as that target's connection error. */
-  const exec = async (args: MultiExecTarget, cmd: string): Promise<MultiExecResult | null> => {
-    try {
-      return (await api.sshExecMulti([args], cmd, 0, EXEC_TIMEOUT_SECS))[0] ?? null;
-    } catch (e) {
-      return { host: args.host, stdout: "", stderr: "", exitStatus: -1, error: apiErrorMessage(e), durationMs: 0, timedOut: false };
-    }
-  };
+    // Opened once per dialog: the plan is frozen at open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /** A step's failure in words. */
-  const failureText = (f: StepFailure): string => {
+  const failureText = (f: RotationStepFailure): string => {
     switch (f.kind) {
       case "noResult":
         return t("error.generic");
@@ -150,6 +134,8 @@ export function KeyRotationModal({
         return t("keyRotation.timedOut");
       case "error":
         return f.message;
+      case "locked":
+        return t("error.locked");
       case "oldKeyStillPresent":
         return t("keyRotation.oldKeyStillPresent");
       case "noAuthorizedKeys":
@@ -163,49 +149,27 @@ export function KeyRotationModal({
     }
   };
 
-  const execStep = async (cid: string, id: string, step: RotationStep): Promise<StepResult> => {
-    const r = runRef.current;
-    const keys = keysRef.current;
-    if (!r || !keys) return { ok: false, error: t("error.generic") };
-    const out = await runStep(step, keys, {
-      exec: (as, cmd) => exec(stepConnect(plan, r, id, as, cid), cmd),
-      resumed: Boolean(resumeCandidate),
-    });
-    return out.ok ? out : { ok: false, error: failureText(out.failure) };
+  const show = (r: KeyRotationRun) => {
+    if (!closed.current) setRun(r);
   };
 
-  // Round after round of whatever may start now, a bounded pool per round, until
-  // the run settles. Stop cuts the queue; in-flight steps land through recordStep.
-  // A step that throws lands as that step's failure, and whatever else goes
-  // wrong the dialog is never left "driving": it could not be closed again.
-  const drive = async (cid: string) => {
+  // The core runs round after round of whatever may start now, a bounded pool
+  // per round, until the run settles; Stop cuts its queue and in-flight steps
+  // still land. Whatever goes wrong the dialog is never left "driving": it
+  // could not be closed again.
+  const drive = async (handle: string) => {
     setDriving(true);
     try {
-      for (let steps = startableSteps(runRef.current!); steps.length > 0; steps = startableSteps(runRef.current!)) {
-        const queue = [...steps];
-        const worker = async () => {
-          for (let next = queue.shift(); next; next = queue.shift()) {
-            const { id, step } = next;
-            apply((r) => beginStep(r, id));
-            const s = runRef.current!.states[id];
-            if (s.kind !== "running" || s.step !== step) continue;
-            let res: StepResult;
-            try {
-              res = await execStep(cid, id, step);
-            } catch (e) {
-              res = { ok: false, error: apiErrorMessage(e) };
-            }
-            apply((r) => recordStep(r, id, step, res));
-          }
-        };
-        await Promise.all(Array.from({ length: Math.min(EXEC_CONCURRENCY, queue.length) }, worker));
-      }
+      show(await api.keyRotationDrive(handle, EXEC_CONCURRENCY, EXEC_TIMEOUT_SECS, show));
+    } catch (e) {
+      ctx.toast(apiErrorMessage(e), "err");
     } finally {
       setDriving(false);
     }
   };
 
   const start = async () => {
+    if (!plan) return;
     setStarting(true);
     try {
       let cid = candidateId;
@@ -214,48 +178,61 @@ export function KeyRotationModal({
         setCandidateId(cid);
         await useApp.getState().reloadVault();
       }
-      const [o, c] = await Promise.all([api.getPublicKey(vault, keyItemId), api.getPublicKey(vault, cid)]);
-      if (rotationCommitted(o.openssh, c.openssh)) {
+      const ready = await api.keyRotationStart(plan.handle, cid, Boolean(resumeCandidate));
+      if (ready === null) {
         // Nothing to run with one key on both sides; offer the finish instead.
         setCommitted(true);
         setStarting(false);
         return;
       }
-      keysRef.current = { old: o.openssh, cand: c.openssh };
-      runRef.current = startRun(plan);
-      setRun(runRef.current);
+      setRun(ready);
       setStarting(false);
-      await drive(cid);
+      await drive(plan.handle);
     } catch (e) {
       setStarting(false);
       ctx.toast(apiErrorMessage(e), "err");
     }
   };
 
-  const retry = (id: string) => {
-    if (!candidateId || driving) return;
-    apply((r) => retryTarget(r, id));
-    drive(candidateId).catch((e) => ctx.toast(apiErrorMessage(e), "err"));
+  const stop = () => {
+    if (!plan) return;
+    api.keyRotationStop(plan.handle).then(show, (e) => ctx.toast(apiErrorMessage(e), "err"));
+  };
+
+  const retry = async (id: string) => {
+    if (!plan || !candidateId || driving) return;
+    try {
+      setRun(await api.keyRotationRetry(plan.handle, id));
+      await drive(plan.handle);
+    } catch (e) {
+      ctx.toast(apiErrorMessage(e), "err");
+    }
   };
 
   const busy = starting || driving;
-  const settled = run !== null && runSettled(run);
+  const settled = run !== null && run.settled;
+  const targetOf = (id: string) => plan?.targets.find((x) => x.id === id);
+  const targetsOf = (ids: string[]) => ids.flatMap((id) => targetOf(id) ?? []);
   // Machines the new key has not been proven on: after finish they refuse the
   // key until they get it. Separately, machines where it was proven but the old
   // key was not seen refused: they keep working and may still accept the old key.
-  const { unproven: notSwitched, oldNotRefused: stillOld } = run
-    ? finishOutlook(plan, run)
-    : { unproven: [], oldNotRefused: [] };
+  const notSwitched = run ? targetsOf(run.unproven) : [];
+  // Proven, but behind a hop in `notSwitched`: cut off with it after finish.
+  const cutOff = run ? targetsOf(run.cutOff) : [];
+  // Machines whose host key is not pinned yet: the core refuses to start, and
+  // a connect to the host (for a hop: the host it is a hop of) pins them.
+  const unpinned = plan ? [...new Set(targetsOf(plan.unpinned).map((tg) => tg.viaLabel ?? tg.label))] : [];
+  const stillOld = run ? targetsOf(run.oldNotRefused) : [];
   // Hosts that reach the key only through target `id` as a hop: they follow it.
   const dependentsOf = (id: string) =>
-    plan.dependents.filter((d) => d.targetIds.includes(id)).map((d) => d.host.label);
+    (plan?.dependents ?? []).filter((d) => d.targetIds.includes(id)).map((d) => d.label);
   const finish = () => {
     if (!candidateId) return;
     confirmFinishRotation(ctx, {
       vault,
       keyId: keyItemId,
       candidateId,
-      lockedOut: [...new Set(notSwitched.flatMap((tg) => [targetLabel(tg), ...dependentsOf(tg.id)]))],
+      lockedOut: [...new Set([...notSwitched, ...cutOff].flatMap((tg) => [tg.label, ...dependentsOf(tg.id)]))],
       // Only ever true without a run, so `lockedOut` is empty with it: the key
       // item already holds the candidate and finishing changes no key.
       committed: committed === true,
@@ -265,13 +242,10 @@ export function KeyRotationModal({
   const outcome = (tg: RotationTarget) => {
     const s = run?.states[tg.id];
     return s?.kind === "failed"
-      ? t("keyRotation.failedAt", { step: t(STEP_KEY[s.step]), error: s.error })
+      ? t("keyRotation.failedAt", { step: t(STEP_KEY[s.step]), error: failureText(s.failure) })
       : t(s?.kind === "unconfirmed" ? "keyRotation.unconfirmed" : "keyRotation.keptOld");
   };
-  const labelOf = (id: string) => {
-    const tg = plan.targets.find((x) => x.id === id);
-    return tg ? targetLabel(tg) : id;
-  };
+  const labelOf = (id: string) => targetOf(id)?.label ?? id;
   const mobileBtn = isMobile ? { minHeight: rem(44), flex: 1 } : undefined;
   const sectionLabel = {
     fontSize: TEXT.micro,
@@ -309,14 +283,19 @@ export function KeyRotationModal({
                   {t("keyRotation.finish")}
                 </Btn>
               ) : (
-                <Btn icon="refresh" onClick={start} disabled={starting || committed === null} style={mobileBtn}>
+                <Btn
+                  icon="refresh"
+                  onClick={start}
+                  disabled={starting || committed === null || plan === null}
+                  style={mobileBtn}
+                >
                   {t(resumeCandidate ? "keyRotation.continue" : "keyRotation.start")}
                 </Btn>
               )}
             </>
           )}
           {run && driving && !run.cancelled && (
-            <Btn variant="ghost" icon="stop" onClick={() => apply(cancelRun)} style={mobileBtn}>
+            <Btn variant="ghost" icon="stop" onClick={stop} style={mobileBtn}>
               {t("keyRotation.stop")}
             </Btn>
           )}
@@ -349,14 +328,23 @@ export function KeyRotationModal({
             </p>
           )}
 
+          {unpinned.length > 0 && (
+            <p role="note" style={{ ...note, color: p.amber, display: "flex", gap: rem(6) }}>
+              <Icon name="alert" size={14} color={p.amber} style={{ marginTop: rem(2), flexShrink: 0 }} />
+              {t("keyRotation.unpinnedNote", { hosts: unpinned.join(", ") })}
+            </p>
+          )}
+
           <div style={sectionLabel}>{t("keyRotation.targetsLabel")}</div>
-          {hasSharedEndpoint(plan) && <p style={note}>{t("keyRotation.sharedEndpointNote")}</p>}
-          {plan.targets.length === 0 ? (
+          {plan?.sharedEndpoint && <p style={note}>{t("keyRotation.sharedEndpointNote")}</p>}
+          {plan === null ? (
+            <Spinner size={14} />
+          ) : plan.targets.length === 0 ? (
             <p style={note}>{t("keyRotation.noTargets")}</p>
           ) : (
             <ul aria-live="polite" style={{ listStyle: "none", margin: 0, padding: 0 }}>
               {plan.targets.map((tg, i) => {
-                const s: TargetState = run?.states[tg.id] ?? { kind: "pending", step: "deploy" };
+                const s: RotationTargetState = run?.states[tg.id] ?? (run ? { kind: "keptOld", after: null } : { kind: "pending", step: "deploy" });
                 return (
                   <li
                     key={tg.id}
@@ -371,14 +359,14 @@ export function KeyRotationModal({
                     <div style={{ display: "flex", alignItems: "center", gap: rem(10), flexWrap: "wrap" }}>
                       <div style={{ minWidth: 0, flex: 1 }}>
                         <div style={{ fontSize: TEXT.base, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis" }}>
-                          {targetLabel(tg)}
+                          {tg.label}
                         </div>
                         <div style={{ fontFamily: MONO, fontSize: TEXT.micro, color: p.txt3 }}>
                           {tg.user}@{tg.host}
                           {tg.port !== 22 ? `:${tg.port}` : ""}
-                          {tg.via ? ` · ${t("keyRotation.hopOf", { host: tg.via.label })}` : ""}
+                          {tg.viaLabel ? ` · ${t("keyRotation.hopOf", { host: tg.viaLabel })}` : ""}
                           {tg.route.length > 0 ? ` · ${t("keyRotation.routeVia", { route: tg.route.join(" → ") })}` : ""}
-                          {tg.proxy ? ` · ${t("keyRotation.routeProxy", { proxy: `${tg.proxy.host}:${tg.proxy.port}` })}` : ""}
+                          {tg.proxy ? ` · ${t("keyRotation.routeProxy", { proxy: tg.proxy })}` : ""}
                         </div>
                       </div>
                       {s.kind === "switched" && (
@@ -397,7 +385,7 @@ export function KeyRotationModal({
                           icon="refresh"
                           onClick={() => retry(tg.id)}
                           disabled={driving}
-                          aria-label={t("keyRotation.retryAria", { host: targetLabel(tg), step: t(STEP_KEY[s.step]) })}
+                          aria-label={t("keyRotation.retryAria", { host: tg.label, step: t(STEP_KEY[s.step]) })}
                         >
                           {t("keyRotation.retry")}
                         </Btn>
@@ -434,7 +422,7 @@ export function KeyRotationModal({
                     </ol>
                     {s.kind === "failed" && (
                       <div style={{ fontFamily: MONO, fontSize: TEXT.micro, color: p.red, wordBreak: "break-word" }}>
-                        {t("keyRotation.failedAt", { step: t(STEP_KEY[s.step]), error: s.error })}
+                        {t("keyRotation.failedAt", { step: t(STEP_KEY[s.step]), error: failureText(s.failure) })}
                       </div>
                     )}
                   </li>
@@ -443,13 +431,13 @@ export function KeyRotationModal({
             </ul>
           )}
 
-          {plan.dependents.length > 0 && (
+          {plan && plan.dependents.length > 0 && (
             <>
               <div style={sectionLabel}>{t("keyRotation.dependentsLabel")}</div>
               <ul style={{ ...note, paddingLeft: rem(18) }}>
                 {plan.dependents.map((d) => (
-                  <li key={d.host.profileId}>
-                    {d.host.label}{" "}
+                  <li key={d.profileId}>
+                    {d.label}{" "}
                     <span style={{ color: p.txt3 }}>
                       {t("keyRotation.dependentVia", { targets: d.targetIds.map(labelOf).join(", ") })}
                     </span>
@@ -459,15 +447,15 @@ export function KeyRotationModal({
             </>
           )}
 
-          {plan.skipped.length > 0 && (
+          {plan && plan.skipped.length > 0 && (
             <details>
               <summary style={{ ...sectionLabel, cursor: "pointer" }}>
                 {t("keyRotation.skippedLabel", { count: plan.skipped.length })}
               </summary>
               <ul style={{ ...note, paddingLeft: rem(18) }}>
                 {plan.skipped.map((s) => (
-                  <li key={s.host.profileId}>
-                    {s.host.label} <span style={{ color: p.txt3 }}>— {t(SKIP_KEY[s.reason])}</span>
+                  <li key={s.profileId}>
+                    {s.label} <span style={{ color: p.txt3 }}>— {t(SKIP_KEY[s.reason])}</span>
                   </li>
                 ))}
               </ul>
@@ -485,7 +473,7 @@ export function KeyRotationModal({
                       const deps = dependentsOf(tg.id);
                       return (
                         <li key={tg.id}>
-                          {targetLabel(tg)} — {outcome(tg)}
+                          {tg.label} — {outcome(tg)}
                           {deps.length > 0 && (
                             <div style={{ color: p.txt3 }}>{t("keyRotation.notSwitchedWith", { hosts: deps.join(", ") })}</div>
                           )}
@@ -501,7 +489,7 @@ export function KeyRotationModal({
                   <ul style={{ margin: `${rem(4)} 0 0`, paddingLeft: rem(18) }}>
                     {stillOld.map((tg) => (
                       <li key={tg.id}>
-                        {targetLabel(tg)} — {outcome(tg)}
+                        {tg.label} — {outcome(tg)}
                       </li>
                     ))}
                   </ul>

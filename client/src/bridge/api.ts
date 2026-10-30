@@ -12,12 +12,16 @@ import type {
   PresenceCheck,
   BroadcastEvent,
   ConnectionProfile,
+  HostGroupChoice,
+  HostSaved,
   Identity,
   IdentityBinding,
+  IdentityLink,
   BindingResolution,
   PersonalAuth,
   ResolvedConnect,
   DbConsistencyReport,
+  DiscardReport,
   DeviceInfo,
   ExecEvent,
   GroupTargetPlan,
@@ -26,6 +30,9 @@ import type {
   InstanceStatus,
   InviteInfo,
   KeyRotationLink,
+  KeyRotationPlan,
+  KeyRotationRun,
+  KeyUsage,
   JoinPreview,
   SpaceInfo,
   DirectoryEntry,
@@ -58,6 +65,8 @@ import type {
   LocalVolume,
   SshExecResult,
   ServerVault,
+  PendingSharedVaults,
+  TrustOutcome,
   SyncReport,
   MovedVault,
   TermEvent,
@@ -109,6 +118,8 @@ export const unlock = (password: string | null, secretKeyHex: string) =>
   invoke<void>("unlock", { password, secretKeyHex });
 export const lock = () => invoke<void>("lock");
 export const isUnlocked = () => invoke<boolean>("is_unlocked");
+/** This account's own fingerprint, grouped by four (not a secret; works locked). */
+export const ownFingerprint = () => invoke<string>("own_fingerprint");
 /** Resolves to whether biometric unlock was on and has been turned off by the
  *  change (its stored password belonged to the old one). What this cannot say
  *  — the stored password could not be erased, or a change that failed had
@@ -151,9 +162,14 @@ export const vaultImportBackup = (
 
 // ── items / keys / certs ───────────────────────────────────────
 export const listItems = (vaultId: string) => invoke<ItemInfo[]>("list_items", { vaultId });
-export const generateSshKey = (vaultId: string, itemId: string) =>
-  afterMut(vaultId, invoke<string>("generate_ssh_key", { vaultId, itemId }));
-export const importSshKey = (
+/** Generates a NEW key; an id already taken is an `alreadyExists` error (the
+ *  core never replaces a key's material from here). */
+export const createSshKey = (vaultId: string, itemId: string) =>
+  afterMut(vaultId, invoke<string>("create_ssh_key", { vaultId, itemId }));
+/** Imports a private key as a NEW key (create-only, like `createSshKey`). An
+ *  encrypted key without its passphrase fails with `passphraseRequired`, a
+ *  wrong one with `wrongPassphrase`. */
+export const createImportedSshKey = (
   vaultId: string,
   itemId: string,
   opensshPrivate: string,
@@ -161,7 +177,7 @@ export const importSshKey = (
 ) =>
   afterMut(
     vaultId,
-    invoke<string>("import_ssh_key", {
+    invoke<string>("create_imported_ssh_key", {
       vaultId,
       itemId,
       opensshPrivate,
@@ -190,6 +206,41 @@ export const abandonKeyRotation = (vaultId: string, candidateId: string) =>
 /** Rotations in progress on this device (device-local links, live candidates only). */
 export const listKeyRotations = (vaultId: string) =>
   invoke<KeyRotationLink[]>("list_key_rotations", { vaultId });
+/** What in the vault uses a key or password item (hosts by role, identities). */
+export const keyUsages = (vaultId: string) => invoke<Record<string, KeyUsage>>("key_usages", { vaultId });
+export const keyUsage = (vaultId: string, itemId: string) =>
+  invoke<KeyUsage>("key_usage", { vaultId, itemId });
+/** Guided rotation: the core's plan for rotating `keyId`, frozen until `keyRotationClose`. */
+export const keyRotationPlan = (vaultId: string, keyId: string) =>
+  invoke<KeyRotationPlan>("key_rotation_plan", { vaultId, keyId });
+/** Whether `keyId` already holds the candidate of this device's rotation of it
+ *  (an interrupted finish — nothing to run, only the finish). */
+export const keyRotationCommitted = (vaultId: string, keyId: string) =>
+  invoke<boolean>("key_rotation_committed", { vaultId, keyId });
+/** Ready a fresh run of the plan towards `candidateId`; null when the key item
+ *  already holds the candidate (an interrupted finish — nothing to run). */
+export const keyRotationStart = (handle: string, candidateId: string, resumed: boolean) =>
+  invoke<KeyRotationRun | null>("key_rotation_start", { handle, candidateId, resumed });
+/** Run every step that may start until the run settles; `onRun` sees each change. */
+export const keyRotationDrive = (
+  handle: string,
+  maxConcurrency: number,
+  timeoutSecs: number,
+  onRun: (run: KeyRotationRun) => void,
+) => {
+  const onEvent = new Channel<KeyRotationRun>();
+  onEvent.onmessage = onRun;
+  return invoke<KeyRotationRun>("key_rotation_drive", { handle, maxConcurrency, timeoutSecs, onEvent });
+};
+/** Stop the run: nothing new starts; steps in flight still land. */
+export const keyRotationStop = (handle: string) => invoke<KeyRotationRun>("key_rotation_stop", { handle });
+/** Put a failed target back in the queue at the step that failed. */
+export const keyRotationRetry = (handle: string, targetId: string) =>
+  invoke<KeyRotationRun>("key_rotation_retry", { handle, targetId });
+export const keyRotationClose = (handle: string) => invoke<void>("key_rotation_close", { handle });
+/** The idempotent ssh-copy-id command for `openssh`, the one the rotation deploys with. */
+export const authorizedKeysAppendCommand = (openssh: string) =>
+  invoke<string>("authorized_keys_append_command", { openssh });
 export const renameItem = (vaultId: string, itemId: string, newItemId: string) =>
   afterMut(vaultId, invoke<void>("rename_item", { vaultId, itemId, newItemId }));
 export const deleteItem = (vaultId: string, itemId: string) =>
@@ -223,8 +274,28 @@ export const importKnownHosts = (text: string) =>
   invoke<KnownHostsImport>("import_known_hosts", { text });
 
 // ── connection profiles (hosts) ────────────────────────────────
+/** Saves a host. An empty `profileId` is a new host: the core mints its id.
+ *  Resolves to the host's id. */
 export const saveConnection = (vaultId: string, profile: ConnectionProfile) =>
-  afterMut(vaultId, invoke<void>("save_connection", { vaultId, profile }));
+  afterMut(vaultId, invoke<string>("save_connection", { vaultId, profile }));
+/** Saves a host from the host editor through the core's one host-save path,
+ *  shared with `unissh hosts add|edit`: the core checks the host's rules
+ *  (an `invalidHost` error, nothing saved), stores a typed password with it,
+ *  places it in one group and links or re-pins a personal identity. What it
+ *  could not finish after the host was stored is in `unfinished`. */
+export const saveHost = (
+  vaultId: string,
+  profile: ConnectionProfile,
+  newPassword: string | null,
+  group: HostGroupChoice,
+  identity: IdentityLink | null,
+) =>
+  invoke<HostSaved>("save_host", { vaultId, profile, newPassword, group, identity }).then((saved) => {
+    vaultMutated(vaultId);
+    // The identity's binding lives in its own vault, which changed too.
+    if (saved.bindingVaultId && saved.bindingVaultId !== vaultId) vaultMutated(saved.bindingVaultId);
+    return saved;
+  });
 export const listConnections = (vaultId: string) =>
   invoke<ConnectionProfile[]>("list_connections", { vaultId });
 export const getConnection = (vaultId: string, profileId: string) =>
@@ -233,8 +304,12 @@ export const deleteConnection = (vaultId: string, profileId: string) =>
   afterMut(vaultId, invoke<void>("delete_connection", { vaultId, profileId }));
 
 // ── identities (personal SSH creds) ────────────────────────────
+/** Saves an identity over the one at its id (the edit form). */
 export const saveIdentity = (vaultId: string, identity: Identity) =>
   afterMut(vaultId, invoke<void>("save_identity", { vaultId, identity }));
+/** Saves a NEW identity; an id already taken is an `alreadyExists` error. */
+export const createIdentity = (vaultId: string, identity: Identity) =>
+  afterMut(vaultId, invoke<void>("create_identity", { vaultId, identity }));
 export const listIdentities = (vaultId: string) =>
   invoke<Identity[]>("list_identities", { vaultId });
 export const getIdentity = (vaultId: string, identityId: string) =>
@@ -439,15 +514,19 @@ export interface Snippet {
   tags: string[];
 }
 
+/** Saves a snippet. An empty `snippetId` is a new one: the core mints its id.
+ *  Resolves to the snippet's id. */
 export const saveSnippet = (vaultId: string, snippet: Snippet) =>
-  afterMut(vaultId, invoke<void>("save_snippet", { vaultId, snippet }));
+  afterMut(vaultId, invoke<string>("save_snippet", { vaultId, snippet }));
 export const listSnippets = (vaultId: string) =>
   invoke<Snippet[]>("list_snippets", { vaultId });
 export const deleteSnippet = (vaultId: string, snippetId: string) =>
   afterMut(vaultId, invoke<void>("delete_snippet", { vaultId, snippetId }));
 
+/** Saves a group. An empty `groupId` is a new one: the core mints its id.
+ *  Resolves to the group's id. */
 export const saveGroup = (vaultId: string, group: ServerGroup) =>
-  afterMut(vaultId, invoke<void>("save_group", { vaultId, group }));
+  afterMut(vaultId, invoke<string>("save_group", { vaultId, group }));
 export const listGroups = (vaultId: string) => invoke<ServerGroup[]>("list_groups", { vaultId });
 export const getGroup = (vaultId: string, groupId: string) =>
   invoke<ServerGroup>("get_group", { vaultId, groupId });
@@ -944,6 +1023,23 @@ export const serverListVaults = (serverId?: string) =>
 /** Pull ONE vault (hex id) from a server onto this device (targeted; no cursor bump). */
 export const serverPullVault = (vaultId: string, serverId?: string) =>
   invoke<SyncReport>("server_pull_vault", { vaultId, serverId: serverId ?? null });
+/** Vaults a teammate shared with this account that are not here yet, each inspected
+ *  by the core (creator's fingerprint, my role, pin state; owner name = server claim). */
+export const serverPendingSharedVaults = (serverId?: string) =>
+  invoke<PendingSharedVaults>("server_pending_shared_vaults", { serverId: serverId ?? null });
+/** Trust a shared vault's owner: the core compares `expectedFingerprint` (REQUIRED —
+ *  the owner's, or the displayed one the user confirmed) and pins in one step. */
+export const serverTrustSharedVault = (vaultId: string, expectedFingerprint: string, serverId?: string) =>
+  invoke<TrustOutcome>("server_trust_shared_vault", {
+    vaultId,
+    expectedFingerprint,
+    serverId: serverId ?? null,
+  });
+/** Send once more the edits in ONE vault (hex id) that no sync could push, drop this
+ *  account's ones the server still refuses and put the server's copy back; other
+ *  members' ones are no longer sent. Other unsent edits stay. Says how many of each. */
+export const serverDiscardUnpushable = (vaultId: string, serverId?: string) =>
+  invoke<DiscardReport>("server_discard_unpushable", { vaultId, serverId: serverId ?? null });
 /** Bind an already-cloud vault (hex id) to a server, then sync it up (Push). */
 export const serverBindAndPushVault = (vaultId: string, serverId?: string) =>
   invoke<SyncReport>("server_bind_and_push_vault", { vaultId, serverId: serverId ?? null });
@@ -974,8 +1070,6 @@ export const serverMemberFingerprint = (ed25519PubHex: string) =>
   invoke<string>("server_member_fingerprint", { ed25519PubHex });
 export const serverConfirmMemberPin = (accountId: string, ed25519PubHex: string) =>
   invoke<void>("server_confirm_member_pin", { accountId, ed25519PubHex });
-export const serverPinVaultGenesisOwner = (vaultId: string, ed25519PubHex: string) =>
-  invoke<void>("server_pin_vault_genesis_owner", { vaultId, ed25519PubHex });
 export const setPersonalVault = (vaultId: string) =>
   invoke<void>("set_personal_vault", { vaultId });
 export const setAccountDefaultUsername = (username: string) =>

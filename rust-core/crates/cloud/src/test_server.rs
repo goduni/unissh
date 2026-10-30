@@ -30,18 +30,28 @@ pub fn serve(replies: Vec<(&'static str, &'static str)>) -> (String, Arc<Mutex<V
             };
             let mut reader = BufReader::new(&stream);
             let mut auth = String::new();
+            let mut body_len = 0_usize;
             loop {
                 let mut line = String::new();
                 if reader.read_line(&mut line).unwrap_or(0) == 0 {
                     break;
                 }
-                if let Some(v) = line.to_ascii_lowercase().strip_prefix("authorization:") {
+                let lower = line.to_ascii_lowercase();
+                if let Some(v) = lower.strip_prefix("authorization:") {
                     auth = v.trim().to_owned();
+                }
+                if let Some(v) = lower.strip_prefix("content-length:") {
+                    body_len = v.trim().parse().unwrap_or(0);
                 }
                 if line == "\r\n" || line == "\n" {
                     break;
                 }
             }
+            // A request body (a push) is read before the reply: a socket
+            // closed with unread data resets the connection under the client.
+            let mut request_body = vec![0_u8; body_len];
+            std::io::Read::read_exact(&mut reader, &mut request_body)
+                .expect("the test client sends the body it announced");
             seen2.lock().unwrap().push(auth);
             let reply = format!(
                 "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\

@@ -1586,6 +1586,8 @@ fn connection_profiles_crud_and_import() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
+    core.set_account_default_username("root".to_owned())
+        .unwrap();
     core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
 
     let prof = unissh_ffi::ConnectionProfile {
@@ -1726,6 +1728,8 @@ fn import_ssh_config_ipv6_proxyjump() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
+    core.set_account_default_username("root".to_owned())
+        .unwrap();
     core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let cfg = "Host h\n  HostName 2001:db8::5\n  ProxyJump j@[2001:db8::1]:2200\n";
     core.import_ssh_config("v".to_owned(), cfg.to_owned())
@@ -2905,15 +2909,12 @@ fn group_validation_and_clobber() {
     core.generate_ssh_key("v".to_owned(), "id".to_owned())
         .unwrap();
 
-    // self-membership / self-parenting / empty id → error
+    // self-membership / self-parenting → error
     assert!(core
         .save_group("v".to_owned(), group("g", &["g"], None))
         .is_err());
     assert!(core
         .save_group("v".to_owned(), group("g", &[], Some("g")))
-        .is_err());
-    assert!(core
-        .save_group("v".to_owned(), group("", &[], None))
         .is_err());
 
     // cross-type clobber: a group with the id of an existing key → AlreadyExists, key intact
@@ -3209,6 +3210,8 @@ fn export_ssh_config_round_trips() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
+    core.set_account_default_username("root".to_owned())
+        .unwrap();
     core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let cfg = "Host web\n  HostName 192.168.1.10\n  User deploy\n  Port 2222\n\
                Host gw\n  HostName gw.example.com\n  ProxyJump jumpuser@jump.example.com:2200\n";
@@ -4379,18 +4382,7 @@ fn snippet_crud_round_trip() {
     assert_eq!(list[1].command, "sudo journalctl -fu app");
     assert_eq!(list[1].tags, vec!["ops".to_owned()]);
 
-    // Empty id and empty command are refused rather than stored as junk.
-    assert!(core
-        .save_snippet(
-            "v".to_owned(),
-            unissh_ffi::Snippet {
-                snippet_id: String::new(),
-                label: "x".to_owned(),
-                command: "echo".to_owned(),
-                tags: vec![],
-            },
-        )
-        .is_err());
+    // An empty command is refused rather than stored as junk.
     assert!(core
         .save_snippet(
             "v".to_owned(),

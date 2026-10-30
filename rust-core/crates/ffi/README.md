@@ -33,8 +33,13 @@ create_vault(vault_id, name) / list_vaults()
 rename_vault(vault_id, new_name) / delete_vault(vault_id)
 
 // keys/items
-generate_ssh_key(vault_id, item_id) -> public  // private key into the vault, public key out
-import_ssh_key(vault_id, item_id, openssh_private) -> public   // Ed25519/ECDSA/RSA
+generate_ssh_key(vault_id, item_id) -> public  // private key into the vault, public key out (creates or replaces)
+create_ssh_key(vault_id, item_id) -> public    // create-only: AlreadyExists when a live item holds the id
+import_ssh_key(vault_id, item_id, openssh_private, passphrase?) -> public   // Ed25519/ECDSA/RSA (creates or replaces);
+                                                                           // PassphraseRequired / WrongPassphrase for an encrypted key
+create_imported_ssh_key(vault_id, item_id, openssh_private, passphrase?) -> public   // create-only twin
+save_identity(vault_id, identity)              // personal identity: creates or replaces (the edit path)
+create_identity(vault_id, identity)            // create-only: AlreadyExists when a live item holds identity_id
 import_ssh_certificate(vault_id, key_item_id, cert_openssh)    // cert-auth (CA)
 get_public_key(vault_id, item_id) -> {openssh, fingerprint}    // re-read the public key
 rename_item(vault_id, item_id, new_item_id) / delete_item(vault_id, item_id)
@@ -128,7 +133,28 @@ import_vault(bytes, passphrase, new_vault_id)   // items are re-encrypted under 
 //   | PromptPassword (ask on connect); ConnectionProfile.tags[] — selection labels.
 //   The profile JSON holds references only; a jump host with an inline password cannot be saved
 //   (error). The legacy format (without tags/password_item_id) is read without migration.
-save_connection(vault_id, profile) / list_connections(vault_id)
+save_connection(vault_id, profile) -> profile_id / list_connections(vault_id) // low-level/internal; product writes use save_host
+//   An empty profile_id (and group_id / snippet_id in save_group / save_snippet) is a new item:
+//   the core mints `slug(label)-<millis>` (collision-checked in the vault, tombstones included)
+//   and returns it. Clients do not mint ids. SSH config imports use the same
+//   validation and preserve groups; missing User needs the account default.
+save_host(vault_id, HostSave{profile, new_password?, group, identity?, move_identity_pin}) -> HostSaved   // Rust-only
+//   The one host-save path of the app's host editor and `unissh hosts add|edit`: checks the
+//   HostRule set (label, address, user unless personal; a hop by address has one; a referenced
+//   hop is another host of the same vault, found by uid, logging in with Key / VaultPassword /
+//   SystemAgent; a typed password goes with VaultPassword; the group or identity exists) →
+//   FfiError::InvalidHost{rule}, nothing written. Then, under one state lock: the typed password
+//   (a new version of the host's own password item when nothing else uses it, else a new item;
+//   never a delete), the host and its one group (HostGroup Unchanged|Ungrouped|Existing|New) in
+//   one storage transaction; the identity binding pinned to where the host points (given, or the
+//   one already linked from a single-member vault), moved only when its pin still names where
+//   the host pointed before (else kept: HostSaveGap::IdentityPinKept), or when
+//   move_identity_pin says the user confirmed the move. A link that fails leaves
+//   the host saved: HostSaved.unfinished lists it; HostSaved.binding_vault_id names the vault a
+//   binding was written to. The uid is the core's (kept on edit, minted for a new host).
+//   Referenced hops are stored in the placeholder shape under the host's vault id, inline hop
+//   hosts trimmed; the username template is kept for a personal login only. The connect (and
+//   resolve_connection) refuse a hop_ref into another vault with InvalidHost{HopOtherVault}.
 get_connection(vault_id, profile_id) / delete_connection(vault_id, profile_id)
 import_ssh_config(vault_id, config_text) -> [created_profile_ids]        // pasted text; Include is reported, not followed
 import_ssh_config_at_path(vault_id, path, only?) -> [{alias, origin_file}] // a FILE: Include followed as ssh follows it,

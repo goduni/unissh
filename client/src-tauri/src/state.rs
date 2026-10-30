@@ -8,6 +8,7 @@
 use dashmap::DashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use unissh_ffi::key_rotation_plan::{RotationDriver, RotationPlan};
 use unissh_ffi::{
     BroadcastSession, CancelToken, Core, ExecHandleFfi, FfiError, LocalSession,
     ReconnectingSession, SftpFfi, SshSession, SshTunnel,
@@ -60,6 +61,15 @@ impl LiveSession {
     }
 }
 
+/// A guided key rotation the rotation dialog has open: the plan it shows,
+/// frozen when the dialog opened, and once started the run that moves the
+/// machines over. `Clone` is cheap (two `Arc`s).
+#[derive(Clone)]
+pub struct KeyRotationSlot {
+    pub plan: Arc<RotationPlan>,
+    pub driver: Option<Arc<RotationDriver>>,
+}
+
 pub struct AppState {
     pub core: Arc<Core>,
     pub db_path: PathBuf,
@@ -71,6 +81,8 @@ pub struct AppState {
     pub broadcasts: DashMap<String, Arc<BroadcastSession>>,
     pub exec_handles: DashMap<String, Arc<ExecHandleFfi>>,
     pub cancels: DashMap<String, Arc<CancelToken>>,
+    /// Open guided key rotations, by the handle `key_rotation_plan` returned.
+    pub key_rotations: DashMap<String, KeyRotationSlot>,
     /// Optional cloud-server link (config sidecar + in-memory session). The cloud
     /// integration is additive: a local-only instance simply leaves this unlinked.
     ///
@@ -102,6 +114,7 @@ impl AppState {
             broadcasts: DashMap::new(),
             exec_handles: DashMap::new(),
             cancels: DashMap::new(),
+            key_rotations: DashMap::new(),
             cloud: Arc::new(CloudState::new(cloud_path)),
             unlock_attempts: Arc::default(),
         }

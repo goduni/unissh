@@ -164,18 +164,24 @@ fn is_yes(answer: &str) -> bool {
 /// terminal. With `yes` it goes on without asking, but the warning is still
 /// printed (to stderr): `--yes` skips the question, not what the user is told.
 pub fn confirm(yes: bool, warning: &str) -> Res<()> {
-    if yes {
-        eprint!("{warning}");
-        return Ok(());
-    }
-    let mut tty = Tty::open()
-        .map_err(|e| Failure::msg(format!("cannot ask for confirmation ({e}); pass --yes")))?;
-    tty.say(warning)?;
-    if tty.confirm("Continue? [y/N] ")? {
+    if goes_on(yes, warning)? {
         Ok(())
     } else {
         Err(Failure::msg("nothing changed"))
     }
+}
+
+/// [`confirm`]'s question, for a command where no is an answer rather than
+/// a failure: whether to go on.
+pub fn goes_on(yes: bool, warning: &str) -> Res<bool> {
+    if yes {
+        eprint!("{warning}");
+        return Ok(true);
+    }
+    let mut tty = Tty::open()
+        .map_err(|e| Failure::msg(format!("cannot ask for confirmation ({e}); pass --yes")))?;
+    tty.say(warning)?;
+    Ok(tty.confirm("Continue? [y/N] ")?)
 }
 
 impl Tty {

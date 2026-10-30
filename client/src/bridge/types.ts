@@ -96,6 +96,70 @@ export interface ConnectionProfile {
   icon?: string | null;
 }
 
+/** Which group a saved host is in (a host is in one at most). */
+export type HostGroupChoice =
+  /** Leave an existing host's groups as they are; a new host is in none. */
+  | { type: "unchanged" }
+  /** In no group. */
+  | { type: "ungrouped" }
+  /** In this group, out of every other. */
+  | { type: "existing"; groupId: string }
+  /** In a new group with this name, created by the save. */
+  | { type: "new"; label: string };
+
+/** The personal identity to link to a host that logs in with one. */
+export interface IdentityLink {
+  vaultId: string;
+  identityId: string;
+}
+
+/** What a host save could not finish after the host itself was stored. */
+export type HostSaveGap =
+  | { kind: "identityNotLinked"; message: string }
+  /** Still pinned to an older address (the host had been pointed elsewhere
+   *  before this save): connecting with the identity is refused as redirected. */
+  | { kind: "identityPinKept"; pinned: string; message: string };
+
+/** The core's answer to `saveHost` (`Core::save_host`). */
+export interface HostSaved {
+  profileId: string;
+  uid: string;
+  /** The secret a typed password went into: the host's own (a new version of
+   *  it, the old one kept in its history) or a new one. */
+  passwordItemId: string | null;
+  /** The group the host is now in, when the save placed it in one. */
+  groupId: string | null;
+  /** An identity is linked and pinned to where the host points now. */
+  identityLinked: boolean;
+  /** The vault the identity binding was written to (it changed too). */
+  bindingVaultId: string | null;
+  /** Empty when everything was saved. */
+  unfinished: HostSaveGap[];
+}
+
+/** A rule a host save broke (`HostRule::code` in the core); nothing was saved. */
+export const HOST_RULES = [
+  "labelRequired",
+  "addressRequired",
+  "userRequired",
+  "hopAddressRequired",
+  "hopOtherVault",
+  "hopNotFound",
+  "hopSelf",
+  "hopNoCredential",
+  "newPasswordNeedsPasswordLogin",
+  "newPasswordEmpty",
+  "groupNotFound",
+  "groupLabelRequired",
+  "identityNeedsPersonalLogin",
+  "identityNotFound",
+] as const;
+export type HostRule = (typeof HOST_RULES)[number];
+
+function isHostRule(rule: string | undefined): rule is HostRule {
+  return (HOST_RULES as readonly string[]).includes(rule ?? "");
+}
+
 export interface ServerGroup {
   groupId: string;
   label: string;
@@ -190,6 +254,39 @@ export interface ServerVault {
   /** The local vault's name if present locally, else null (pull to load it). */
   localName: string | null;
 }
+
+/** Where a vault a teammate shared with this account stands on this device. */
+export type SharedVaultState =
+  /** No owner pinned yet: the user confirms the owner's fingerprint. */
+  | "waiting"
+  /** The owner is pinned here; the vault is not fetched yet. */
+  | "trustedNotFetched"
+  /** ANOTHER owner is pinned here than the one the server now presents. */
+  | "ownerChanged"
+  /** Its membership could not be verified. */
+  | "unverifiable";
+
+/** A shared vault not on this device yet. `claimedHandle`/`claimedName` are what
+ *  the SERVER says about the owner — never verified, always shown as a claim. */
+export interface PendingSharedVault {
+  vaultId: string;
+  state: SharedVaultState;
+  /** Fingerprint of the key that created the vault, grouped by four. */
+  fingerprint: string | null;
+  role: MemberRole | null;
+  claimedHandle: string | null;
+  claimedName: string | null;
+  error: string | null;
+}
+
+export interface PendingSharedVaults {
+  vaults: PendingSharedVault[];
+  /** Catalog entries the server sent under a malformed id (ignored). */
+  malformed: number;
+}
+
+/** What a trust attempt did; only `trusted`/`alreadyTrusted` pinned (or kept) an owner. */
+export type TrustOutcome = "trusted" | "alreadyTrusted" | "fingerprintMismatch" | "pinnedToAnotherOwner";
 
 // ── vault integrity / maintenance ──────────────────────────────
 export type IntegrityFailureKind = "signatureInvalid" | "authorMismatch" | "malformed";
@@ -506,6 +603,9 @@ export type ApiErrorKind =
   | "invalidCredentials"
   | "notFound"
   | "alreadyExists"
+  | "passphraseRequired"
+  | "wrongPassphrase"
+  | "invalidHost"
   | "alreadyCloud"
   | "readOnlyVault"
   | "noServer"
@@ -522,6 +622,8 @@ export interface ApiError {
   host?: string;
   port?: number;
   fingerprint?: string;
+  /** `invalidHost` variant: the rule broken (`msg` has the core's words). */
+  rule?: string;
   /** `rotationInProgress` variant: the live candidate's item id. */
   candidateId?: string;
   /** `rotationPartlyFinished` variant: the original key's item id. */
@@ -583,6 +685,15 @@ export function apiErrorMessage(e: unknown): string {
         return i18n.t("error.notFound");
       case "alreadyExists":
         return i18n.t("error.alreadyExists");
+      case "passphraseRequired":
+        return i18n.t("error.passphraseRequired");
+      case "wrongPassphrase":
+        return i18n.t("error.wrongPassphrase");
+      case "invalidHost":
+        // A rule a newer core added has no words here yet: the core's own.
+        return isHostRule(e.rule)
+          ? i18n.t(`error.invalidHost.${e.rule}`)
+          : e.msg || i18n.t("error.generic");
       case "alreadyCloud":
         return i18n.t("error.alreadyCloud");
       case "readOnlyVault":
@@ -614,6 +725,103 @@ export interface KeyRotationLink {
   candidateId: string;
   /** Started on another device: only abandon is possible here, not finish. */
   startedElsewhere: boolean;
+}
+
+// Guided key rotation: the core plans it and runs the steps
+// (rust-core/crates/ffi/src/key_rotation_plan.rs); the dialog shows them.
+
+export type RotationStep = "deploy" | "verify" | "remove" | "confirm";
+
+/** Why a step did not pass. The dialog words it. */
+export type RotationStepFailure =
+  /** Nothing came back for the target. */
+  | { kind: "noResult" }
+  | { kind: "timedOut" }
+  /** The connection or the command failed, in its own words. */
+  | { kind: "error"; message: string }
+  /** The vault locked while the step ran. */
+  | { kind: "locked" }
+  /** Remove: the old key's blob is still in the file. */
+  | { kind: "oldKeyStillPresent" }
+  | { kind: "noAuthorizedKeys" }
+  /** Remove: the candidate cannot get a shell without a second factor, and the
+   *  old key is still accepted — its line has to be removed by hand. */
+  | { kind: "removeNeedsSecondFactor" }
+  /** Confirm: the old key still logs in. */
+  | { kind: "oldKeyStillAccepted" }
+  /** The old-key login failed for a reason that says nothing about the key. */
+  | { kind: "oldKeyCheckFailed"; message: string | null };
+
+/** One target's place in a run (see the core's `TargetState`):
+ *  keptOld — stopped before the old key was removed; `after` is the last
+ *  passed step. unconfirmed — stopped after the old line was removed and
+ *  before the old key was tried. */
+export type RotationTargetState =
+  | { kind: "pending"; step: RotationStep }
+  | { kind: "running"; step: RotationStep }
+  | { kind: "failed"; step: RotationStep; failure: RotationStepFailure }
+  | { kind: "switched" }
+  | { kind: "keptOld"; after: RotationStep | null }
+  | { kind: "unconfirmed" };
+
+/** A machine the candidate key goes to: one login over one route. */
+export interface RotationTarget {
+  id: string;
+  /** The host's label, or `user@host[:port]` for a bare jump hop. */
+  label: string;
+  user: string;
+  host: string;
+  port: number;
+  /** The hops in front of it, as the logins they land on. */
+  route: string[];
+  /** For a hop: the label of the host whose chain it was found in. */
+  viaLabel: string | null;
+  /** The first-dial proxy as `host:port`. */
+  proxy: string | null;
+}
+
+export type RotationSkipReason = "personal" | "systemAgent" | "password";
+
+export interface KeyRotationPlan {
+  /** Addresses the plan (and its run) in the core until `keyRotationClose`. */
+  handle: string;
+  targets: RotationTarget[];
+  /** Hosts that only hop with the key: they follow the targets they go through. */
+  dependents: { profileId: string; label: string; targetIds: string[] }[];
+  skipped: { profileId: string; label: string; reason: RotationSkipReason }[];
+  /** One login is reached over more than one route. */
+  sharedEndpoint: boolean;
+  /** Targets reached over a machine whose host key is not pinned yet: the
+   *  rotation does not start until each was connected to once. */
+  unpinned: string[];
+}
+
+export interface KeyRotationRun {
+  states: Record<string, RotationTargetState>;
+  /** Targets where a login with the candidate passed in this run. */
+  verified: string[];
+  cancelled: boolean;
+  /** Nothing in flight and nothing left to start. */
+  settled: boolean;
+  /** Finishing locks these out: the candidate was not proven there. */
+  unproven: string[];
+  /** Finishing cuts these off too: proven, but reached through a hop in `unproven`. */
+  cutOff: string[];
+  /** The candidate works here, but the old key was not seen refused. */
+  oldNotRefused: string[];
+}
+
+/** How a host uses a key or password item. */
+export type KeyUseRole = "login" | "inlineHop" | "referencedHop" | "proxyPassword";
+
+/** What in a vault uses one key or password item — the core's single answer
+ *  (`key_usage`, #169), shared with the CLI. Ids and labels only. */
+export interface KeyUsage {
+  unscannedVaults?: string[];
+  /** Hosts using it, each once, with every way it does. */
+  hosts: { vaultId?: string; profileId: string; label: string; roles: KeyUseRole[] }[];
+  /** Identities referencing it as their key or password. */
+  identities: { identityId: string; label: string }[];
 }
 
 export interface ServerStatus {
@@ -678,6 +886,40 @@ export interface SyncReport {
   /** Items the server refuses as too large: NOT uploaded (everything else was).
    *  Reported by every sync until the item changes or a manual sync gets it through. */
   tooLarge: TooLargeItem[];
+  /** Edits no push can deliver — a Viewer's edit made before the core refused them,
+   *  or one the server refuses: NOT uploaded (everything else was). Reported by
+   *  every sync until the item changes or the edit is discarded
+   *  ({@link UnpushableItem.mine}). */
+  unpushable: UnpushableItem[];
+}
+
+/** What discarding a vault's unsendable edits did. */
+export interface DiscardReport {
+  /** This account's edits that were dropped: the server's copy replaced them, or
+   *  the item is gone (`removed`). */
+  dropped: number;
+  /** Of `dropped`, the items the server doesn't have: removed. */
+  removed: number;
+  /** Other members' edits held here that are no longer sent (kept as they are). */
+  released: number;
+}
+
+/** An edit no sync can push (see {@link SyncReport.unpushable}). */
+export interface UnpushableItem {
+  vaultId: string;
+  vaultName: string;
+  itemId: string;
+  /** The core's item type ({@link ItemType}), to name the item by kind. */
+  itemType: number;
+  /** This account made the edit, so "Discard unsent changes" can drop it (another
+   *  member's is only no longer sent). */
+  mine: boolean;
+  /** `notAuthorized`: this account may not change the vault (only view it).
+   *  `serverRefused`: the server refused the edit. */
+  reason: "notAuthorized" | "serverRefused";
+  /** The linked server whose sync reported it (set by the store when it merges
+   *  the reports of several servers; absent for the active server's own). */
+  serverId?: string;
 }
 
 /** An item the sync server refuses as too large: over its `limits.max_object_bytes`,

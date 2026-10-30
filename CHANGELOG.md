@@ -36,6 +36,9 @@ starts with `0.`:
 
 ### Added
 
+- In the app's host editor, a saved host that logs in through the system SSH
+  agent (a hardware key, for example) can now be picked as a jump host, as
+  `unissh hosts add|edit --jump` already allowed.
 - Hosts and groups take a colour tag and an icon (#134), set under Appearance
   in the host editor and in Host groups. The colour shows beside the host in the
   hosts list, on its folder in the sidebar, on the terminal tab (a line along the
@@ -76,17 +79,19 @@ starts with `0.`:
 - `unissh cp -r` copies a directory tree to or from a host, several files at
   once over one SFTP connection (`--parallel`, 4 by default). Symbolic links
   inside the tree are skipped and named, not followed; a file that fails is
-  reported, the rest still copy, and the command exits non-zero.
+  reported (a download by its remote path), the rest still copy, and the
+  command exits non-zero. Downloaded files are owner-only (0600) on Unix.
 - `unissh tunnel <host>` forwards ports as `ssh -N` does: `-L`, `-R` and `-D`
   (SOCKS5), any number of each, through the core's forwards. A forward listens
   on `127.0.0.1` unless an address is given, and SOCKS listens on loopback only.
   It prints a line per forward once it listens, fails as a whole if one cannot
   open, and closes them cleanly on Ctrl-C or SIGTERM.
 - `unissh run` runs one command on many hosts, as the app's Fleet does: by tag,
-  by group (nested groups included) or by name, a bounded number at a time with
-  a per-host deadline, each output line led by the host's label (or `--json`),
-  a summary at the end and a non-zero exit when any host failed; `--dry-run`
-  shows the plan without connecting. `{{name}}` parameters in the command are
+  by group (with the hosts of groups listed as its members, but not of its
+  subgroups) or by name, a bounded number at a time with a per-host deadline,
+  each output line led by the host's label (or `--json`), a summary at the end
+  and a non-zero exit when any host failed; `--dry-run` shows the plan without
+  connecting. `{{name}}` parameters in the command are
   filled as the app's Fleet fills them (`--set name=value`, else asked on the
   terminal). `unissh snippets list` and `unissh snippets run` run saved
   snippets the same way.
@@ -111,14 +116,27 @@ starts with `0.`:
   its foreground. Granting, adding and rotating integrations print what they
   will do, then take the master password typed on the terminal as the
   confirmation, and run only in a terminal's foreground. On Linux it pauses on
-  a logind session lock, `LockedHint` or sleep. An agent with a shell as you can
-  do whatever the vaults allow with a password file, and can catch a typed
-  password: the CLI's grants cannot constrain it. In the core, the MCP crate
+  a logind session lock, `LockedHint` or sleep, following the session
+  `$XDG_SESSION_ID` names when it is your own (so a tmux pane follows the login
+  it was started in), and naming the session in a warning when it had to fall
+  back to your graphical session or follows another one. An agent with a shell
+  as you can do whatever the vaults allow with a password file, and can catch a
+  typed password: the CLI's grants cannot constrain it. In the core, the MCP crate
   gains a stdio transport (`serve_stdio`, rmcp `transport-io`), and the broker
   gains `pending_approvals`, `is_pending`, `approval_unavailable`,
   `set_manual_approval_available`, `made_recordings`, `PromptFactory::can_ask`,
   the `logind` signal filter and the limits file helpers the desktop now uses
   too.
+- `unissh keys rotation begin|run|finish` is the app's guided key rotation in
+  the CLI: `begin` creates the new key beside the old one and lists the
+  machines that have to learn it; `run` installs it on each machine and proves a
+  key-only login with it, removing nothing, with a line per machine and
+  `--host` to retry some; `finish` checks every machine again, names the ones a
+  finish would lock out and asks, then removes the old key where the new one
+  logs in, checks the old key is refused, and makes the new key current. The
+  plan, the steps and the `authorized_keys` commands moved from the app into the
+  core (`unissh_ffi::key_rotation_plan`), so the app's rotation dialog and the
+  CLI run the same ones; the dialog looks and works as before.
 - Bindings: `ExecHandleFfi::close_stdin` ends a streaming command's input and
   keeps its output coming; `Core::wait_for_recordings` waits for session
   recordings still to be written (a recorded session counts from the moment it
@@ -167,9 +185,82 @@ starts with `0.`:
   `password_fill: PasswordFillMode` parameter (pass `Off` for no fill).
   Observer callbacks (`on_fill`, and to be safe `on_data`) must not call back
   into the session synchronously from the calling thread.
+- Bindings: the core mints item ids. `save_connection`, `save_group` and
+  `save_snippet` now return the item's id (`String`, was nothing); an empty id
+  is a new item and gets `slug(label)-<millis>`. New create-only functions
+  `create_ssh_key`, `create_imported_ssh_key` and `create_identity` fail with
+  `AlreadyExists` instead of replacing; `generate_ssh_key`, `import_ssh_key`
+  and `save_identity` still create or replace. New `FfiError` variants `PassphraseRequired` and
+  `WrongPassphrase` for an encrypted key imported without or with a wrong
+  passphrase; `FfiError::AlreadyExists` now also covers a taken item id, and
+  its text is "already exists" (was "instance already exists").
+- The app's host editor and `unissh hosts add|edit` now save a host through
+  one path in the core, with the same rules (#167): a label, an address, a
+  user unless the host logs in with a personal identity, and a jump host that
+  is another saved host of the same vault logging in with a key, a saved
+  password or the system SSH agent. A password typed for a host is stored
+  together with it, so a host that cannot be saved leaves no stray password.
+  A new password never deletes the old one: when nothing else uses the host's
+  saved password, the new one becomes its next version (the old one stays in
+  its history); when something else shares it, the host gets a password of its
+  own and the shared one is left alone. A host saved without its identity link
+  now says so. Bindings: new `Core::save_host` (its result names the vault an
+  identity link was written to, so a client syncs it) and
+  `FfiError::InvalidHost`; `new_item_id` is gone.
 
 ### Fixed
 
+- Sharing an existing vault reissues its current items and tombstones at the
+  new membership epoch in the same transaction as the manifest and grants.
+  Previously, items created before the first share stayed at epoch 0 and
+  could not be read or synced after sharing. Versions advance normally;
+  signatures are verified before reissuing, and deleted items stay deleted.
+
+- Saving a host in the app preserves its entire jump chain, including hops
+  the editor does not show. Turning ProxyJump off removes the whole chain.
+- Host imports, imported-key attachment and tag edits use the core host-save
+  rules. An SSH config without `User` uses the account's default username;
+  without either, the import is refused without partially writing the batch.
+  A saved bastion cannot switch to an interactive or Personal login while
+  other hosts reference it; the error names those hosts.
+- Guided key rotation includes Personal hosts whose bound identity uses the
+  key, through the ordinary destination-pin check. Broken relevant bindings
+  stop planning instead of silently omitting a machine. Unpinned machines
+  are skipped and remain in the explicit finish lockout warning; a scoped
+  CLI run includes its key-bearing jump hosts. Concurrent app starts cannot
+  replace a run still in flight.
+- Key usage and delete warnings inspect references from other readable
+  vaults, qualify host ids by vault, and name vaults not inspected. The Keys
+  tab fetches all usage counts in one call.
+
+- A teammate could never receive a vault shared with them, in the app or the
+  CLI: their device rejected it, because it did not know the vault's owner and
+  nothing let them say who that was. Now they confirm the owner's fingerprint
+  once: `unissh sync` says how many shared vaults wait, `unissh vaults list`
+  lists them, and `unissh vaults trust <id>` asks for the fingerprint the owner
+  gave them (each account's own is in `unissh status`), then fetches the
+  vault. The server is never trusted to say who the owner is. In the app,
+  Settings → Cloud lists them under "Shared with you — not verified yet", with
+  the owner the server claims and your role; "Verify owner…" takes the
+  fingerprint the owner gave you (or, as a weaker check, shows it to compare
+  and confirm), then fetches the vault. A vault whose owner changed since you
+  trusted it is shown as a warning, never offered for trust. Your own
+  fingerprint is in Settings → Cloud → Your fingerprint. The core and the app's
+  "Pull from server" now share one single-vault pull, and it says when a pull
+  was cut short instead of reporting it complete. "Restore deleted" keeps the
+  owner you trusted for a teammate's vault.
+- Creating a key or a personal identity under a name that is already taken no
+  longer replaces what is there (#171). The app's New key dialog and its New
+  identity form used to overwrite a key's private material or an identity
+  silently; the app, `unissh keys generate|import` and `unissh identities add`
+  now say the name is taken and change nothing. The check happens as the item
+  is written, so a change synced from another device cannot slip in between.
+- The app and `unissh` now agree on what still uses a key or password (#169):
+  a host's own login, an inline jump hop, a jump hop to a saved host that logs
+  in with it, a proxy password, and identities. Before, the app missed
+  identities and proxy passwords and `unissh secrets rm` missed jump hops to
+  saved hosts. The key list shows identities beside hosts, and deleting a
+  password now warns when something still uses it.
 - The admin panel's sign-in says that the password is optional: it is the
   account's master password from the UniSSH app (or the one set when the
   instance was set up); an account without one signs in with it empty.
@@ -210,9 +301,43 @@ starts with `0.`:
     such a vault alone: its expired recordings stay listed.
   - Moving a local vault to a server leaves references to it in a vault you
     can only view as they were.
+- A device that had already made such an edit, before the fix above, syncs
+  again (#166). An edit the server will not take no longer fails every sync.
+  It stays on that device, everything else is sent, and the sync status (in
+  the app and in `unissh sync`) names it.
+  - "Discard unsent changes", next to "Pull from server" in the app, and
+    `unissh vaults discard-unpushable <vault>` replace those edits with the
+    server's copy, after asking. An edit this account may not make is
+    replaced without being sent. One the server refused is sent once more
+    and replaced only if the server refuses it again. An item the server does
+    not have is removed, and a copy that does not verify replaces nothing.
+  - Other members' such edits are kept and no longer sent. Other changes not
+    sent yet are kept.
+  - Only the server's own 403 leaves an item out; any other 403 fails the
+    sync. `unissh sync --retry-refused` sends refused changes again.
+  - Bindings: new `FfiSyncReport::unpushable`,
+    `Core::discard_unpushable_changes` (`FfiDiscardReport`),
+    `Core::unpushable_changes`, and `FfiError::UploadForbidden` (a sync
+    transport returns it for the server's own HTTP 403 `forbidden`).
 
 ### Security
 
+- A connection refuses a jump host that is a saved host of another vault. A
+  synced host of a team vault could name a host of a member's personal vault
+  as its jump host, and connecting would then log in to it with the member's
+  own key or password. Such a host is now refused, in the app and the CLI
+  alike, and saving one was already refused. For callers of the bindings: a
+  jump hop that references a saved host must carry the placeholder login the
+  core writes (a key or stored password of the host's own vault); one that
+  carries a typed password or a system-agent key instead is now refused too.
+- Saving a host that logs in with a personal identity moves the identity's
+  pin only from where the host pointed before the save. When the host had
+  already been pointed elsewhere (a synced change by someone else), the pin
+  stays, connecting is still refused as redirected, and the save says so,
+  instead of the member's next save silently accepting the new address. To
+  accept the new address on purpose, link the identity again in the app, or
+  run `unissh hosts edit <host> --move-pin`, which shows both addresses and
+  asks first (`--yes` to skip the question).
 - A server link may use plain `http://` only to a loopback host, and the check
   now reads the host the way the HTTP stack connects to it. It used to compare
   the start of the text, so links such as `http://localhost.attacker.example`

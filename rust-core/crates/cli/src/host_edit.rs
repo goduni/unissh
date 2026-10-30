@@ -10,19 +10,21 @@
 use clap::{Args, Subcommand, ValueEnum};
 use serde_json::{json, Value};
 use unissh_ffi::{
-    AuthMethod, ConnectionProfile, Core, HopRef, IdentityBinding, JumpHost, ProfileAuth,
-    ProxyConfig, ProxyKind, ProxyPassword, ServerGroup,
+    AuthMethod, ConnectionProfile, Core, FfiError, HopRef, HostGroup, HostRule, HostSave,
+    HostSaveGap, IdentityLink, JumpHost, ProfileAuth, ProxyConfig, ProxyKind, ProxyPassword,
+    ServerGroup,
 };
 use zeroize::Zeroizing;
 
 use crate::device::Device;
 use crate::edit::{
-    self, clearable, columns, commit, list, mint_id, print_json, stored, take, SecretFrom, Shape,
+    self, clearable, columns, commit, list, print_json, stored, syncs, take, SecretFrom, Shape,
     Switch, VaultArg,
 };
 use crate::failure::{Failure, Res};
 use crate::hosts::{self, find_named, Group, Host};
 use crate::secrets::{self, IdentityEntry, Key, Password};
+use crate::server;
 use crate::snippet_edit;
 use crate::tty::{confirm, one_line};
 
@@ -266,6 +268,14 @@ pub enum HostsAction {
         fields: HostFields,
         #[command(flatten)]
         vault: VaultArg,
+        /// Move your identity's pin to where the host points now, after the
+        /// host was pointed elsewhere (a save otherwise keeps the old pin and
+        /// connecting is refused as redirected). Asks first.
+        #[arg(long)]
+        move_pin: bool,
+        /// Do not ask before moving the pin.
+        #[arg(long, requires = "move_pin")]
+        yes: bool,
     },
     /// Delete a host.
     Rm {
@@ -310,7 +320,8 @@ pub fn hosts(device: &Device, offline: bool, action: HostsAction) -> Res<()> {
             }
             let label = label.trim().to_owned();
             let profile = ConnectionProfile {
-                profile_id: mint_id(&label, "host"),
+                // The core mints the id when it saves the new host.
+                profile_id: String::new(),
                 uid: String::new(),
                 label: label.clone(),
                 host: at.host,
@@ -332,6 +343,8 @@ pub fn hosts(device: &Device, offline: bool, action: HostsAction) -> Res<()> {
                 vault_name: &target.name,
                 all: &all,
                 creating: true,
+                move_pin: false,
+                yes: false,
             };
             let done = format!(
                 "Added host {} to vault \"{}\"",
@@ -346,8 +359,10 @@ pub fn hosts(device: &Device, offline: bool, action: HostsAction) -> Res<()> {
             address,
             fields,
             vault,
+            move_pin,
+            yes,
         } => {
-            if label.is_none() && address.is_none() && !fields.given() {
+            if label.is_none() && address.is_none() && !fields.given() && !move_pin {
                 return Err(Failure::msg(
                     "nothing to change: say what with flags (`unissh hosts edit --help`)",
                 ));
@@ -374,6 +389,8 @@ pub fn hosts(device: &Device, offline: bool, action: HostsAction) -> Res<()> {
                 vault_name: &found.vault_name,
                 all: &all,
                 creating: false,
+                move_pin,
+                yes,
             };
             save(device, offline, &place, profile, &fields, &done)
         }
@@ -418,36 +435,32 @@ struct Place<'a> {
     vault_name: &'a str,
     all: &'a [Host],
     creating: bool,
-}
-
-/// The identity a personal host is linked to: the vault the link is kept in
-/// (the identity's) and the identity there.
-struct Link {
-    vault_id: String,
-    vault_name: String,
-    identity_id: String,
+    /// `--move-pin`, and its `--yes`.
+    move_pin: bool,
+    yes: bool,
 }
 
 /// What a save writes besides the host itself.
 #[derive(Default)]
 struct Pending {
-    /// A password typed for the host, to store under this id first.
-    new_password: Option<(String, Zeroizing<String>)>,
+    /// A password typed for the host, stored with it as a vault secret.
+    new_password: Option<Zeroizing<String>>,
     /// The personal identity to link.
     identity: Option<IdentityEntry>,
     /// The group to put it in (`Some(None)`: out of every group).
     group: Option<Option<String>>,
 }
 
-/// Applies `fields` to `profile`, checks it the way the app's editor does,
-/// and writes it with what goes with it: a new password, an identity link,
-/// its group. Then sends it all to the server and says `done`.
+/// Applies `fields` to `profile` and saves it through the core's one
+/// host-save path ([`Core::save_host`], the app's too): the rules every host
+/// keeps, a new password, an identity link, its group. Then sends it all to
+/// the server and says `done`.
 ///
-/// Everything that is looked up or asked comes first, so a mistake stores
-/// nothing. A new password is stored right before the host (and removed
-/// again if the host cannot be). Once the host is saved, a link or group
-/// that fails does not undo it: the command says what is missing, still
-/// syncs, and fails.
+/// Everything that is looked up or asked comes first, and the core writes
+/// the password, the host and its group together, so a mistake stores
+/// nothing. Once the host is saved, a link that fails (or an identity pin
+/// the save had to keep) does not undo it: the command says what is missing,
+/// still syncs, and fails.
 fn save(
     device: &Device,
     offline: bool,
@@ -462,80 +475,59 @@ fn save(
     apply_login(core, vault_id, &mut profile, fields, &mut pending)?;
     apply_route(core, vault_id, &mut profile, fields, place.all)?;
     apply_rest(core, vault_id, &mut profile, fields, &mut pending)?;
-    validate(&profile)?;
     let personal = matches!(profile.auth, ProfileAuth::Personal);
-    // As the app's editor: saving a personal host (re)pins the identity linked
-    // to it — the one given, else the one already linked — to where it now
-    // points.
-    let link = match pending.identity.take() {
-        Some(entry) => Some(Link {
+    let label = one_line(profile.label.trim());
+    let move_identity_pin = place.move_pin && pin_move_confirmed(core, place, &profile, &label)?;
+    let group = match pending.group.take() {
+        None => HostGroup::Unchanged,
+        Some(None) => HostGroup::Ungrouped,
+        Some(Some(group_id)) => HostGroup::Existing { group_id },
+    };
+    let request = HostSave {
+        profile,
+        new_password: pending.new_password.take(),
+        group,
+        identity: pending.identity.take().map(|entry| IdentityLink {
             vault_id: entry.vault_id,
-            vault_name: entry.vault_name,
             identity_id: entry.identity.identity_id,
         }),
-        None if personal && !place.creating => linked_identity(core, vault_id, &profile)?,
-        None => None,
+        move_identity_pin,
     };
-    let group = pending.group.take();
+    let result = core.save_host(vault_id, request);
+    if let Err(FfiError::InvalidHost { rule }) = &result {
+        return Err(Failure::msg(refusal(*rule)));
+    }
+    let saved = stored(vault_name, result)?;
 
-    let new_password = match pending.new_password.take() {
-        Some((id, password)) => {
-            stored(
-                vault_name,
-                core.save_password(vault_id.to_owned(), id.clone(), (*password).clone()),
-            )?;
-            Some(id)
-        }
-        None => None,
-    };
-    if let Err(e) = stored(
-        vault_name,
-        core.save_connection(vault_id.to_owned(), profile.clone()),
-    ) {
-        return Err(match new_password {
-            Some(id) => unstore_password(core, vault_id, &id, e),
-            None => e,
-        });
+    // The identity's binding lives in its own vault, which changed too.
+    // The host is written: an error telling where it syncs must not stop it
+    // being sent.
+    let cloud = syncs_or_send(core, vault_id)
+        || saved
+            .binding_vault_id
+            .as_deref()
+            .is_some_and(|binding_vault| syncs_or_send(core, binding_vault));
+    let mut changed_vaults = vec![vault_id];
+    if let Some(binding_vault) = saved.binding_vault_id.as_deref() {
+        changed_vaults.push(binding_vault);
     }
-
-    let mut missing = Vec::new();
-    if personal {
-        if let Some(link) = &link {
-            if let Err(e) = link_identity(core, vault_id, &profile, link) {
-                missing.push(format!("your identity is not linked to it: {e}"));
-            }
-        }
-    }
-    if place.creating || group.is_some() {
-        if let Err(e) = place_in_group(
-            core,
-            vault_id,
-            vault_name,
-            &profile.profile_id,
-            group.flatten().as_deref(),
-        ) {
-            missing.push(format!("its group is not set: {e}"));
-        }
-    }
-    let pushed = commit(device, vault_id, offline, done);
-    let label = one_line(&profile.label);
-    if !missing.is_empty() {
-        for what in &missing {
-            eprintln!("unissh: saved host {label}, but {what}");
+    let pushed = server::push_after_write(device, &changed_vaults, cloud, offline, done);
+    if !saved.unfinished.is_empty() {
+        for gap in &saved.unfinished {
+            eprintln!("unissh: saved host {label}, but {}", missing(gap, &label));
         }
         pushed?;
         let again = if place.creating {
-            "do not run `unissh hosts add` again (that adds a second host); "
+            " (do not run `unissh hosts add` again: that adds a second host)"
         } else {
             ""
         };
         return Err(Failure::msg(format!(
-            "host {label} is saved, but not all of it: {again}finish it with \
-             `unissh hosts edit \"{label}\"`"
+            "host {label} is saved, but not all of it: see above{again}"
         )));
     }
     pushed?;
-    if personal && link.is_none() {
+    if personal && !saved.identity_linked {
         eprintln!(
             "unissh: {label} logs in with each member's personal identity; link yours with \
              `unissh hosts edit \"{label}\" --identity <name>`"
@@ -544,19 +536,128 @@ fn save(
     Ok(())
 }
 
-/// After the host `failed` to save: removes the password stored for it just
-/// before, so no orphan is left, and says how that went. The failure keeps
-/// its exit status and server code; only its message grows.
-fn unstore_password(core: &Core, vault_id: &str, id: &str, mut failed: Failure) -> Failure {
-    let outcome = match core.delete_item(vault_id.to_owned(), id.to_owned()) {
-        Ok(()) => "the password stored for it was removed again".to_owned(),
-        Err(e) => format!(
-            "the password stored for it could not be removed ({e}): \
-             delete it with `unissh secrets rm \"{id}\"`"
-        ),
+/// Whether vault `vault_id` syncs; when that cannot be told, says so and
+/// answers yes, so a change already written is still sent.
+fn syncs_or_send(core: &Core, vault_id: &str) -> bool {
+    syncs(core, vault_id).unwrap_or_else(|e| {
+        eprintln!(
+            "unissh: cannot tell whether vault {} syncs ({}); sending the change anyway",
+            one_line(vault_id),
+            one_line(&e.message)
+        );
+        true
+    })
+}
+
+/// For `--move-pin`: says where the identity linked to the host is pinned
+/// and where the save moves it, and asks. Whether there is a pin to move
+/// (none when it already names where the host points).
+fn pin_move_confirmed(
+    core: &Core,
+    place: &Place<'_>,
+    profile: &ConnectionProfile,
+    label: &str,
+) -> Res<bool> {
+    if !matches!(profile.auth, ProfileAuth::Personal) {
+        return Err(Failure::msg(format!(
+            "{label} does not log in with a personal identity: there is no pin to move"
+        )));
+    }
+    let Some((binding_vault, binding)) = core.list_vaults()?.into_iter().find_map(|v| {
+        core.get_binding(
+            v.vault_id.clone(),
+            place.vault_id.to_owned(),
+            profile.uid.clone(),
+        )
+        .ok()
+        .flatten()
+        .map(|b| (v.vault_id, b))
+    }) else {
+        return Err(Failure::msg(format!(
+            "no identity is linked to {label}: link one with \
+             `unissh hosts edit \"{label}\" --identity <name>`"
+        )));
     };
-    failed.message = format!("{}; {outcome}", failed.message);
-    failed
+    let now = core.personal_destination(
+        profile.host.clone(),
+        profile.port,
+        profile.username_template.clone(),
+        profile.jumps.clone(),
+        profile.proxy.clone(),
+    );
+    if binding.destination_pin == now {
+        return Ok(false);
+    }
+    let name = core
+        .list_identities(binding_vault)
+        .ok()
+        .and_then(|ids| {
+            ids.into_iter()
+                .find(|i| i.identity_id == binding.identity_item_id)
+        })
+        .map_or_else(|| binding.identity_item_id.clone(), |i| i.label);
+    confirm(
+        place.yes,
+        &pin_move_warning(&name, &binding.destination_pin, &now),
+    )?;
+    Ok(true)
+}
+
+/// What `--move-pin` asks before it moves the pin.
+fn pin_move_warning(identity: &str, pinned: &str, now: &str) -> String {
+    format!(
+        "Identity {} is pinned to {}; this moves it to {}. Your identity will then log in \
+         wherever the host now points.\n",
+        one_line(identity),
+        one_line(pinned),
+        one_line(now)
+    )
+}
+
+/// What a save left undone, and how to finish it.
+fn missing(gap: &HostSaveGap, label: &str) -> String {
+    match gap {
+        HostSaveGap::IdentityNotLinked { message } => format!(
+            "your identity is not linked to it ({}): link it with \
+             `unissh hosts edit \"{label}\" --identity <name>`",
+            one_line(message)
+        ),
+        HostSaveGap::IdentityPinKept { pinned, .. } => format!(
+            "your identity is still pinned to {}, where the host pointed when it was \
+             linked: it was pointed elsewhere before this save, so connecting with your \
+             identity is refused as redirected. If the new address is right, move the pin \
+             with `unissh hosts edit \"{label}\" --move-pin`",
+            one_line(pinned)
+        ),
+    }
+}
+
+/// A host rule the core refused the save for, with the flag that fixes it
+/// where there is one.
+fn refusal(rule: HostRule) -> String {
+    let hint = match rule {
+        HostRule::UserRequired => ": user@host, or --user",
+        HostRule::HopOtherVault => " (or give the jump host as user@host)",
+        HostRule::HopNotFound => {
+            " (remove the jump hosts with --no-jump, or name a saved host that works with --jump <host>)"
+        }
+        HostRule::HopNoCredential => {
+            " (remove the jump hosts with --no-jump, name a saved host that logs in with a key, \
+             a stored password or the ssh-agent with --jump <host>, or give the jump host as \
+             user@host with --jump-key)"
+        }
+        HostRule::IdentityNeedsPersonalLogin => " (--identity goes with --auth personal)",
+        HostRule::LabelRequired
+        | HostRule::AddressRequired
+        | HostRule::HopAddressRequired
+        | HostRule::HopSelf
+        | HostRule::NewPasswordNeedsPasswordLogin
+        | HostRule::NewPasswordEmpty
+        | HostRule::GroupNotFound
+        | HostRule::GroupLabelRequired
+        | HostRule::IdentityNotFound => "",
+    };
+    format!("{rule}{hint}")
 }
 
 /// The login a host's flags ask for: `--auth`, or what `--key`,
@@ -607,11 +708,8 @@ fn apply_login(
                 "--username-template is for a personal login (--auth personal)",
             ));
         }
+        // The core keeps it for a personal login only.
         profile.username_template = clearable(template);
-    }
-    // As in the app: the template shapes a personal login only.
-    if !personal {
-        profile.username_template = None;
     }
     Ok(())
 }
@@ -638,15 +736,15 @@ fn login(
                 password_item_id: secrets::find_in::<Password>(core, vault_id, item)?,
             },
             None => {
-                let id = mint_id(&format!("{} pw", profile.label), "host-pw");
                 let password = f.new_password.read(
                     "the host's password",
                     "Password for the host: ",
                     Shape::New,
                 )?;
-                pending.new_password = Some((id.clone(), password));
+                pending.new_password = Some(password);
+                // The core stores the password and puts its id here.
                 ProfileAuth::VaultPassword {
-                    password_item_id: id,
+                    password_item_id: String::new(),
                 }
             }
         },
@@ -730,15 +828,7 @@ fn apply_route(
         let chain = f
             .jumps
             .iter()
-            .map(|spec| {
-                jump(
-                    spec,
-                    vault_id,
-                    &profile.profile_id,
-                    all,
-                    inline_auth.as_ref(),
-                )
-            })
+            .map(|spec| jump(spec, vault_id, all, inline_auth.as_ref()))
             .collect::<Res<Vec<_>>>()?;
         profile.jumps = chain;
     }
@@ -775,12 +865,13 @@ fn apply_route(
 }
 
 /// One hop of a jump chain: `user@host[:port]` logs in with `inline_auth`;
-/// anything else names a saved host of the same vault, referenced so its own
-/// settings apply. `editing` is the profile id of the host being saved.
+/// anything else names a saved host, referenced so its own settings apply.
+/// Which saved hosts may be hops (another host of the same vault that logs
+/// in with a key, a stored password or the system ssh-agent) is the core's
+/// rule, checked as it saves.
 fn jump(
     spec: &str,
     vault_id: &str,
-    editing: &str,
     all: &[Host],
     inline_auth: Option<&AuthMethod>,
 ) -> Res<JumpHost> {
@@ -807,13 +898,7 @@ fn jump(
             Err(_) => return Err(e),
         },
     };
-    if let Some(why) = hop_refusal(bastion, vault_id, editing) {
-        return Err(Failure::msg(format!(
-            "{} cannot be a jump host: {why}",
-            one_line(&bastion.profile.label)
-        )));
-    }
-    // The app's shape for a reference hop: the inline fields are ignored.
+    // The core stores a reference hop in its placeholder shape.
     Ok(JumpHost {
         host: String::new(),
         port: 22,
@@ -827,43 +912,6 @@ fn jump(
             profile_uid: bastion.profile.uid.clone(),
         }),
     })
-}
-
-/// Why `bastion` may not be referenced as a hop of host `editing` in vault
-/// `vault_id`, if it may not: the app offers only other saved hosts of the
-/// same vault that have a uid and log in with a key or a stored password,
-/// and the core also takes the system ssh-agent's key for a hop. A host that
-/// asks for its password, or logs in personally, cannot serve as one.
-fn hop_refusal(bastion: &Host, vault_id: &str, editing: &str) -> Option<String> {
-    let p = &bastion.profile;
-    if bastion.vault_id != vault_id {
-        return Some(format!(
-            "it is in vault \"{}\", and a jump host must be in the host's own vault \
-             (or give it as user@host)",
-            one_line(&bastion.vault_name)
-        ));
-    }
-    if p.profile_id == editing {
-        return Some("a host cannot be its own jump host".to_owned());
-    }
-    if p.uid.is_empty() {
-        return Some("it cannot be referenced yet: save it in the app once".to_owned());
-    }
-    match p.auth {
-        ProfileAuth::Key { .. }
-        | ProfileAuth::VaultPassword { .. }
-        | ProfileAuth::SystemAgent { .. } => None,
-        ProfileAuth::PromptPassword => Some(
-            "it asks for its password at every connection; a jump host needs a key, \
-             a stored password or the system ssh-agent"
-                .to_owned(),
-        ),
-        ProfileAuth::Personal => Some(
-            "it logs in with each member's personal identity; a jump host needs a key, \
-             a stored password or the system ssh-agent"
-                .to_owned(),
-        ),
-    }
 }
 
 fn apply_rest(
@@ -905,120 +953,6 @@ fn apply_rest(
     }
     if let Some(forward) = f.agent_forward {
         profile.agent_forward = forward.on();
-    }
-    Ok(())
-}
-
-/// The app editor's rules: a label, an address, and a user unless the login
-/// is personal (the identity names the user then).
-fn validate(p: &ConnectionProfile) -> Res<()> {
-    if p.label.trim().is_empty() {
-        return Err(Failure::msg("a host needs a label"));
-    }
-    if p.host.trim().is_empty() {
-        return Err(Failure::msg("a host needs an address"));
-    }
-    if !matches!(p.auth, ProfileAuth::Personal) && p.user.trim().is_empty() {
-        return Err(Failure::msg(format!(
-            "{} needs a user to log in as: user@host, or --user",
-            one_line(&p.label)
-        )));
-    }
-    Ok(())
-}
-
-/// Links the identity `link` names to the host as the app's editor does: a
-/// binding in the identity's vault, pinned to where the host points now.
-fn link_identity(core: &Core, vault_id: &str, profile: &ConnectionProfile, link: &Link) -> Res<()> {
-    // A new host's uid is minted by the core when it is saved.
-    let profile_uid = if profile.uid.is_empty() {
-        core.get_connection(vault_id.to_owned(), profile.profile_id.clone())?
-            .uid
-    } else {
-        profile.uid.clone()
-    };
-    let destination_pin = core.personal_destination(
-        profile.host.clone(),
-        profile.port,
-        profile.username_template.clone(),
-        profile.jumps.clone(),
-        profile.proxy.clone(),
-    );
-    let existing = core
-        .get_binding(
-            link.vault_id.clone(),
-            vault_id.to_owned(),
-            profile_uid.clone(),
-        )
-        .ok()
-        .flatten();
-    stored(
-        &link.vault_name,
-        core.set_binding(
-            link.vault_id.clone(),
-            IdentityBinding {
-                team_vault_id: vault_id.to_owned(),
-                profile_uid,
-                identity_item_id: link.identity_id.clone(),
-                destination_pin,
-            },
-            existing.is_some(),
-        ),
-    )
-}
-
-/// The identity already linked to an existing host: the first vault with a
-/// binding for it, as the app finds it.
-fn linked_identity(core: &Core, vault_id: &str, profile: &ConnectionProfile) -> Res<Option<Link>> {
-    if profile.uid.is_empty() {
-        return Ok(None);
-    }
-    for vault in core.list_vaults()? {
-        let binding = core
-            .get_binding(
-                vault.vault_id.clone(),
-                vault_id.to_owned(),
-                profile.uid.clone(),
-            )
-            .ok()
-            .flatten();
-        if let Some(binding) = binding {
-            return Ok(Some(Link {
-                vault_id: vault.vault_id,
-                vault_name: vault.name,
-                identity_id: binding.identity_item_id,
-            }));
-        }
-    }
-    Ok(None)
-}
-
-/// Puts host `profile_id` into group `target` and out of every other one: a
-/// host is in one group, as in the app's editor. `None`: in none. The group
-/// it goes into is saved first, so a failure halfway leaves it in two groups
-/// rather than in none.
-fn place_in_group(
-    core: &Core,
-    vault_id: &str,
-    vault_name: &str,
-    profile_id: &str,
-    target: Option<&str>,
-) -> Res<()> {
-    let (wanted, others): (Vec<ServerGroup>, Vec<ServerGroup>) = core
-        .list_groups(vault_id.to_owned())?
-        .into_iter()
-        .partition(|g| target == Some(g.group_id.as_str()));
-    for mut group in wanted {
-        if !group.member_ids.iter().any(|m| m == profile_id) {
-            group.member_ids.push(profile_id.to_owned());
-            stored(vault_name, core.save_group(vault_id.to_owned(), group))?;
-        }
-    }
-    for mut group in others {
-        if group.member_ids.iter().any(|m| m == profile_id) {
-            group.member_ids.retain(|m| m != profile_id);
-            stored(vault_name, core.save_group(vault_id.to_owned(), group))?;
-        }
     }
     Ok(())
 }
@@ -1245,7 +1179,8 @@ pub fn groups(device: &Device, offline: bool, action: GroupsAction) -> Res<()> {
                 Some(_) | None => None,
             };
             let mut group = ServerGroup {
-                group_id: mint_id(&label, "group"),
+                // The core mints the id when it saves the new group.
+                group_id: String::new(),
                 label: label.clone(),
                 member_ids: Vec::new(),
                 parent_id,
@@ -1472,11 +1407,10 @@ fn member_ids(hosts: &[Host], vault_id: &str, names: &[String]) -> Res<Vec<Strin
 #[cfg(test)]
 mod tests {
     use super::{
-        appearance, chosen_auth, hop_refusal, nests_in_itself, parse_address, parse_proxy, Address,
-        AuthKind, COLORS,
+        appearance, chosen_auth, nests_in_itself, parse_address, parse_proxy, pin_move_warning,
+        refusal, Address, AuthKind, COLORS,
     };
-    use crate::hosts::Host;
-    use unissh_ffi::{ConnectionProfile, ProfileAuth, ProxyKind, ServerGroup};
+    use unissh_ffi::{HostRule, ProxyKind, ServerGroup};
 
     fn address(user: Option<&str>, host: &str, port: Option<u16>) -> Address {
         Address {
@@ -1557,54 +1491,26 @@ mod tests {
         assert!(!nests_in_itself(&tree, "c", "a"));
     }
 
-    /// Only another saved host of the same vault, with a uid, that logs in
-    /// with a key, a stored password or the system agent can be a hop.
+    /// A jump host the core refuses (gone, or with nothing to log in with)
+    /// says how to save the host anyway: without jump hosts, or through a
+    /// saved host that works.
     #[test]
-    fn a_jump_host_is_another_credentialed_host_of_the_same_vault() {
-        let host = |vault: &str, id: &str, uid: &str, auth: ProfileAuth| Host {
-            vault_id: vault.to_owned(),
-            vault_name: vault.to_owned(),
-            profile: ConnectionProfile {
-                profile_id: id.to_owned(),
-                uid: uid.to_owned(),
-                label: id.to_owned(),
-                host: "bastion".to_owned(),
-                port: 22,
-                user: "jump".to_owned(),
-                auth,
-                username_template: None,
-                jumps: Vec::new(),
-                proxy: None,
-                tags: Vec::new(),
-                startup_snippet_ids: Vec::new(),
-                record_sessions: false,
-                agent_forward: false,
-                color: None,
-                icon: None,
-            },
-        };
-        let key = || ProfileAuth::Key {
-            key_item_id: "k".to_owned(),
-        };
-        let agent = ProfileAuth::SystemAgent {
-            public_key: "ssh-ed25519 AAAA".to_owned(),
-        };
-        assert!(hop_refusal(&host("v", "b", "u1", key()), "v", "web").is_none());
-        assert!(hop_refusal(&host("v", "b", "u1", agent), "v", "web").is_none());
-        let refused = [
-            host("other", "b", "u1", key()),
-            host("v", "web", "u1", key()),
-            host("v", "b", "", key()),
-            host("v", "b", "u1", ProfileAuth::PromptPassword),
-            host("v", "b", "u1", ProfileAuth::Personal),
-        ];
-        for bastion in &refused {
-            assert!(
-                hop_refusal(bastion, "v", "web").is_some(),
-                "{}",
-                bastion.vault_id
-            );
+    fn a_refused_jump_host_names_the_flags_that_fix_it() {
+        for rule in [HostRule::HopNotFound, HostRule::HopNoCredential] {
+            let said = refusal(rule);
+            assert!(said.starts_with(&rule.to_string()), "{said}");
+            assert!(said.contains("--no-jump"), "{said}");
+            assert!(said.contains("--jump <host>"), "{said}");
         }
+    }
+
+    /// The pin-move question names the identity and both addresses.
+    #[test]
+    fn the_pin_move_question_names_both_addresses() {
+        let said = pin_move_warning("Me", "web.example:22", "new.example:22");
+        assert!(said.contains("Identity Me"), "{said}");
+        assert!(said.contains("pinned to web.example:22"), "{said}");
+        assert!(said.contains("moves it to new.example:22"), "{said}");
     }
 
     /// A colour or icon is one the app offers, in any case; empty clears it.

@@ -671,11 +671,6 @@ const lsTermZoom = (): number => {
   }
 };
 
-/** Slug for a generated group id (matches the host modal's scheme). Non-latin
- *  labels collapse to the fallback; uniqueness comes from the timestamp suffix. */
-const slugify = (s: string): string =>
-  s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "group";
-
 /** Normalize a tag the way the host modal does: trimmed, no leading '#'. */
 const cleanTag = (s: string): string => s.trim().replace(/^#/, "");
 
@@ -1523,7 +1518,15 @@ export const useApp = create<AppStore>((set, get) => ({
       const ids: (string | undefined)[] = targets.length
         ? targets.map((sv) => sv.serverId as string)
         : [undefined];
-      const agg: SyncReport = { applied: 0, skippedStale: 0, conflicts: 0, rejected: 0, pushed: 0, tooLarge: [] };
+      const agg: SyncReport = {
+        applied: 0,
+        skippedStale: 0,
+        conflicts: 0,
+        rejected: 0,
+        pushed: 0,
+        tooLarge: [],
+        unpushable: [],
+      };
       // Isolate per-server failures: one unreachable/erroring server must not abort
       // syncing the others (each cloud vault is bound 1:1 to its own server).
       const errors: string[] = [];
@@ -1531,6 +1534,9 @@ export const useApp = create<AppStore>((set, get) => ({
         try {
           const r = await api.serverSyncNow(id, opts?.retryRefused);
           agg.tooLarge.push(...r.tooLarge);
+          // Tagged with the server it came from: discarding pulls the vault back
+          // from that server, and only from that one.
+          agg.unpushable.push(...r.unpushable.map((u) => ({ ...u, serverId: id })));
           agg.applied += r.applied;
           agg.skippedStale += r.skippedStale;
           agg.conflicts += r.conflicts;
@@ -1763,7 +1769,7 @@ export const useApp = create<AppStore>((set, get) => ({
     const name = label.trim();
     if (!vault || !name) return;
     const group: ServerGroup = {
-      groupId: `${slugify(name)}-${Date.now()}`,
+      groupId: "", // the core mints the new group's id
       label: name,
       memberIds: Array.from(new Set(profileIds)),
       parentId: null,
@@ -1779,7 +1785,7 @@ export const useApp = create<AppStore>((set, get) => ({
     let changed = false;
     for (const h of get().hosts) {
       if (target.has(h.profileId) && !h.tags.includes(tg)) {
-        await api.saveConnection(vault, { ...h, tags: [...h.tags, tg] });
+        await api.saveHost(vault, { ...h, tags: [...h.tags, tg] }, null, { type: "unchanged" }, null);
         changed = true;
       }
     }
@@ -1793,7 +1799,7 @@ export const useApp = create<AppStore>((set, get) => ({
     let changed = false;
     for (const h of get().hosts) {
       if (target.has(h.profileId) && h.tags.includes(tg)) {
-        await api.saveConnection(vault, { ...h, tags: h.tags.filter((x) => x !== tg) });
+        await api.saveHost(vault, { ...h, tags: h.tags.filter((x) => x !== tg) }, null, { type: "unchanged" }, null);
         changed = true;
       }
     }

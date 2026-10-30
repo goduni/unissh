@@ -49,8 +49,8 @@ use unissh_ssh_transport::{
 };
 use unissh_storage::{CachePolicy, MemberRole, Storage, SyncTarget};
 use unissh_sync::{
-    reset_pull_cursor, sync_pull, sync_push, sync_push_vault_data, SyncContext, SyncObject,
-    SyncReport, SyncTransport,
+    reset_pull_cursor, sync_pull, sync_push_as, sync_push_vault_data_as, SyncContext, SyncObject,
+    SyncReport, SyncTransport, UnpushableReason,
 };
 use unissh_vault::{
     member_fingerprint, open_account_payload, pin_and_verify_member, pin_and_verify_vault_anchor,
@@ -60,17 +60,29 @@ use unissh_vault::{
 mod approvals;
 pub mod automation;
 pub mod automation_recording;
+mod host_save;
+mod item_ids;
 mod key_rotation;
+pub mod key_rotation_plan;
+mod key_usage;
 mod password_fill;
+mod shared_vault;
 pub mod snippet_params;
 mod ssh_include;
 mod system_agent;
 mod terminal_workspace;
 
 use approvals::{Approvals, Asker, Connection};
+pub use host_save::{HostGroup, HostRule, HostSave, HostSaveGap, HostSaved, IdentityLink};
+use item_ids::{mint_item_id, refuse_taken};
 pub use key_rotation::KeyRotationLink;
+pub use key_usage::{HostKeyUse, IdentityKeyUse, KeyUsage, KeyUseRole};
 use password_fill::FillGuard;
 pub use password_fill::{FillEvent, FillPromptKind, PasswordFillMode};
+pub use shared_vault::{
+    grouped_fingerprint, normalize_fingerprint, FfiTrustOutcome, FfiVaultTrust, NotHere,
+    SharedVaultInfo, VaultPage,
+};
 pub use system_agent::{SharedAgentKey, SystemAgent};
 pub use unissh_ssh_transport::AgentCaller;
 
@@ -215,9 +227,26 @@ pub enum FfiError {
     /// Object not found.
     #[error("not found")]
     NotFound,
-    /// An instance already exists at this path (guards against overwriting the keyset/DB).
-    #[error("instance already exists")]
+    /// Something already holds the name or id: an instance at this path
+    /// (guards against overwriting the keyset/DB), a vault, or a live item a
+    /// create-only write (`create_ssh_key`, `create_imported_ssh_key`,
+    /// `create_identity`) or a write of another item type would replace.
+    #[error("already exists")]
     AlreadyExists,
+    /// The private key is encrypted and no passphrase was given: ask for it
+    /// and import again.
+    #[error("the private key is passphrase-protected; a passphrase is required")]
+    PassphraseRequired,
+    /// The passphrase given for an encrypted private key is not its passphrase.
+    #[error("incorrect passphrase for the private key")]
+    WrongPassphrase,
+    /// A host save ([`Core::save_host`]) broke one of the rules every saved
+    /// host keeps; nothing was written.
+    #[error("{rule}")]
+    InvalidHost {
+        /// The rule it broke.
+        rule: HostRule,
+    },
     /// The vault is already a cloud vault, so an operation that applies only to a
     /// local vault (the local-to-cloud conversion) does not apply to it.
     #[error("vault is already a cloud vault")]
@@ -249,6 +278,18 @@ pub enum FfiError {
     #[error("the server refused the upload as too large: {msg}")]
     PayloadTooLarge {
         /// What the server (or the proxy in front of it) answered.
+        msg: String,
+    },
+    /// The sync server refused an upload as not permitted (HTTP 403: its
+    /// write policy refused an object — a Viewer's item, an author who is not
+    /// a member at the object's epoch). The server refuses the whole request
+    /// for one object, so a sync transport returns this and the engine splits
+    /// the push to single out the item and leave it out
+    /// ([`FfiSyncReport::unpushable`]). Reaches a caller only for an object the
+    /// push cannot continue without.
+    #[error("the server refused the upload as not permitted: {msg}")]
+    UploadForbidden {
+        /// What the server answered.
         msg: String,
     },
     /// A staged key rotation is already in progress for this key: its live
@@ -1093,9 +1134,10 @@ pub struct JumpHost {
     /// an inline `Password` is allowed only for a direct connection.
     pub auth: AuthMethod,
     /// Host-chain (B2.2): if set, the hop is a REFERENCE to another saved profile
-    /// (by immutable uid, possibly in a DIFFERENT vault); its host/port/user/auth
+    /// (by immutable uid, in the SAME vault as the host); its host/port/user/auth
     /// are resolved at connect time, and the inline fields above are IGNORED. Lets you
-    /// reuse a bastion profile in chains without duplication.
+    /// reuse a bastion profile in chains without duplication. A reference into
+    /// another vault is refused at connect (`InvalidHost{HopOtherVault}`).
     pub hop_ref: Option<HopRef>,
 }
 
@@ -1526,6 +1568,60 @@ pub struct FfiSyncReport {
     /// changes or the upload is retried ([`Core::retry_refused_uploads`]) and
     /// accepted.
     pub too_large: Vec<FfiTooLargeItem>,
+    /// Edits made here that no push can deliver: their author may not write
+    /// the item (a Viewer's edit from before the core refused them), or the
+    /// server refused them as not permitted. They are NOT on the server (the
+    /// rest of the push went through), are listed by every sync until the
+    /// item changes, and are dropped in favour of the server's copy by
+    /// [`Core::discard_unpushable_changes`] (only once a fresh push there
+    /// confirms they still cannot be delivered).
+    pub unpushable: Vec<FfiUnpushableItem>,
+}
+
+/// What [`Core::discard_unpushable_changes`] did.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FfiDiscardReport {
+    /// This account's edits that were dropped: the server's copy replaced
+    /// each, or the item is gone (`removed`).
+    pub dropped: u32,
+    /// Of `dropped`, the items the server holds nothing of: removed.
+    pub removed: u32,
+    /// Other members' items that are no longer sent (kept as they are).
+    pub released: u32,
+    /// What putting back the server's copy of the vault applied.
+    pub restored: FfiSyncReport,
+}
+
+/// Why an edit is in [`FfiSyncReport::unpushable`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum FfiUnpushableReason {
+    /// By the vault's membership as this device verified it, the edit's
+    /// author may not write the vault (a Viewer, or a member since removed).
+    /// The other members would reject it, and this device cannot read it.
+    NotAuthorized,
+    /// The server refused it as not permitted.
+    ServerRefused,
+}
+
+/// An edit no push can deliver (see [`FfiSyncReport::unpushable`]). Open
+/// identifiers only, like [`FfiTooLargeItem`].
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct FfiUnpushableItem {
+    /// The item's vault, as `list_vaults` names it.
+    pub vault_id: String,
+    /// That vault's name (empty when it cannot be read).
+    pub vault_name: String,
+    /// The item's id.
+    pub item_id: String,
+    /// The item's type (the core's `item_type` value).
+    pub item_type: u32,
+    /// The version left out (a later edit of the item is a new version).
+    pub version: u64,
+    /// Whether this account made the edit: only those can be discarded
+    /// ([`Core::discard_unpushable_changes`]).
+    pub mine: bool,
+    /// Why it cannot be pushed.
+    pub reason: FfiUnpushableReason,
 }
 
 /// An item the sync server refuses as too large (see
@@ -2244,6 +2340,64 @@ impl Core {
         })
     }
 
+    /// **Inspects a vault shared with this account** before its owner is
+    /// trusted (share-accept, A0). `objects` are the vault's raw delta blobs as
+    /// the server serves them (`GET /v1/sync/delta?vault=<id>`); only its
+    /// membership manifests and the grants to this account are read. The
+    /// whole manifest chain is verified in memory against the genesis author
+    /// as the candidate owner, and the latest epoch must hold a grant this
+    /// account can open.
+    ///
+    /// Returns the key that created the vault and its fingerprint — whether
+    /// it is the teammate's is what the user checks with them out of band;
+    /// the server's word is never trusted — and this account's role. `None`:
+    /// this account created the vault, and it needs no trust (as
+    /// [`Core::inspect_shared_vault_paged`]). Writes nothing: trusting is
+    /// [`Core::trust_shared_vault`], then a targeted pull of the vault (the
+    /// earlier rejection moved the pull cursor past its objects). Refused for
+    /// a broken chain or no grant. Requires unlock.
+    pub fn inspect_shared_vault(
+        &self,
+        vault_id: String,
+        objects: Vec<Vec<u8>>,
+    ) -> Result<Option<SharedVaultInfo>, FfiError> {
+        shared_vault::inspect_objects(self, &vault_id, objects)
+    }
+
+    /// **Trusts the owner of a vault shared with this account**: inspects
+    /// `objects` (as [`Core::inspect_shared_vault`]), compares the
+    /// fingerprint and pins the owner in one step (see
+    /// [`Core::trust_shared_vault_paged`]: `expected_fingerprint` is always
+    /// required, typed in or the one displayed). Pull the vault after
+    /// [`FfiTrustOutcome::Trusted`] or [`FfiTrustOutcome::AlreadyTrusted`].
+    /// Requires unlock.
+    pub fn trust_shared_vault(
+        &self,
+        vault_id: String,
+        objects: Vec<Vec<u8>>,
+        expected_fingerprint: String,
+    ) -> Result<FfiTrustOutcome, FfiError> {
+        shared_vault::trust_objects(self, &vault_id, objects, &expected_fingerprint)
+    }
+
+    /// This account's own fingerprint (`member_fingerprint` of its Ed25519
+    /// key): what a teammate compares before trusting a vault this account
+    /// shared with them. Unlocked, from the keyset in memory; locked, from
+    /// the public half of the keyset file, so it can be shown without the
+    /// master password. Not a secret.
+    pub fn own_fingerprint(&self) -> Result<String, FfiError> {
+        let unlocked = self
+            .locked_state()
+            .as_ref()
+            .map(|state| member_fingerprint(&state.keyset.signing.verifying.to_bytes()));
+        if let Some(fingerprint) = unlocked {
+            return Ok(fingerprint);
+        }
+        let bytes = std::fs::read(&self.keyset_path).map_err(FfiError::other)?;
+        let enc = EncryptedKeyset::from_bytes(&bytes).map_err(map_keychain_err)?;
+        Ok(member_fingerprint(&enc.ed25519_public))
+    }
+
     /// Assigns the account's PERSONAL vault (A3.2): the pointer is stored in per-account
     /// state (a self-sealed payload, synced to the account's devices). `vault_id`
     /// is the hex of a cloud vault OR an arbitrary UTF-8 id of a local (offline) vault:
@@ -2265,19 +2419,7 @@ impl Core {
             // resolve_vid accepts both a local (UTF-8) and a cloud (hex) id; decode_vid
             // was hex-only and rejected local vaults.
             let vid = resolve_vid(&state.storage, &vault_id);
-            let owner_ed = state.keyset.signing.verifying.to_bytes().to_vec();
-            let members = match state
-                .storage
-                .latest_membership_epoch(&vid)
-                .map_err(FfiError::other)?
-            {
-                Some(latest) => verify_chain_to_epoch(&state.storage, &vid, latest, &owner_ed)
-                    .map_err(map_vault_err)?
-                    .members()
-                    .len(),
-                None => 0, // a local / not-yet-shared vault — no members
-            };
-            if members > 1 {
+            if vault_member_count(state, &vid)? > 1 {
                 return Err(FfiError::other(
                     "cannot use a shared (multi-member) vault as your personal vault",
                 ));
@@ -2949,7 +3091,10 @@ impl Core {
     /// when the push went through.
     ///
     /// An item the server refuses as too large does not fail the sync: the rest
-    /// is pushed and the item is named in [`FfiSyncReport::too_large`].
+    /// is pushed and the item is named in [`FfiSyncReport::too_large`]. Nor does
+    /// an edit no member would accept (its author may not write the vault) or
+    /// the server refuses as not permitted: it is left out and named in
+    /// [`FfiSyncReport::unpushable`].
     ///
     /// `mode` is [`FfiSyncMode::Full`] for all of the above;
     /// [`FfiSyncMode::PushOnly`] pushes the vault data alone — no account state,
@@ -2972,7 +3117,7 @@ impl Core {
                 push_err: Mutex::new(None),
             };
 
-            let push = push_to_tenant(state, &mut adapter, &tenant_b64, mode);
+            let push = push_to_tenant(state, &mut adapter, &ctx, mode);
             let pull = match mode {
                 FfiSyncMode::Full => {
                     let pull = sync_pull(&mut adapter, &state.storage, &ctx);
@@ -2986,7 +3131,7 @@ impl Core {
                 }
                 FfiSyncMode::PushOnly => Ok(SyncReport::default()),
             };
-            let (pushed, too_large) = push?;
+            let (pushed, too_large, unpushable) = push?;
             let pull = pull?;
 
             Ok(FfiSyncReport {
@@ -2996,6 +3141,7 @@ impl Core {
                 rejected: count_u32(pull.rejected.len()),
                 pushed,
                 too_large,
+                unpushable,
             })
         })
     }
@@ -3048,7 +3194,101 @@ impl Core {
                 rejected: count_u32(report.rejected.len()),
                 pushed: 0,
                 too_large: Vec::new(),
+                unpushable: Vec::new(),
             })
+        })
+    }
+
+    /// **Drops this account's edits in `vault_id` that no push can deliver
+    /// and puts back the server's copy** (#166): typically a Viewer's edit
+    /// made before the core refused them, which the server refuses and which,
+    /// at a higher version than the server's copy, would otherwise outrank it
+    /// on every pull. `server_copy` is the vault's objects as the server has
+    /// them (`GET /v1/sync/delta?vault=<id>`, every page), fetched by the
+    /// caller BEFORE this call: a fetch that fails means nothing is dropped.
+    ///
+    /// Nothing is dropped on an old word. The remembered server refusals are
+    /// forgotten and the vault data is pushed again through `transport` to
+    /// `tenant_b64` first, so an edit is dropped only when that push confirms
+    /// it cannot be delivered (the local authorship check, or a fresh 403 for
+    /// the item); one that goes through now is kept. A push that fails — a
+    /// request-level refusal included — fails this call and nothing changes.
+    ///
+    /// Then, in one transaction (`unissh_sync::discard_unpushable`): only the
+    /// confirmed rows of this account are deleted, past the version
+    /// monotonicity; their archived versions above the server's copy go too;
+    /// other members' unsendable items in the vault stop being sent (dirty
+    /// flag cleared, row kept); and `server_copy` is applied with
+    /// verify-before-apply, as `apply_pulled_vault` does, without moving the
+    /// pull cursor. An item the server never had (one created here) is
+    /// simply gone. Every other item stays as it is. The local edits are
+    /// lost; that is the point, and the caller confirms it with the user
+    /// first. Requires unlock.
+    pub fn discard_unpushable_changes(
+        &self,
+        transport: Arc<dyn FfiSyncTransport>,
+        tenant_b64: String,
+        vault_id: String,
+        server_copy: Vec<Vec<u8>>,
+    ) -> Result<FfiDiscardReport, FfiError> {
+        self.with_state_mut(|state| {
+            let ctx = SyncContext {
+                genesis_owner: state.keyset.signing.verifying.to_bytes().to_vec(),
+                tenant: tenant_b64.as_bytes().to_vec(),
+            };
+            let mut adapter = ForeignTransportAdapter {
+                inner: transport,
+                push_err: Mutex::new(None),
+            };
+            let vid = resolve_vid(&state.storage, &vault_id);
+            let done = unissh_sync::discard_unpushable(
+                &mut adapter,
+                &state.storage,
+                &ctx,
+                &vid,
+                &server_copy,
+            )
+            .map_err(|e| push_failure(&adapter, e))?;
+            for u in &done.dropped {
+                let item_id = String::from_utf8_lossy(&u.item_id);
+                state.agent.remove(&agent_key_id(&vault_id, &item_id));
+                system_agent::forget(state, &vault_id, Some(&*item_id));
+            }
+            if !done.dropped.is_empty() || done.pulled.applied > 0 {
+                evict_replaced_agent_keys(state);
+            }
+            Ok(FfiDiscardReport {
+                dropped: count_u32(done.dropped.len()),
+                removed: count_u32(done.removed.len()),
+                released: count_u32(done.released.len()),
+                restored: FfiSyncReport {
+                    applied: done.pulled.applied,
+                    skipped_stale: done.pulled.skipped_stale,
+                    conflicts: count_u32(done.pulled.conflicts.len()),
+                    rejected: count_u32(done.pulled.rejected.len()),
+                    pushed: 0,
+                    too_large: Vec::new(),
+                    unpushable: Vec::new(),
+                },
+            })
+        })
+    }
+
+    /// The edits no push delivers as of now, in every vault bound to a server
+    /// ([`FfiSyncReport::unpushable`] without a sync): the remembered server
+    /// refusals still current, and the edits whose author may not write them
+    /// by this device's check. Reads only, makes no request — what a caller
+    /// takes before an edit, to tell the edit from the ones already left out
+    /// in the report of the sync that follows it. Requires unlock.
+    pub fn unpushable_changes(&self) -> Result<Vec<FfiUnpushableItem>, FfiError> {
+        self.with_state(|state| {
+            let own = state.keyset.signing.verifying.to_bytes().to_vec();
+            let items =
+                unissh_sync::unpushable_items(&state.storage, &own).map_err(map_sync_err)?;
+            Ok(items
+                .iter()
+                .map(|u| ffi_unpushable(state, u, &own))
+                .collect())
         })
     }
 
@@ -3069,7 +3309,8 @@ impl Core {
     /// alive on the server. The local tombstone is newer (the version grew on deletion) →
     /// LWW prevents the pull from overwriting it with the server copy, and `list_vaults`
     /// hides it: the vault is "stuck deleted" on this device. We physically erase its
-    /// local record (`purge_vault_data`) and reset the tenant's pull cursor →
+    /// local record (`purge_vault_data_keeping_trust`: a teammate's vault keeps its
+    /// pinned owner) and reset the tenant's pull cursor →
     /// the next `sync_now` re-pulls the live server copy anew. Vaults deleted
     /// on the server too will become tombstones again after re-pull (they won't resurrect — which is correct).
     /// We touch only tombstoned vaults bound to THIS tenant or unbound
@@ -3087,9 +3328,11 @@ impl Core {
                 if !v.sync_tenant.is_empty() && v.sync_tenant != tenant {
                     continue; // bound to ANOTHER server — not ours, don't touch
                 }
+                // The owner the user confirmed for a teammate's vault stays
+                // pinned: the vault comes back under that owner.
                 state
                     .storage
-                    .purge_vault_data(&v.vault_id)
+                    .purge_vault_data_keeping_trust(&v.vault_id)
                     .map_err(FfiError::other)?;
                 state.vault_names.remove(&v.vault_id);
                 restored += 1;
@@ -3134,23 +3377,7 @@ impl Core {
 
     /// Deletes an item (tombstone) and, if it was an SSH key in the agent, unloads it.
     pub fn delete_item(&self, vault_id: String, item_id: String) -> Result<(), FfiError> {
-        self.with_state_mut(|state| {
-            let vault = Vault::open(
-                &state.storage,
-                &state.keyset,
-                &resolve_vid(&state.storage, &vault_id),
-            )
-            .map_err(FfiError::other)?;
-            vault
-                .delete_item(item_id.as_bytes())
-                .map_err(map_vault_err)?;
-            // A4a namespace: the agent stores the key under agent_key_id(vault_id,item_id), not
-            // under the bare item_id — it must be unloaded with the same key, otherwise remove is a no-op and
-            // a revoked/rotated private key stays alive in the agent until the end of the session.
-            state.agent.remove(&agent_key_id(&vault_id, &item_id));
-            system_agent::forget(state, &vault_id, Some(&item_id));
-            Ok(())
-        })
+        self.with_state_mut(|state| remove_item(state, &vault_id, &item_id))
     }
 
     /// Saves/updates a server password as a vault item (type "password").
@@ -3165,24 +3392,7 @@ impl Core {
     ) -> Result<(), FfiError> {
         // The password goes into Zeroizing immediately — zeroized on exit.
         let password = Zeroizing::new(password);
-        self.with_state_mut(|state| {
-            ensure_item_type(
-                &state.storage,
-                &vault_id,
-                item_id.as_bytes(),
-                ITEM_TYPE_PASSWORD,
-            )?;
-            let vault = Vault::open(
-                &state.storage,
-                &state.keyset,
-                &resolve_vid(&state.storage, &vault_id),
-            )
-            .map_err(FfiError::other)?;
-            vault
-                .put_item_keep_history(item_id.as_bytes(), ITEM_TYPE_PASSWORD, password.as_bytes())
-                .map_err(map_vault_err)?;
-            Ok(())
-        })
+        self.with_state_mut(|state| put_password(state, &vault_id, &item_id, &password))
     }
 
     /// Returns a server password (reveal: display/copy in the UI on an explicit
@@ -3480,26 +3690,30 @@ impl Core {
 
     /// Generates an Ed25519 SSH key **in the core**, stores the private key encrypted in
     /// the vault and returns the **public** key (OpenSSH). The private key is not handed out.
+    ///
+    /// Creates the key or REPLACES the material of the key already at `item_id`
+    /// (`AlreadyExists` only for a live item of another type). To make a new key
+    /// without ever replacing one, use [`Self::create_ssh_key`].
     pub fn generate_ssh_key(&self, vault_id: String, item_id: String) -> Result<String, FfiError> {
-        self.with_state_mut(|state| {
-            let vault = Vault::open(
-                &state.storage,
-                &state.keyset,
-                &resolve_vid(&state.storage, &vault_id),
-            )
-            .map_err(FfiError::other)?;
-            let public = store_new_ssh_key(&state.storage, &vault, &vault_id, &item_id)?;
-            // The key material was replaced under the same id → unload the previous private key from
-            // the agent (namespaced), otherwise whatever signs straight from the agent by id — a
-            // forwarded agent in a live session — keeps signing with the OLD key. (A connect
-            // reloads the key from the item anyway, see load_key_into_agent.)
-            state.agent.remove(&agent_key_id(&vault_id, &item_id));
-            Ok(public)
-        })
+        self.store_generated_key(&vault_id, &item_id, false)
+    }
+
+    /// Generates a NEW Ed25519 SSH key, like [`Self::generate_ssh_key`], but
+    /// never replaces anything: [`FfiError::AlreadyExists`] when a live item of
+    /// any type already holds `item_id` (checked under the same lock as the
+    /// write, so no pull lands in between). The create path of the app and the
+    /// CLI.
+    pub fn create_ssh_key(&self, vault_id: String, item_id: String) -> Result<String, FfiError> {
+        self.store_generated_key(&vault_id, &item_id, true)
     }
 
     /// Imports an existing OpenSSH private key into the vault. Returns the public
     /// key. (Private-key input from the UI is allowed; it is not handed back.)
+    ///
+    /// An encrypted key without `passphrase` is [`FfiError::PassphraseRequired`]
+    /// (ask for it and call again), a wrong one [`FfiError::WrongPassphrase`].
+    /// Creates the key or REPLACES the material of the key already at `item_id`;
+    /// [`Self::create_imported_ssh_key`] is the create-only twin.
     pub fn import_ssh_key(
         &self,
         vault_id: String,
@@ -3507,51 +3721,20 @@ impl Core {
         openssh_private: String,
         passphrase: Option<String>,
     ) -> Result<String, FfiError> {
-        // We keep the private key and password in Zeroizing — zeroized on exit.
-        let openssh_private = Zeroizing::new(openssh_private);
-        let passphrase = passphrase.map(Zeroizing::new);
-        self.with_state_mut(|state| {
-            // We accept not only the OpenSSH container but also classic PEM
-            // (PKCS#1 `BEGIN RSA PRIVATE KEY`, SEC1 `BEGIN EC PRIVATE KEY`,
-            // PKCS#8 `BEGIN PRIVATE KEY`, including password-encrypted ones): we normalize to
-            // a canonical OpenSSH private key. Without a password for an encrypted key
-            // an `Encrypted` error is returned — the UI will prompt for a password and retry.
-            let normalized = unissh_ssh_agent::normalize_private_key_with_passphrase(
-                &openssh_private,
-                passphrase.as_deref().map(String::as_str),
-            )
-            .map_err(FfiError::ssh)?;
-            // validate and extract the public key via a temporary agent
-            let mut tmp = InMemoryAgent::new();
-            tmp.add_from_openssh(b"tmp".to_vec(), normalized.as_bytes())
-                .map_err(FfiError::ssh)?;
-            let public = tmp
-                .public_key(b"tmp")
-                .ok_or_else(|| FfiError::ssh("no public key"))?
-                .to_openssh()
-                .map_err(FfiError::ssh)?;
-            ensure_item_type(
-                &state.storage,
-                &vault_id,
-                item_id.as_bytes(),
-                ITEM_TYPE_SSH_KEY,
-            )?;
-            let vault = Vault::open(
-                &state.storage,
-                &state.keyset,
-                &resolve_vid(&state.storage, &vault_id),
-            )
-            .map_err(FfiError::other)?;
-            vault
-                .put_item(item_id.as_bytes(), ITEM_TYPE_SSH_KEY, normalized.as_bytes())
-                .map_err(map_vault_err)?;
-            // The key material was replaced under the same id → unload the previous private key from
-            // the agent (namespaced), otherwise whatever signs straight from the agent by id — a
-            // forwarded agent in a live session — keeps signing with the OLD key. (A connect
-            // reloads the key from the item anyway, see load_key_into_agent.)
-            state.agent.remove(&agent_key_id(&vault_id, &item_id));
-            Ok(public)
-        })
+        self.store_imported_key(&vault_id, &item_id, openssh_private, passphrase, false)
+    }
+
+    /// Imports a private key as a NEW key, like [`Self::import_ssh_key`], but
+    /// never replaces anything: [`FfiError::AlreadyExists`] when a live item of
+    /// any type already holds `item_id`.
+    pub fn create_imported_ssh_key(
+        &self,
+        vault_id: String,
+        item_id: String,
+        openssh_private: String,
+        passphrase: Option<String>,
+    ) -> Result<String, FfiError> {
+        self.store_imported_key(&vault_id, &item_id, openssh_private, passphrase, true)
     }
 
     /// Attaches an OpenSSH user certificate to the key `key_item_id` (stored as
@@ -4504,18 +4687,24 @@ impl Core {
     /// carries hostnames, ticket ids and the occasional token, and keeping a
     /// library of them in plaintext beside an encrypted vault would be an odd
     /// place to stop.
-    pub fn save_snippet(&self, vault_id: String, snippet: Snippet) -> Result<(), FfiError> {
-        if snippet.snippet_id.is_empty() {
-            return Err(FfiError::other("snippet_id must not be empty"));
-        }
+    ///
+    /// An empty `snippet_id` saves a NEW snippet under an id the core mints
+    /// from its label (`slug(label)-<millis>`, see `item_ids`). Returns the
+    /// snippet's id.
+    pub fn save_snippet(&self, vault_id: String, snippet: Snippet) -> Result<String, FfiError> {
         if snippet.command.is_empty() {
             return Err(FfiError::other("a snippet with no command is not useful"));
         }
         self.with_state_mut(|state| {
+            let snippet_id = if snippet.snippet_id.is_empty() {
+                mint_item_id(&state.storage, &vault_id, &snippet.label, "snippet")?
+            } else {
+                snippet.snippet_id
+            };
             ensure_item_type(
                 &state.storage,
                 &vault_id,
-                snippet.snippet_id.as_bytes(),
+                snippet_id.as_bytes(),
                 ITEM_TYPE_SNIPPET,
             )?;
             let stored = StoredSnippet {
@@ -4532,9 +4721,9 @@ impl Core {
             )
             .map_err(FfiError::other)?;
             vault
-                .put_item(snippet.snippet_id.as_bytes(), ITEM_TYPE_SNIPPET, &json)
+                .put_item(snippet_id.as_bytes(), ITEM_TYPE_SNIPPET, &json)
                 .map_err(map_vault_err)?;
-            Ok(())
+            Ok(snippet_id)
         })
     }
 
@@ -4716,80 +4905,19 @@ impl Core {
 
     /// Saves/updates a host group (an item of type "group"). Only references to
     /// profiles/groups; no secrets inside. Rejects self-membership, self-
-    /// parenthood and an empty `group_id`; `ensure_item_type` guards against cross-type
-    /// overwriting.
-    pub fn save_group(&self, vault_id: String, group: ServerGroup) -> Result<(), FfiError> {
-        if group.group_id.is_empty() {
-            return Err(FfiError::other("group_id must not be empty"));
-        }
-        if group.member_ids.contains(&group.group_id) {
-            return Err(FfiError::other("a group cannot be a member of itself"));
-        }
-        if group.parent_id.as_deref() == Some(group.group_id.as_str()) {
-            return Err(FfiError::other("a group cannot be its own parent"));
-        }
-        let color = appearance_id(group.color)?;
-        let icon = appearance_id(group.icon)?;
-        self.with_state_mut(|state| {
-            ensure_item_type(
-                &state.storage,
-                &vault_id,
-                group.group_id.as_bytes(),
-                ITEM_TYPE_GROUP,
-            )?;
-            let vault = Vault::open(
-                &state.storage,
-                &state.keyset,
-                &resolve_vid(&state.storage, &vault_id),
-            )
-            .map_err(FfiError::other)?;
-            let stored = StoredGroup {
-                label: group.label,
-                member_ids: group.member_ids,
-                parent_id: group.parent_id,
-                color,
-                icon,
-                // Forward-compat: carry over the unknown fields of the existing group.
-                extra: preserved_extra::<StoredGroup>(
-                    &vault,
-                    group.group_id.as_bytes(),
-                    ITEM_TYPE_GROUP,
-                    |sg| sg.extra,
-                ),
-            };
-            let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
-            vault
-                .put_item(group.group_id.as_bytes(), ITEM_TYPE_GROUP, &json)
-                .map_err(map_vault_err)?;
-            Ok(())
-        })
+    /// parenthood; `ensure_item_type` guards against cross-type overwriting.
+    ///
+    /// An empty `group_id` saves a NEW group under an id the core mints from
+    /// its label (`slug(label)-<millis>`, see `item_ids`) — nothing can name a
+    /// group that has no id yet, so the self checks apply to an existing one.
+    /// Returns the group's id.
+    pub fn save_group(&self, vault_id: String, group: ServerGroup) -> Result<String, FfiError> {
+        self.with_state_mut(|state| put_group(state, &vault_id, group))
     }
 
     /// List of a vault's groups (broken JSON is skipped, tombstones are not visible).
     pub fn list_groups(&self, vault_id: String) -> Result<Vec<ServerGroup>, FfiError> {
-        self.with_state_mut(|state| {
-            let vault = Vault::open(
-                &state.storage,
-                &state.keyset,
-                &resolve_vid(&state.storage, &vault_id),
-            )
-            .map_err(FfiError::other)?;
-            let mut out = Vec::new();
-            for m in vault.list_items().map_err(FfiError::other)? {
-                if m.item_type != ITEM_TYPE_GROUP {
-                    continue;
-                }
-                if let Some(item) = vault.get_item(&m.item_id).map_err(FfiError::other)? {
-                    if let Ok(stored) = serde_json::from_slice::<StoredGroup>(&item.content) {
-                        out.push(group_to_public(
-                            String::from_utf8_lossy(&m.item_id).to_string(),
-                            stored,
-                        ));
-                    }
-                }
-            }
-            Ok(out)
-        })
+        self.with_state_mut(|state| groups_in(state, &vault_id))
     }
 
     /// Returns a single group.
@@ -5127,129 +5255,21 @@ impl Core {
     /// of type "connection" in the vault). The secret itself is not embedded in the profile: for
     /// password authentication only a reference to the password item is stored; a jump host
     /// with an inline password (`AuthMethod::Password`) cannot be saved — an error.
+    ///
+    /// An empty `profile_id` saves a NEW host under an id the core mints from
+    /// its label (`slug(label)-<millis>`, see `item_ids`). Returns the
+    /// profile's id.
     pub fn save_connection(
         &self,
         vault_id: String,
         profile: ConnectionProfile,
-    ) -> Result<(), FfiError> {
-        self.with_state_mut(|state| {
-            let ConnectionProfile {
-                profile_id,
-                uid,
-                label,
-                host,
-                port,
-                user,
-                auth,
-                username_template,
-                jumps,
-                proxy,
-                tags,
-                startup_snippet_ids,
-                record_sessions,
-                agent_forward,
-                color,
-                icon,
-            } = profile;
-            if profile_id.is_empty() {
-                return Err(FfiError::other("profile_id must not be empty"));
-            }
-            let color = appearance_id(color)?;
-            let icon = appearance_id(icon)?;
-            // Empty uid = creating a new profile → mint an immutable id. A non-empty one
-            // (an edit: the UI returned the uid from get_connection) is kept as-is — the uid does not
-            // change when host/label change.
-            let uid = if uid.is_empty() {
-                mint_profile_uid()
-            } else {
-                uid
-            };
-            let (key_item_id, password_item_id, personal, system_agent_public_key) = match auth {
-                ProfileAuth::Key { key_item_id } => (Some(key_item_id), None, false, None),
-                ProfileAuth::VaultPassword { password_item_id } => {
-                    (None, Some(password_item_id), false, None)
-                }
-                ProfileAuth::PromptPassword => (None, None, false, None),
-                ProfileAuth::Personal => (None, None, true, None),
-                ProfileAuth::SystemAgent { public_key } => (None, None, false, Some(public_key)),
-            };
-            let mut stored = StoredProfile {
-                uid: Some(uid),
-                label,
-                host,
-                port,
-                user,
-                key_item_id,
-                password_item_id,
-                personal,
-                username_template,
-                jumps: jumps
-                    .into_iter()
-                    .map(jump_to_stored)
-                    .collect::<Result<_, _>>()?,
-                proxy: proxy.map(proxy_to_stored).transpose()?,
-                tags,
-                startup_snippet_ids,
-                record_sessions,
-                agent_forward,
-                system_agent_public_key,
-                color,
-                icon,
-                extra: BTreeMap::new(),
-            };
-            ensure_item_type(
-                &state.storage,
-                &vault_id,
-                profile_id.as_bytes(),
-                ITEM_TYPE_CONNECTION,
-            )?;
-            let vault = Vault::open(
-                &state.storage,
-                &state.keyset,
-                &resolve_vid(&state.storage, &vault_id),
-            )
-            .map_err(FfiError::other)?;
-            // Forward-compat: carry over the unknown fields of the existing profile.
-            stored.extra = preserved_extra::<StoredProfile>(
-                &vault,
-                profile_id.as_bytes(),
-                ITEM_TYPE_CONNECTION,
-                |sp| sp.extra,
-            );
-            let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
-            vault
-                .put_item(profile_id.as_bytes(), ITEM_TYPE_CONNECTION, &json)
-                .map_err(map_vault_err)?;
-            Ok(())
-        })
+    ) -> Result<String, FfiError> {
+        self.with_state_mut(|state| put_connection(state, &vault_id, profile).map(|(id, _)| id))
     }
 
     /// List of connection profiles in a vault.
     pub fn list_connections(&self, vault_id: String) -> Result<Vec<ConnectionProfile>, FfiError> {
-        self.with_state_mut(|state| {
-            let vault = Vault::open(
-                &state.storage,
-                &state.keyset,
-                &resolve_vid(&state.storage, &vault_id),
-            )
-            .map_err(FfiError::other)?;
-            let mut out = Vec::new();
-            for m in vault.list_items().map_err(FfiError::other)? {
-                if m.item_type != ITEM_TYPE_CONNECTION {
-                    continue;
-                }
-                if let Some(item) = vault.get_item(&m.item_id).map_err(FfiError::other)? {
-                    if let Ok(stored) = serde_json::from_slice::<StoredProfile>(&item.content) {
-                        out.push(stored_to_profile(
-                            &vault_id,
-                            String::from_utf8_lossy(&m.item_id).to_string(),
-                            stored,
-                        ));
-                    }
-                }
-            }
-            Ok(out)
-        })
+        self.with_state_mut(|state| profiles_in(state, &vault_id))
     }
 
     /// Returns a single connection profile.
@@ -5297,70 +5317,18 @@ impl Core {
     /// Saves (creates or updates) a personal identity. Into the item content
     /// only `StoredIdentity` is written (username + references to a key/password item),
     /// the secret itself is not embedded. `identity_id` is the item_id in the vault.
+    ///
+    /// Creates the identity or REPLACES the one already at `identity_id` (the
+    /// edit path); [`Self::create_identity`] is the create-only twin.
     pub fn save_identity(&self, vault_id: String, identity: Identity) -> Result<(), FfiError> {
-        self.with_state_mut(|state| {
-        let Identity {
-            identity_id,
-            label,
-            user,
-            key_item_id,
-            password_item_id,
-        } = identity;
-        if identity_id.is_empty() {
-            return Err(FfiError::other("identity_id must not be empty"));
-        }
-        // Privacy invariant (moved here from set_personal_vault): an identity must live
-        // in a PRIVATE (single-member) vault — otherwise it syncs to a shared vault's
-        // other members (leaked private cred). Refuse a shared/multi-member vault.
-        let vid = resolve_vid(&state.storage, &vault_id);
-        let owner_ed = state.keyset.signing.verifying.to_bytes().to_vec();
-        let members = match state
-            .storage
-            .latest_membership_epoch(&vid)
-            .map_err(FfiError::other)?
-        {
-            Some(latest) => verify_chain_to_epoch(&state.storage, &vid, latest, &owner_ed)
-                .map_err(map_vault_err)?
-                .members()
-                .len(),
-            None => 0, // local / not-yet-shared vault → single-member
-        };
-        if members > 1 {
-            return Err(FfiError::other(
-                "cannot store an identity in a shared (multi-member) vault — it would leak to the other members",
-            ));
-        }
-        let mut stored = StoredIdentity {
-            label,
-            user,
-            key_item_id,
-            password_item_id,
-            extra: BTreeMap::new(),
-        };
-        ensure_item_type(
-            &state.storage,
-            &vault_id,
-            identity_id.as_bytes(),
-            ITEM_TYPE_IDENTITY,
-        )?;
-        let vault = Vault::open(
-            &state.storage,
-            &state.keyset,
-            &resolve_vid(&state.storage, &vault_id),
-        )
-        .map_err(FfiError::other)?;
-        stored.extra = preserved_extra::<StoredIdentity>(
-            &vault,
-            identity_id.as_bytes(),
-            ITEM_TYPE_IDENTITY,
-            |si| si.extra,
-        );
-        let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
-        vault
-            .put_item(identity_id.as_bytes(), ITEM_TYPE_IDENTITY, &json)
-            .map_err(map_vault_err)?;
-        Ok(())
-        })
+        self.store_identity(&vault_id, identity, false)
+    }
+
+    /// Saves a NEW personal identity, like [`Self::save_identity`], but never
+    /// replaces anything: [`FfiError::AlreadyExists`] when a live item of any
+    /// type already holds `identity_id`.
+    pub fn create_identity(&self, vault_id: String, identity: Identity) -> Result<(), FfiError> {
+        self.store_identity(&vault_id, identity, true)
     }
 
     /// Returns a single identity by id.
@@ -5389,28 +5357,7 @@ impl Core {
 
     /// List of personal identities in a vault.
     pub fn list_identities(&self, vault_id: String) -> Result<Vec<Identity>, FfiError> {
-        self.with_state_mut(|state| {
-            let vault = Vault::open(
-                &state.storage,
-                &state.keyset,
-                &resolve_vid(&state.storage, &vault_id),
-            )
-            .map_err(FfiError::other)?;
-            let mut out = Vec::new();
-            for m in vault.list_items().map_err(FfiError::other)? {
-                if m.item_type != ITEM_TYPE_IDENTITY {
-                    continue;
-                }
-                if let Some(item) = vault.get_item(&m.item_id).map_err(FfiError::other)? {
-                    if let Ok(stored) = serde_json::from_slice::<StoredIdentity>(&item.content) {
-                        out.push(
-                            stored.into_identity(String::from_utf8_lossy(&m.item_id).to_string()),
-                        );
-                    }
-                }
-            }
-            Ok(out)
-        })
+        self.with_state_mut(|state| identities_in(state, &vault_id))
     }
 
     /// Deletes a personal identity.
@@ -5447,68 +5394,7 @@ impl Core {
         binding: IdentityBinding,
         allow_rebind: bool,
     ) -> Result<(), FfiError> {
-        self.with_state_mut(|state| {
-            let IdentityBinding {
-                team_vault_id,
-                profile_uid,
-                identity_item_id,
-                destination_pin,
-            } = binding;
-            if team_vault_id.is_empty() || profile_uid.is_empty() {
-                return Err(FfiError::other(
-                    "binding requires non-empty team_vault_id and profile_uid",
-                ));
-            }
-            let item_id = binding_item_id(&team_vault_id, &profile_uid);
-            ensure_item_type(
-                &state.storage,
-                &personal_vault_id,
-                item_id.as_bytes(),
-                ITEM_TYPE_BINDING,
-            )?;
-            let vault = Vault::open(
-                &state.storage,
-                &state.keyset,
-                &resolve_vid(&state.storage, &personal_vault_id),
-            )
-            .map_err(FfiError::other)?;
-            // First-bind guard: we do not silently rebind to a changed destination.
-            if !allow_rebind {
-                if let Some(existing) = vault
-                    .get_item(item_id.as_bytes())
-                    .map_err(FfiError::other)?
-                    .filter(|i| i.item_type == ITEM_TYPE_BINDING)
-                    .and_then(|i| serde_json::from_slice::<StoredBinding>(&i.content).ok())
-                {
-                    if existing.destination_pin != destination_pin {
-                        return Err(FfiError::other(format!(
-                            "binding already pinned to {}; re-bind to {} requires \
-                         explicit confirmation (allow_rebind)",
-                            existing.destination_pin, destination_pin
-                        )));
-                    }
-                }
-            }
-            let mut stored = StoredBinding {
-                team_vault_id,
-                profile_uid,
-                identity_item_id,
-                destination_pin,
-                extra: BTreeMap::new(),
-            };
-            // Forward-compat: carry over the unknown fields of the existing binding.
-            stored.extra = preserved_extra::<StoredBinding>(
-                &vault,
-                item_id.as_bytes(),
-                ITEM_TYPE_BINDING,
-                |sb| sb.extra,
-            );
-            let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
-            vault
-                .put_item(item_id.as_bytes(), ITEM_TYPE_BINDING, &json)
-                .map_err(map_vault_err)?;
-            Ok(())
-        })
+        self.with_state_mut(|state| put_binding(state, &personal_vault_id, binding, allow_rebind))
     }
 
     /// Returns the binding for (team_vault_id, profile_uid), if any.
@@ -5519,23 +5405,7 @@ impl Core {
         profile_uid: String,
     ) -> Result<Option<IdentityBinding>, FfiError> {
         self.with_state_mut(|state| {
-            let item_id = binding_item_id(&team_vault_id, &profile_uid);
-            let vault = Vault::open(
-                &state.storage,
-                &state.keyset,
-                &resolve_vid(&state.storage, &personal_vault_id),
-            )
-            .map_err(FfiError::other)?;
-            let Some(item) = vault
-                .get_item(item_id.as_bytes())
-                .map_err(FfiError::other)?
-                .filter(|i| i.item_type == ITEM_TYPE_BINDING)
-            else {
-                return Ok(None);
-            };
-            let stored: StoredBinding =
-                serde_json::from_slice(&item.content).map_err(FfiError::other)?;
-            Ok(Some(stored.into_binding()))
+            binding_in(state, &personal_vault_id, &team_vault_id, &profile_uid)
         })
     }
 
@@ -5617,26 +5487,7 @@ impl Core {
         team_vault_id: &str,
         profile_uid: &str,
     ) -> Result<Option<String>, FfiError> {
-        let item_id = binding_item_id(team_vault_id, profile_uid);
-        self.with_state(|state| {
-            for rec in state.storage.list_vaults().map_err(FfiError::other)? {
-                if let Some(item) = state
-                    .storage
-                    .get_item(&rec.vault_id, item_id.as_bytes())
-                    .map_err(FfiError::other)?
-                {
-                    if item.item_type == ITEM_TYPE_BINDING && !item.tombstone {
-                        return Ok(Some(match rec.sync_target {
-                            SyncTarget::Cloud => hex::encode(&rec.vault_id),
-                            SyncTarget::Local => String::from_utf8_lossy(&rec.vault_id).to_string(),
-                            // non_exhaustive: a future target is treated like a local id.
-                            _ => String::from_utf8_lossy(&rec.vault_id).to_string(),
-                        }));
-                    }
-                }
-            }
-            Ok(None)
-        })
+        self.with_state(|state| binding_vault_in(state, team_vault_id, profile_uid, false))
     }
 
     /// Resolves Personal authentication for connecting to a shared host (B4):
@@ -6779,6 +6630,157 @@ fn create_vault_with_items(
 }
 
 impl Core {
+    /// The body of [`Core::save_identity`] / [`Core::create_identity`].
+    fn store_identity(
+        &self,
+        vault_id: &str,
+        identity: Identity,
+        create_only: bool,
+    ) -> Result<(), FfiError> {
+        self.with_state_mut(|state| {
+        let Identity {
+            identity_id,
+            label,
+            user,
+            key_item_id,
+            password_item_id,
+        } = identity;
+        if identity_id.is_empty() {
+            return Err(FfiError::other("identity_id must not be empty"));
+        }
+        if create_only {
+            refuse_taken(&state.storage, vault_id, identity_id.as_bytes())?;
+        }
+        // Privacy invariant (moved here from set_personal_vault): an identity must live
+        // in a PRIVATE (single-member) vault — otherwise it syncs to a shared vault's
+        // other members (leaked private cred). Refuse a shared/multi-member vault.
+        let vid = resolve_vid(&state.storage, vault_id);
+        if vault_member_count(state, &vid)? > 1 {
+            return Err(FfiError::other(
+                "cannot store an identity in a shared (multi-member) vault — it would leak to the other members",
+            ));
+        }
+        let mut stored = StoredIdentity {
+            label,
+            user,
+            key_item_id,
+            password_item_id,
+            extra: BTreeMap::new(),
+        };
+        ensure_item_type(
+            &state.storage,
+            vault_id,
+            identity_id.as_bytes(),
+            ITEM_TYPE_IDENTITY,
+        )?;
+        let vault = Vault::open(
+            &state.storage,
+            &state.keyset,
+            &resolve_vid(&state.storage, vault_id),
+        )
+        .map_err(FfiError::other)?;
+        stored.extra = preserved_extra::<StoredIdentity>(
+            &vault,
+            identity_id.as_bytes(),
+            ITEM_TYPE_IDENTITY,
+            |si| si.extra,
+        );
+        let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
+        vault
+            .put_item(identity_id.as_bytes(), ITEM_TYPE_IDENTITY, &json)
+            .map_err(map_vault_err)?;
+        Ok(())
+        })
+    }
+
+    /// The body of [`Core::generate_ssh_key`] / [`Core::create_ssh_key`].
+    fn store_generated_key(
+        &self,
+        vault_id: &str,
+        item_id: &str,
+        create_only: bool,
+    ) -> Result<String, FfiError> {
+        self.with_state_mut(|state| {
+            if create_only {
+                refuse_taken(&state.storage, vault_id, item_id.as_bytes())?;
+            }
+            let vault = Vault::open(
+                &state.storage,
+                &state.keyset,
+                &resolve_vid(&state.storage, vault_id),
+            )
+            .map_err(FfiError::other)?;
+            let public = store_new_ssh_key(&state.storage, &vault, vault_id, item_id)?;
+            // The key material was replaced under the same id → unload the previous private key from
+            // the agent (namespaced), otherwise whatever signs straight from the agent by id — a
+            // forwarded agent in a live session — keeps signing with the OLD key. (A connect
+            // reloads the key from the item anyway, see load_key_into_agent.)
+            state.agent.remove(&agent_key_id(vault_id, item_id));
+            Ok(public)
+        })
+    }
+
+    /// The body of [`Core::import_ssh_key`] / [`Core::create_imported_ssh_key`].
+    fn store_imported_key(
+        &self,
+        vault_id: &str,
+        item_id: &str,
+        openssh_private: String,
+        passphrase: Option<String>,
+        create_only: bool,
+    ) -> Result<String, FfiError> {
+        // We keep the private key and password in Zeroizing — zeroized on exit.
+        let openssh_private = Zeroizing::new(openssh_private);
+        let passphrase = passphrase.map(Zeroizing::new);
+        self.with_state_mut(|state| {
+            if create_only {
+                refuse_taken(&state.storage, vault_id, item_id.as_bytes())?;
+            }
+            // We accept not only the OpenSSH container but also classic PEM
+            // (PKCS#1 `BEGIN RSA PRIVATE KEY`, SEC1 `BEGIN EC PRIVATE KEY`,
+            // PKCS#8 `BEGIN PRIVATE KEY`, including password-encrypted ones): we normalize to
+            // a canonical OpenSSH private key. Without a password for an encrypted key
+            // `PassphraseRequired` is returned — the UI will prompt for one and retry.
+            let normalized = unissh_ssh_agent::normalize_private_key_with_passphrase(
+                &openssh_private,
+                passphrase.as_deref().map(String::as_str),
+            )
+            .map_err(map_key_import_err)?;
+            // validate and extract the public key via a temporary agent
+            let mut tmp = InMemoryAgent::new();
+            tmp.add_from_openssh(b"tmp".to_vec(), normalized.as_bytes())
+                .map_err(FfiError::ssh)?;
+            let public = tmp
+                .public_key(b"tmp")
+                .ok_or_else(|| FfiError::ssh("no public key"))?
+                .to_openssh()
+                .map_err(FfiError::ssh)?;
+            ensure_item_type(
+                &state.storage,
+                vault_id,
+                item_id.as_bytes(),
+                ITEM_TYPE_SSH_KEY,
+            )?;
+            let vault = Vault::open(
+                &state.storage,
+                &state.keyset,
+                &resolve_vid(&state.storage, vault_id),
+            )
+            .map_err(FfiError::other)?;
+            vault
+                .put_item(item_id.as_bytes(), ITEM_TYPE_SSH_KEY, normalized.as_bytes())
+                .map_err(map_vault_err)?;
+            // The key material was replaced under the same id → unload the previous private key from
+            // the agent (namespaced), otherwise whatever signs straight from the agent by id — a
+            // forwarded agent in a live session — keeps signing with the OLD key. (A connect
+            // reloads the key from the item anyway, see load_key_into_agent.)
+            state.agent.remove(&agent_key_id(vault_id, item_id));
+            Ok(public)
+        })
+    }
+}
+
+impl Core {
     fn import_parsed_ssh_config(
         &self,
         vault_id: String,
@@ -6786,82 +6788,96 @@ impl Core {
         only: Option<Vec<String>>,
     ) -> Result<Vec<ImportedSshHost>, FfiError> {
         let only: Option<std::collections::HashSet<String>> = only.map(|v| v.into_iter().collect());
+        let default_username = self.get_account_default_username()?;
         self.with_state_mut(|state| {
-            let vault = Vault::open(
-                &state.storage,
-                &state.keyset,
-                &resolve_vid(&state.storage, &vault_id),
-            )
-            .map_err(FfiError::other)?;
-            let mut created = Vec::new();
-            for host in cfg.host_aliases_with_origin() {
-                let alias = &host.alias;
-                if only.as_ref().is_some_and(|o| !o.contains(alias)) {
-                    continue;
-                }
-                // Don't overwrite an existing item of another type (e.g. a key with the same id):
-                // we skip such an alias, not counting it among the created ones.
-                if ensure_item_type(
+            state.storage.transaction(|| {
+                let vault = Vault::open(
                     &state.storage,
-                    &vault_id,
-                    alias.as_bytes(),
-                    ITEM_TYPE_CONNECTION,
+                    &state.keyset,
+                    &resolve_vid(&state.storage, &vault_id),
                 )
-                .is_err()
-                {
-                    continue;
+                .map_err(FfiError::other)?;
+                let mut created = Vec::new();
+                for host in cfg.host_aliases_with_origin() {
+                    let alias = &host.alias;
+                    if only.as_ref().is_some_and(|o| !o.contains(alias)) {
+                        continue;
+                    }
+                    // Don't overwrite an existing item of another type (e.g. a key with the same id):
+                    // we skip such an alias, not counting it among the created ones.
+                    if ensure_item_type(
+                        &state.storage,
+                        &vault_id,
+                        alias.as_bytes(),
+                        ITEM_TYPE_CONNECTION,
+                    )
+                    .is_err()
+                    {
+                        continue;
+                    }
+                    // #9: overwriting an existing profile MUST preserve its
+                    // immutable uid — personal bindings and hop_refs depend on it
+                    // (B2.1/B2.2); a fresh uid would orphan them. We reuse the existing
+                    // profile's uid, otherwise we mint a new one.
+                    // The colour/icon are the user's own markings, not part of the
+                    // ssh config, so an overwrite carries them over as well.
+                    let existing = vault
+                        .get_item(alias.as_bytes())
+                        .ok()
+                        .flatten()
+                        .and_then(|it| serde_json::from_slice::<StoredProfile>(&it.content).ok());
+                    let (existing_uid, color, icon) = match existing {
+                        Some(sp) => (
+                            sp.uid.filter(|u| !u.is_empty()),
+                            stored_appearance_id(sp.color),
+                            stored_appearance_id(sp.icon),
+                        ),
+                        None => (None, None, None),
+                    };
+                    let s = cfg.resolve(alias);
+                    let stored = StoredProfile {
+                        uid: Some(existing_uid.unwrap_or_else(mint_profile_uid)),
+                        label: alias.clone(),
+                        host: s.hostname.unwrap_or_else(|| alias.clone()),
+                        port: s.port.unwrap_or(22),
+                        user: s
+                            .user
+                            .or_else(|| default_username.clone())
+                            .unwrap_or_default(),
+                        key_item_id: None,
+                        password_item_id: None,
+                        personal: false,
+                        username_template: None,
+                        jumps: parse_proxy_jump(s.proxy_jump.as_deref()),
+                        proxy: None,
+                        tags: Vec::new(),
+                        startup_snippet_ids: Vec::new(),
+                        record_sessions: false,
+                        agent_forward: false,
+                        system_agent_public_key: None,
+                        color,
+                        icon,
+                        extra: BTreeMap::new(),
+                    };
+                    let profile = stored_to_profile(&vault_id, alias.clone(), stored);
+                    host_save::save_locked(
+                        state,
+                        &vault_id,
+                        HostSave {
+                            profile,
+                            new_password: None,
+                            group: HostGroup::Unchanged,
+                            identity: None,
+                            move_identity_pin: false,
+                        },
+                    )?;
+                    created.push(ImportedSshHost {
+                        alias: host.alias,
+                        origin_file: host.origin,
+                    });
                 }
-                // #9: overwriting an existing profile MUST preserve its
-                // immutable uid — personal bindings and hop_refs depend on it
-                // (B2.1/B2.2); a fresh uid would orphan them. We reuse the existing
-                // profile's uid, otherwise we mint a new one.
-                // The colour/icon are the user's own markings, not part of the
-                // ssh config, so an overwrite carries them over as well.
-                let existing = vault
-                    .get_item(alias.as_bytes())
-                    .ok()
-                    .flatten()
-                    .and_then(|it| serde_json::from_slice::<StoredProfile>(&it.content).ok());
-                let (existing_uid, color, icon) = match existing {
-                    Some(sp) => (
-                        sp.uid.filter(|u| !u.is_empty()),
-                        stored_appearance_id(sp.color),
-                        stored_appearance_id(sp.icon),
-                    ),
-                    None => (None, None, None),
-                };
-                let s = cfg.resolve(alias);
-                let stored = StoredProfile {
-                    uid: Some(existing_uid.unwrap_or_else(mint_profile_uid)),
-                    label: alias.clone(),
-                    host: s.hostname.unwrap_or_else(|| alias.clone()),
-                    port: s.port.unwrap_or(22),
-                    user: s.user.unwrap_or_default(),
-                    key_item_id: None,
-                    password_item_id: None,
-                    personal: false,
-                    username_template: None,
-                    jumps: parse_proxy_jump(s.proxy_jump.as_deref()),
-                    proxy: None,
-                    tags: Vec::new(),
-                    startup_snippet_ids: Vec::new(),
-                    record_sessions: false,
-                    agent_forward: false,
-                    system_agent_public_key: None,
-                    color,
-                    icon,
-                    extra: BTreeMap::new(),
-                };
-                let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
-                vault
-                    .put_item(alias.as_bytes(), ITEM_TYPE_CONNECTION, &json)
-                    .map_err(map_vault_err)?;
-                created.push(ImportedSshHost {
-                    alias: host.alias,
-                    origin_file: host.origin,
-                });
-            }
-            Ok(created)
+                Ok(created)
+            })
         })
     }
 
@@ -7664,6 +7680,11 @@ fn connect_with_options(
         // port/user/auth are taken from there); a normal hop is inline, as before.
         let (host, port, user, auth) = match &j.hop_ref {
             Some(hr) => {
+                if !hop_ref_in_own_vault(&st.storage, j, hr) {
+                    return Err(FfiError::InvalidHost {
+                        rule: HostRule::HopOtherVault,
+                    });
+                }
                 let prof = resolve_profile_by_uid(st, &hr.vault_id, &hr.profile_uid)?;
                 if idx == 0 {
                     first_hop_proxy = prof.proxy.clone();
@@ -8081,6 +8102,21 @@ impl Core {
         vault_id: &str,
         p: &ConnectionProfile,
     ) -> Result<ResolvedConnection, FfiError> {
+        // A hop of this host may only name a saved host of its own vault (the
+        // connect refuses the rest too; this says so before any dial).
+        let foreign_hop = self.with_state(|st| {
+            let own = resolve_vid(&st.storage, vault_id);
+            Ok(p.jumps.iter().any(|j| {
+                j.hop_ref
+                    .as_ref()
+                    .is_some_and(|r| resolve_vid(&st.storage, &r.vault_id) != own)
+            }))
+        })?;
+        if foreign_hop {
+            return Err(FfiError::InvalidHost {
+                rule: HostRule::HopOtherVault,
+            });
+        }
         let (user, auth) = if matches!(p.auth, ProfileAuth::Personal) {
             let destination = self.personal_destination(
                 p.host.clone(),
@@ -8275,6 +8311,21 @@ fn map_vault_err(e: unissh_vault::VaultError) -> FfiError {
     }
 }
 
+/// Mapping of key-import errors: the two a client asks the user about (a
+/// missing or a wrong passphrase) are variants of their own, so no client
+/// matches message text.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "only the variants the UI treats specially are singled out; every other error maps generically by design"
+)]
+fn map_key_import_err(e: unissh_ssh_agent::AgentError) -> FfiError {
+    match e {
+        unissh_ssh_agent::AgentError::Encrypted => FfiError::PassphraseRequired,
+        unissh_ssh_agent::AgentError::WrongPassphrase => FfiError::WrongPassphrase,
+        other => FfiError::ssh(other),
+    }
+}
+
 /// The decrypted contents of the per-account state (A3.2): the pointer to the personal
 /// vault + the account-default username. Encoding: `put(vault_id) || put(username_utf8)`
 /// (u32-BE lengths). An empty vault_id/username = "not set".
@@ -8343,61 +8394,102 @@ fn map_sync_err(e: unissh_sync::SyncError) -> FfiError {
             msg: "an object the push cannot continue without".into(),
         };
     }
+    if matches!(e, unissh_sync::SyncError::Forbidden) {
+        // Likewise: an item the server does not permit is left out and reported.
+        return FfiError::UploadForbidden {
+            msg: "an object the push cannot continue without".into(),
+        };
+    }
     FfiError::Other { msg: e.to_string() }
 }
 
-/// The push half of a sync for `tenant_b64`: the number of objects the server
-/// accepted and the items it refused as too large, named for the UI. If the
-/// transport callback failed, its own error is returned (not masked as Format).
-/// `mode` selects what is pushed: everything the server is missing, or (for
-/// [`FfiSyncMode::PushOnly`]) the vault data alone.
+/// An item no push delivers, named for the UI; `own` is the account's pubkey.
+fn ffi_unpushable(state: &CoreState, u: &unissh_sync::Unpushable, own: &[u8]) -> FfiUnpushableItem {
+    FfiUnpushableItem {
+        // The same id form `list_vaults` returns: hex for a cloud vault.
+        vault_id: hex::encode(&u.vault_id),
+        vault_name: report_vault_name(state, &u.vault_id),
+        item_id: String::from_utf8_lossy(&u.item_id).into_owned(),
+        item_type: u.item_type,
+        version: u.version,
+        mine: u.author_pubkey == own,
+        reason: match u.reason {
+            UnpushableReason::NotAuthorized => FfiUnpushableReason::NotAuthorized,
+            UnpushableReason::ServerRefused => FfiUnpushableReason::ServerRefused,
+        },
+    }
+}
+
+/// A failed push as the caller hears it: one that failed on the transport
+/// reports what the transport said (for a size or permission refusal: the
+/// server's own message). Any other failure is the engine's, whatever an
+/// earlier request left in the adapter.
+fn push_failure(adapter: &ForeignTransportAdapter, e: unissh_sync::SyncError) -> FfiError {
+    let from_transport = matches!(
+        e,
+        unissh_sync::SyncError::Format
+            | unissh_sync::SyncError::PayloadTooLarge
+            | unissh_sync::SyncError::Forbidden
+    );
+    if from_transport {
+        if let Some(fe) = lock_recover(&adapter.push_err).take() {
+            return fe;
+        }
+    }
+    map_sync_err(e)
+}
+
+/// The name of the vault `vault_id` (raw) for a sync report: from the name
+/// cache, else read from the vault; empty when it cannot be read.
+fn report_vault_name(state: &CoreState, vault_id: &[u8]) -> String {
+    state
+        .vault_names
+        .get(vault_id)
+        .cloned()
+        .or_else(|| {
+            let vault = Vault::open(&state.storage, &state.keyset, vault_id).ok()?;
+            Some(String::from_utf8_lossy(vault.name()).into_owned())
+        })
+        .unwrap_or_default()
+}
+
+/// The push half of a sync for `ctx.tenant`: the number of objects the server
+/// accepted, the items it refused as too large and the edits no push can
+/// deliver, named for the UI. If the transport callback failed, its own error
+/// is returned (not masked as Format). `mode` selects what is pushed:
+/// everything the server is missing, or (for [`FfiSyncMode::PushOnly`]) the
+/// vault data alone. Either way the dirty items are checked against the
+/// account's key first (`sync_push_as`): an edit no member would accept is
+/// not sent.
 fn push_to_tenant(
     state: &CoreState,
     adapter: &mut ForeignTransportAdapter,
-    tenant_b64: &str,
+    ctx: &SyncContext,
     mode: FfiSyncMode,
-) -> Result<(u64, Vec<FfiTooLargeItem>), FfiError> {
-    let tenant = tenant_b64.as_bytes();
+) -> Result<(u64, Vec<FfiTooLargeItem>, Vec<FfiUnpushableItem>), FfiError> {
     let outcome = match mode {
-        FfiSyncMode::Full => sync_push(adapter, &state.storage, tenant),
-        FfiSyncMode::PushOnly => sync_push_vault_data(adapter, &state.storage, tenant),
+        FfiSyncMode::Full => sync_push_as(adapter, &state.storage, ctx),
+        FfiSyncMode::PushOnly => sync_push_vault_data_as(adapter, &state.storage, ctx),
     };
-    let report = outcome.map_err(|e| {
-        // A push that failed on the transport reports what the transport said
-        // (for a size refusal: the server's own message). Any other failure is
-        // the engine's, whatever an earlier request left in the adapter.
-        let from_transport = matches!(
-            e,
-            unissh_sync::SyncError::Format | unissh_sync::SyncError::PayloadTooLarge
-        );
-        if from_transport {
-            if let Some(fe) = lock_recover(&adapter.push_err).take() {
-                return fe;
-            }
-        }
-        map_sync_err(e)
-    })?;
+    let report = outcome.map_err(|e| push_failure(adapter, e))?;
     let too_large = report
         .too_large
         .into_iter()
         .map(|t| FfiTooLargeItem {
             // The same id form `list_vaults` returns: hex for a cloud vault.
             vault_id: hex::encode(&t.vault_id),
-            vault_name: state
-                .vault_names
-                .get(&t.vault_id)
-                .cloned()
-                .or_else(|| {
-                    let vault = Vault::open(&state.storage, &state.keyset, &t.vault_id).ok()?;
-                    Some(String::from_utf8_lossy(vault.name()).into_owned())
-                })
-                .unwrap_or_default(),
+            vault_name: report_vault_name(state, &t.vault_id),
             item_id: String::from_utf8_lossy(&t.item_id).into_owned(),
             item_type: t.item_type,
             bytes: t.bytes,
         })
         .collect();
-    Ok((report.pushed, too_large))
+    let unpushable = report
+        .unpushable
+        .iter()
+        .map(|u| ffi_unpushable(state, u, &ctx.genesis_owner))
+        .collect();
+    Ok((report.pushed, too_large, unpushable))
 }
 
 /// Decodes a hex `vault_id` (a cloud UUIDv4) into raw bytes. Broken hex → Other.
@@ -8561,7 +8653,8 @@ fn backup_keyset_sidecar(path: &std::path::Path) {
 ///
 /// The method's `vault_id` is dropped here: a stored jump is vault-relative (the item
 /// lives in the profile's vault, the same `vault_id` is restored on read in
-/// [`stored_to_profile`]). Cross-vault hops are a separate model (`HopRef`).
+/// [`stored_to_profile`]). A `HopRef` hop names a saved host of the same vault too: the
+/// connect refuses one into another vault.
 fn jump_to_stored(j: JumpHost) -> Result<StoredJump, FfiError> {
     let hop_ref = j.hop_ref.map(|hr| StoredHopRef {
         vault_id: hr.vault_id,
@@ -8722,6 +8815,414 @@ fn stored_appearance_id(id: Option<String>) -> Option<String> {
     appearance_id(id).ok().flatten()
 }
 
+/// The body of [`Core::save_password`], on state already locked.
+fn put_password(
+    state: &CoreState,
+    vault_id: &str,
+    item_id: &str,
+    password: &str,
+) -> Result<(), FfiError> {
+    ensure_item_type(
+        &state.storage,
+        vault_id,
+        item_id.as_bytes(),
+        ITEM_TYPE_PASSWORD,
+    )?;
+    let vault = Vault::open(
+        &state.storage,
+        &state.keyset,
+        &resolve_vid(&state.storage, vault_id),
+    )
+    .map_err(FfiError::other)?;
+    vault
+        .put_item_keep_history(item_id.as_bytes(), ITEM_TYPE_PASSWORD, password.as_bytes())
+        .map_err(map_vault_err)?;
+    Ok(())
+}
+
+/// The body of [`Core::delete_item`], on state already locked.
+fn remove_item(state: &mut CoreState, vault_id: &str, item_id: &str) -> Result<(), FfiError> {
+    let vault = Vault::open(
+        &state.storage,
+        &state.keyset,
+        &resolve_vid(&state.storage, vault_id),
+    )
+    .map_err(FfiError::other)?;
+    vault
+        .delete_item(item_id.as_bytes())
+        .map_err(map_vault_err)?;
+    // A4a namespace: the agent stores the key under agent_key_id(vault_id,item_id), not
+    // under the bare item_id — it must be unloaded with the same key, otherwise remove is a no-op and
+    // a revoked/rotated private key stays alive in the agent until the end of the session.
+    state.agent.remove(&agent_key_id(vault_id, item_id));
+    system_agent::forget(state, vault_id, Some(item_id));
+    Ok(())
+}
+
+/// The body of [`Core::save_group`], on state already locked.
+fn put_group(state: &CoreState, vault_id: &str, group: ServerGroup) -> Result<String, FfiError> {
+    if !group.group_id.is_empty() {
+        if group.member_ids.contains(&group.group_id) {
+            return Err(FfiError::other("a group cannot be a member of itself"));
+        }
+        if group.parent_id.as_deref() == Some(group.group_id.as_str()) {
+            return Err(FfiError::other("a group cannot be its own parent"));
+        }
+    }
+    let color = appearance_id(group.color)?;
+    let icon = appearance_id(group.icon)?;
+    let group_id = if group.group_id.is_empty() {
+        mint_item_id(&state.storage, vault_id, &group.label, "group")?
+    } else {
+        group.group_id
+    };
+    ensure_item_type(
+        &state.storage,
+        vault_id,
+        group_id.as_bytes(),
+        ITEM_TYPE_GROUP,
+    )?;
+    let vault = Vault::open(
+        &state.storage,
+        &state.keyset,
+        &resolve_vid(&state.storage, vault_id),
+    )
+    .map_err(FfiError::other)?;
+    let stored = StoredGroup {
+        label: group.label,
+        member_ids: group.member_ids,
+        parent_id: group.parent_id,
+        color,
+        icon,
+        // Forward-compat: carry over the unknown fields of the existing group.
+        extra: preserved_extra::<StoredGroup>(&vault, group_id.as_bytes(), ITEM_TYPE_GROUP, |sg| {
+            sg.extra
+        }),
+    };
+    let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
+    vault
+        .put_item(group_id.as_bytes(), ITEM_TYPE_GROUP, &json)
+        .map_err(map_vault_err)?;
+    Ok(group_id)
+}
+
+/// The body of [`Core::list_connections`], on state already locked.
+fn profiles_in(state: &CoreState, vault_id: &str) -> Result<Vec<ConnectionProfile>, FfiError> {
+    let vault = Vault::open(
+        &state.storage,
+        &state.keyset,
+        &resolve_vid(&state.storage, vault_id),
+    )
+    .map_err(FfiError::other)?;
+    let mut out = Vec::new();
+    for m in vault.list_items().map_err(FfiError::other)? {
+        if m.item_type != ITEM_TYPE_CONNECTION {
+            continue;
+        }
+        if let Some(item) = vault.get_item(&m.item_id).map_err(FfiError::other)? {
+            if let Ok(stored) = serde_json::from_slice::<StoredProfile>(&item.content) {
+                out.push(stored_to_profile(
+                    vault_id,
+                    String::from_utf8_lossy(&m.item_id).to_string(),
+                    stored,
+                ));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The body of [`Core::list_identities`], on state already locked.
+fn identities_in(state: &CoreState, vault_id: &str) -> Result<Vec<Identity>, FfiError> {
+    let vault = Vault::open(
+        &state.storage,
+        &state.keyset,
+        &resolve_vid(&state.storage, vault_id),
+    )
+    .map_err(FfiError::other)?;
+    let mut out = Vec::new();
+    for m in vault.list_items().map_err(FfiError::other)? {
+        if m.item_type != ITEM_TYPE_IDENTITY {
+            continue;
+        }
+        if let Some(item) = vault.get_item(&m.item_id).map_err(FfiError::other)? {
+            if let Ok(stored) = serde_json::from_slice::<StoredIdentity>(&item.content) {
+                out.push(stored.into_identity(String::from_utf8_lossy(&m.item_id).to_string()));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The body of [`Core::list_groups`], on state already locked.
+fn groups_in(state: &CoreState, vault_id: &str) -> Result<Vec<ServerGroup>, FfiError> {
+    let vault = Vault::open(
+        &state.storage,
+        &state.keyset,
+        &resolve_vid(&state.storage, vault_id),
+    )
+    .map_err(FfiError::other)?;
+    let mut out = Vec::new();
+    for m in vault.list_items().map_err(FfiError::other)? {
+        if m.item_type != ITEM_TYPE_GROUP {
+            continue;
+        }
+        if let Some(item) = vault.get_item(&m.item_id).map_err(FfiError::other)? {
+            if let Ok(stored) = serde_json::from_slice::<StoredGroup>(&item.content) {
+                out.push(group_to_public(
+                    String::from_utf8_lossy(&m.item_id).to_string(),
+                    stored,
+                ));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The body of [`Core::get_binding`], on state already locked.
+fn binding_in(
+    state: &CoreState,
+    personal_vault_id: &str,
+    team_vault_id: &str,
+    profile_uid: &str,
+) -> Result<Option<IdentityBinding>, FfiError> {
+    let item_id = binding_item_id(team_vault_id, profile_uid);
+    let vault = Vault::open(
+        &state.storage,
+        &state.keyset,
+        &resolve_vid(&state.storage, personal_vault_id),
+    )
+    .map_err(FfiError::other)?;
+    let Some(item) = vault
+        .get_item(item_id.as_bytes())
+        .map_err(FfiError::other)?
+        .filter(|i| i.item_type == ITEM_TYPE_BINDING)
+    else {
+        return Ok(None);
+    };
+    let stored: StoredBinding = serde_json::from_slice(&item.content).map_err(FfiError::other)?;
+    Ok(Some(stored.into_binding()))
+}
+
+/// How many members vault `vid` has by its verified membership chain; 0 for a
+/// local or not-yet-shared vault.
+fn vault_member_count(state: &CoreState, vid: &[u8]) -> Result<usize, FfiError> {
+    let owner_ed = state.keyset.signing.verifying.to_bytes().to_vec();
+    match state
+        .storage
+        .latest_membership_epoch(vid)
+        .map_err(FfiError::other)?
+    {
+        Some(latest) => Ok(
+            verify_chain_to_epoch(&state.storage, vid, latest, &owner_ed)
+                .map_err(map_vault_err)?
+                .members()
+                .len(),
+        ),
+        None => Ok(0),
+    }
+}
+
+/// The body of [`Core::find_binding_vault`], on state already locked.
+/// `private_only` skips shared (multi-member) vaults: a member's own
+/// identities, and so their bindings, live in a single-member one.
+fn binding_vault_in(
+    state: &CoreState,
+    team_vault_id: &str,
+    profile_uid: &str,
+    private_only: bool,
+) -> Result<Option<String>, FfiError> {
+    let item_id = binding_item_id(team_vault_id, profile_uid);
+    for rec in state.storage.list_vaults().map_err(FfiError::other)? {
+        // A vault whose membership chain does not verify against this
+        // account (one a teammate created) is not a private one of ours.
+        if private_only && !vault_member_count(state, &rec.vault_id).is_ok_and(|n| n <= 1) {
+            continue;
+        }
+        if let Some(item) = state
+            .storage
+            .get_item(&rec.vault_id, item_id.as_bytes())
+            .map_err(FfiError::other)?
+        {
+            if item.item_type == ITEM_TYPE_BINDING && !item.tombstone {
+                return Ok(Some(match rec.sync_target {
+                    SyncTarget::Cloud => hex::encode(&rec.vault_id),
+                    SyncTarget::Local => String::from_utf8_lossy(&rec.vault_id).to_string(),
+                    // non_exhaustive: a future target is treated like a local id.
+                    _ => String::from_utf8_lossy(&rec.vault_id).to_string(),
+                }));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// The body of [`Core::set_binding`], on state already locked.
+fn put_binding(
+    state: &CoreState,
+    personal_vault_id: &str,
+    binding: IdentityBinding,
+    allow_rebind: bool,
+) -> Result<(), FfiError> {
+    let IdentityBinding {
+        team_vault_id,
+        profile_uid,
+        identity_item_id,
+        destination_pin,
+    } = binding;
+    if team_vault_id.is_empty() || profile_uid.is_empty() {
+        return Err(FfiError::other(
+            "binding requires non-empty team_vault_id and profile_uid",
+        ));
+    }
+    let item_id = binding_item_id(&team_vault_id, &profile_uid);
+    ensure_item_type(
+        &state.storage,
+        personal_vault_id,
+        item_id.as_bytes(),
+        ITEM_TYPE_BINDING,
+    )?;
+    let vault = Vault::open(
+        &state.storage,
+        &state.keyset,
+        &resolve_vid(&state.storage, personal_vault_id),
+    )
+    .map_err(FfiError::other)?;
+    // First-bind guard: we do not silently rebind to a changed destination.
+    if !allow_rebind {
+        if let Some(existing) = vault
+            .get_item(item_id.as_bytes())
+            .map_err(FfiError::other)?
+            .filter(|i| i.item_type == ITEM_TYPE_BINDING)
+            .and_then(|i| serde_json::from_slice::<StoredBinding>(&i.content).ok())
+        {
+            if existing.destination_pin != destination_pin {
+                return Err(FfiError::other(format!(
+                    "binding already pinned to {}; re-bind to {} requires \
+                     explicit confirmation (allow_rebind)",
+                    existing.destination_pin, destination_pin
+                )));
+            }
+        }
+    }
+    let mut stored = StoredBinding {
+        team_vault_id,
+        profile_uid,
+        identity_item_id,
+        destination_pin,
+        extra: BTreeMap::new(),
+    };
+    // Forward-compat: carry over the unknown fields of the existing binding.
+    stored.extra =
+        preserved_extra::<StoredBinding>(&vault, item_id.as_bytes(), ITEM_TYPE_BINDING, |sb| {
+            sb.extra
+        });
+    let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
+    vault
+        .put_item(item_id.as_bytes(), ITEM_TYPE_BINDING, &json)
+        .map_err(map_vault_err)?;
+    Ok(())
+}
+
+/// The body of [`Core::save_connection`], on state already locked: writes the
+/// host and returns its id and uid (both minted when empty).
+fn put_connection(
+    state: &CoreState,
+    vault_id: &str,
+    profile: ConnectionProfile,
+) -> Result<(String, String), FfiError> {
+    let ConnectionProfile {
+        profile_id,
+        uid,
+        label,
+        host,
+        port,
+        user,
+        auth,
+        username_template,
+        jumps,
+        proxy,
+        tags,
+        startup_snippet_ids,
+        record_sessions,
+        agent_forward,
+        color,
+        icon,
+    } = profile;
+    let profile_id = if profile_id.is_empty() {
+        mint_item_id(&state.storage, vault_id, &label, "host")?
+    } else {
+        profile_id
+    };
+    let color = appearance_id(color)?;
+    let icon = appearance_id(icon)?;
+    // Empty uid = creating a new profile → mint an immutable id. A non-empty one
+    // (an edit: the UI returned the uid from get_connection) is kept as-is — the uid does not
+    // change when host/label change.
+    let uid = if uid.is_empty() {
+        mint_profile_uid()
+    } else {
+        uid
+    };
+    let (key_item_id, password_item_id, personal, system_agent_public_key) = match auth {
+        ProfileAuth::Key { key_item_id } => (Some(key_item_id), None, false, None),
+        ProfileAuth::VaultPassword { password_item_id } => {
+            (None, Some(password_item_id), false, None)
+        }
+        ProfileAuth::PromptPassword => (None, None, false, None),
+        ProfileAuth::Personal => (None, None, true, None),
+        ProfileAuth::SystemAgent { public_key } => (None, None, false, Some(public_key)),
+    };
+    let mut stored = StoredProfile {
+        uid: Some(uid.clone()),
+        label,
+        host,
+        port,
+        user,
+        key_item_id,
+        password_item_id,
+        personal,
+        username_template,
+        jumps: jumps
+            .into_iter()
+            .map(jump_to_stored)
+            .collect::<Result<_, _>>()?,
+        proxy: proxy.map(proxy_to_stored).transpose()?,
+        tags,
+        startup_snippet_ids,
+        record_sessions,
+        agent_forward,
+        system_agent_public_key,
+        color,
+        icon,
+        extra: BTreeMap::new(),
+    };
+    ensure_item_type(
+        &state.storage,
+        vault_id,
+        profile_id.as_bytes(),
+        ITEM_TYPE_CONNECTION,
+    )?;
+    let vault = Vault::open(
+        &state.storage,
+        &state.keyset,
+        &resolve_vid(&state.storage, vault_id),
+    )
+    .map_err(FfiError::other)?;
+    // Forward-compat: carry over the unknown fields of the existing profile.
+    stored.extra = preserved_extra::<StoredProfile>(
+        &vault,
+        profile_id.as_bytes(),
+        ITEM_TYPE_CONNECTION,
+        |sp| sp.extra,
+    );
+    let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
+    vault
+        .put_item(profile_id.as_bytes(), ITEM_TYPE_CONNECTION, &json)
+        .map_err(map_vault_err)?;
+    Ok((profile_id, uid))
+}
+
 /// Mints a new immutable profile uid: 16 cryptographically random bytes in hex.
 /// RANDOM (not derived from item_id) — a recycled-after-tombstone
 /// item_id (the ssh-config import takes the alias as the id) won't collide in uid with an old
@@ -8834,6 +9335,21 @@ fn stored_to_profile(vault_id: &str, profile_id: String, s: StoredProfile) -> Co
         color: stored_appearance_id(s.color),
         icon: stored_appearance_id(s.icon),
     }
+}
+
+/// Whether reference hop `hop` names a saved host of the connecting host's own
+/// vault. The core stamps that vault on every hop's placeholder auth when it
+/// reads a host ([`stored_to_profile`]), and the editors write the same, so a
+/// reference into any other vault is refused rather than resolved to that
+/// vault's credential: synced data from a team vault must not route a
+/// connection through, and so log in with, a host of a member's personal
+/// vault.
+fn hop_ref_in_own_vault(storage: &Storage, hop: &JumpHost, hop_ref: &HopRef) -> bool {
+    let own = match &hop.auth {
+        AuthMethod::Agent { vault_id, .. } | AuthMethod::VaultPassword { vault_id, .. } => vault_id,
+        AuthMethod::Password { .. } | AuthMethod::SystemAgent { .. } => return false,
+    };
+    resolve_vid(storage, own) == resolve_vid(storage, &hop_ref.vault_id)
 }
 
 /// Resolves a bastion profile by (vault_id, profile_uid) for a host-chain (B2.2):
@@ -10654,7 +11170,9 @@ pub trait FfiSyncTransport: Send + Sync {
     /// Hands objects to the server; returns the assigned `server_seq` in input order.
     /// One call is one request: the core cuts a large push into several calls. A
     /// server refusal for size (HTTP 413) must come back as
-    /// [`FfiError::PayloadTooLarge`], so the core can split the call further.
+    /// [`FfiError::PayloadTooLarge`], so the core can split the call further;
+    /// a refusal as not permitted (HTTP 403) as [`FfiError::UploadForbidden`],
+    /// so the core can single out the refused item and leave it out.
     fn push_objects(&self, objects: Vec<Vec<u8>>) -> Result<Vec<u64>, FfiError>;
     /// Returns what follows `cursor` (`server_seq > cursor`; order not guaranteed
     /// — the core sorts): all of it, or one page of it. The core calls again
@@ -10695,13 +11213,15 @@ impl SyncTransport for ForeignTransportAdapter {
                 Ok(seqs)
             }
             Err(e) => {
-                let too_large = matches!(e, FfiError::PayloadTooLarge { .. });
-                *lock_recover(&self.push_err) = Some(e);
-                Err(if too_large {
+                let kind = if matches!(e, FfiError::PayloadTooLarge { .. }) {
                     unissh_sync::SyncError::PayloadTooLarge
+                } else if matches!(e, FfiError::UploadForbidden { .. }) {
+                    unissh_sync::SyncError::Forbidden
                 } else {
                     unissh_sync::SyncError::Format
-                })
+                };
+                *lock_recover(&self.push_err) = Some(e);
+                Err(kind)
             }
         }
     }

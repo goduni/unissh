@@ -14,7 +14,7 @@ use clap::{Args, Subcommand};
 use unissh_ffi::{Core, Snippet};
 
 use crate::device::{without_line_ending, Device};
-use crate::edit::{self, commit, list, mint_id, stored, take, VaultArg};
+use crate::edit::{self, commit, list, stored, take, VaultArg};
 use crate::failure::{best_effort, Failure, Res};
 use crate::home::write_private;
 use crate::snippets::{self, Saved};
@@ -155,7 +155,8 @@ pub fn run(device: &Device, offline: bool, action: SnippetWrite) -> Res<()> {
                 .filter(|l| !l.is_empty())
                 .map_or_else(|| default_label(&command), str::to_owned);
             let snippet = Snippet {
-                snippet_id: mint_id(&label, "snippet"),
+                // The core mints the id when it saves the new snippet.
+                snippet_id: String::new(),
                 label: label.clone(),
                 command,
                 tags: tags.as_deref().map(list).unwrap_or_default(),

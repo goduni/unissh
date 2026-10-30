@@ -44,7 +44,7 @@ import { useApp } from "@/store/app";
 import { useCtx } from "@/store/ctx";
 import { useIsMobile, useNarrow } from "@/store/responsive";
 import * as api from "@/bridge/api";
-import { apiErrorMessage, ItemType } from "@/bridge/types";
+import { apiErrorMessage, isApiError, ItemType } from "@/bridge/types";
 import { cloudVaultServers, isOwnedCloud, serverShortLabel, vaultLoc } from "@/bridge/vaults";
 import type {
   ConnectionProfile,
@@ -61,11 +61,11 @@ import type {
 } from "@/bridge/types";
 import type { TunnelType } from "@/store/app";
 import { exportPath } from "@/support/paths";
-import { authorizedKeysAppendCmd } from "@/support/authorizedKeys";
 import { indexHostGroups } from "@/support/hostGroups";
 import { AppearancePicker } from "@/components/AppearancePicker";
 import type { TagColor } from "@/components/appearance";
 import { effectiveHostColor, indexAppearance } from "@/support/hostAppearance";
+import { NEW_GROUP, groupChoice, hopCandidates, identityToLink, editedJumpChain } from "./hostSave";
 
 // ── Form atoms ─────────────────────────────────────────────────
 interface MSegOption<T extends string> {
@@ -342,20 +342,8 @@ function SwitchRow({
   );
 }
 
-// Inline picker — re-uses Input's chrome to render a clickable <select> for
-// choosing a stored key / password item.
-const slug = (s: string) =>
-  s
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "") || "host";
-
 // ── New / edit host ────────────────────────────────────────────
 type AuthSeg = "key" | "password" | "ask" | "personal" | "systemAgent";
-
-/** Sentinel `groupId` meaning "create a new group (named `newGroupName`) on save".
- *  Group ids are `slug-timestamp`, so this can never collide with a real one. */
-const NEW_GROUP = "__new__";
 
 /** The colour a host with none of its own will show once saved under `groupId`.
  *  Save files it under that one group and drops it from every other, so the
@@ -470,6 +458,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
 
   const [useJump, setUseJump] = useState(edit ? edit.jumps.length > 0 : false);
   const jump0 = edit?.jumps[0];
+  const [jumpTouched, setJumpTouched] = useState(false);
   const [jHost, setJHost] = useState(jump0?.host ?? "");
   const [jPort, setJPort] = useState(jump0 ? String(jump0.port) : "22");
   const [jUser, setJUser] = useState(jump0?.user ?? "");
@@ -479,16 +468,9 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
   // B2.2 UI: a jump hop can either be an inline bastion (host/user/key above) or
   // a REFERENCE to another saved profile (by its immutable uid), resolved to that
   // profile's host/auth at connect. Profiles referenceable = saved hosts in this
-  // vault, minus the one being edited (no self-reference).
-  const refHosts = hosts.filter(
-    (h) =>
-      h.uid &&
-      h.profileId !== edit?.profileId &&
-      // A hop must present a usable credential; Personal/Ask profiles can't serve
-      // as a jump (the core errors on a non-credentialed referenced profile), so
-      // don't offer them — else an unusable bastion saves and fails only at connect.
-      (h.auth.type === "key" || h.auth.type === "vaultPassword"),
-  );
+  // vault, minus the one being edited, that log in with a key, a stored password
+  // or the system agent — the core's hop rule, which it also enforces on save.
+  const refHosts = hopCandidates(hosts, edit?.profileId);
   const [jMode, setJMode] = useState<"inline" | "ref">(jump0?.hopRef ? "ref" : "inline");
   const [jRef, setJRef] = useState(jump0?.hopRef?.profileUid ?? refHosts[0]?.uid ?? "");
   // The ref picker renders ONLY when there are referenceable hosts; the save path
@@ -738,19 +720,14 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
       ctx.toast(t("modals.key.enterName"), "warn");
       return;
     }
-    // The core silently overwrites a same-id key's private material — guard it.
-    if (keyItems.some((k) => k.itemId === name)) {
-      ctx.toast(t("modals.host.keyNameTaken"), "warn");
-      return;
-    }
     if (newKeyWillImport && !newKeyImport.trim()) {
       ctx.toast(t("modals.key.pasteToImport"), "warn");
       return;
     }
     setNewKeyBusy(true);
     try {
-      if (newKeyWillImport) await api.importSshKey(vault, name, newKeyImport.trim());
-      else await api.generateSshKey(vault, name);
+      if (newKeyWillImport) await api.createImportedSshKey(vault, name, newKeyImport.trim());
+      else await api.createSshKey(vault, name);
       await useApp.getState().reloadVault();
       setKeyId(name); // auto-select the freshly created key
       setShowNewKey(false);
@@ -759,7 +736,9 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
       setNewKeyFileName(null);
       ctx.toast(newKeyWillImport ? t("modals.key.imported") : t("modals.key.generated"), "ok");
     } catch (e) {
-      ctx.toast(apiErrorMessage(e), "err");
+      // Creating never replaces a key: the core refuses a name already taken.
+      if (isApiError(e) && e.kind === "alreadyExists") ctx.toast(t("modals.host.keyNameTaken"), "warn");
+      else ctx.toast(apiErrorMessage(e), "err");
     } finally {
       setNewKeyBusy(false);
     }
@@ -776,6 +755,8 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
       return;
     }
     let profileAuth: ProfileAuth;
+    // A typed password: the core stores it as a vault secret with the host.
+    let typedPassword: string | null = null;
     if (auth === "key") {
       if (!keyId) {
         ctx.toast(t("modals.host.selectKey"), "warn");
@@ -784,15 +765,9 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
       profileAuth = { type: "key", keyItemId: keyId };
     } else if (auth === "password") {
       if (newPw.trim()) {
-        // store the entered password as a new vault secret and reference it
-        const pwItemId = `${slug(label)}-pw-${Date.now()}`;
-        try {
-          await api.savePassword(vault, pwItemId, newPw);
-        } catch (e) {
-          ctx.toast(apiErrorMessage(e), "err");
-          return;
-        }
-        profileAuth = { type: "vaultPassword", passwordItemId: pwItemId };
+        // The core mints the secret's id and puts it here.
+        typedPassword = newPw;
+        profileAuth = { type: "vaultPassword", passwordItemId: "" };
       } else if (pwId) {
         profileAuth = { type: "vaultPassword", passwordItemId: pwId };
       } else {
@@ -838,6 +813,8 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
       }
     }
 
+    const savedJumps = editedJumpChain(edit?.jumps ?? [], jumps[0], useJump, jumpTouched);
+
     // Mirror the render: no host typed → no proxy saved (the toggle alone is
     // not a configuration). SOCKS4 has no password in the protocol, so a
     // picked password item is dropped rather than stored dead.
@@ -858,9 +835,9 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
           }
         : null;
 
-    const profileId = edit?.profileId || `${slug(label)}-${Date.now()}`;
     const profile: ConnectionProfile = {
-      profileId,
+      // Empty on create → the core mints the id and returns it from the save.
+      profileId: edit?.profileId ?? "",
       // Carry the immutable uid through edits; empty on create → core mints it.
       uid: edit?.uid ?? "",
       // Username template only applies to Personal auth (gateway login shaping).
@@ -871,7 +848,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
       port: parseInt(port, 10) || 22,
       user: user.trim(),
       auth: profileAuth,
-      jumps,
+      jumps: savedJumps,
       proxy,
       tags,
       startupSnippetIds,
@@ -882,79 +859,29 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
     };
 
     try {
-      await api.saveConnection(vault, profile);
-
-      // Inline personal binding: link the chosen identity to this host. The uid is
-      // minted by the core on create, so re-read the saved profile to get it.
-      if (auth === "personal" && bindVault && boundIdentity) {
-        try {
-          const uid =
-            edit?.uid ||
-            (await api.listConnections(vault)).find((c) => c.profileId === profileId)?.uid ||
-            "";
-          if (uid) {
-            const dest = await api.personalDestination(
-              profile.host,
-              profile.port,
-              profile.usernameTemplate,
-              profile.jumps,
-              profile.proxy,
-            );
-            const existing = await api.getBinding(bindVault, vault, uid).catch(() => null);
-            await api.setBinding(
-              bindVault,
-              {
-                teamVaultId: vault,
-                profileUid: uid,
-                identityItemId: boundIdentity,
-                destinationPin: dest,
-              },
-              existing !== null,
-            );
-          }
-        } catch (e) {
-          ctx.toast(apiErrorMessage(e), "err");
-        }
-      }
-
-      // Resolve the target group. A pending new group is created here (on save) so
-      // a cancelled modal never leaves an orphan empty group behind.
-      let targetGroupId = groupId;
-      if (groupId === NEW_GROUP && newGroupName.trim()) {
-        const created: ServerGroup = {
-          groupId: `${slug(newGroupName)}-${Date.now()}`,
-          label: newGroupName.trim(),
-          memberIds: [profileId],
-          parentId: null,
-        };
-        await api.saveGroup(vault, created);
-        targetGroupId = created.groupId;
-      } else if (targetGroupId) {
-        const g = groups.find((x) => x.groupId === targetGroupId);
-        if (g && !g.memberIds.includes(profileId)) {
-          await api.saveGroup(vault, { ...g, memberIds: [...g.memberIds, profileId] });
-        }
-      } else {
-        targetGroupId = ""; // "No group"
-      }
-
-      // Drop the host from every other group. On edit, so a move to another
-      // group (or to none) does not leave it in both. On create too: a group
-      // can still list the id of a deleted host, and a new host reusing that
-      // id would silently inherit that group's colour while this editor said
-      // otherwise.
-      for (const g of groups) {
-        if (g.groupId !== targetGroupId && g.memberIds.includes(profileId)) {
-          await api.saveGroup(vault, {
-            ...g,
-            memberIds: g.memberIds.filter((id) => id !== profileId),
-          });
-        }
-      }
-
+      // One call: the core checks the host's rules, stores a typed password
+      // with it, files it under one group (a pending new group is created
+      // here, on save, so a cancelled modal never leaves an empty one) and
+      // links or re-pins the personal identity.
+      const saved = await api.saveHost(
+        vault,
+        profile,
+        typedPassword,
+        groupChoice(groupId, newGroupName),
+        identityToLink(auth === "personal", bindVault, boundIdentity),
+      );
       await useApp.getState().reloadVault();
       onClose();
       ctx.toast(edit ? t("modals.host.updated") : t("modals.host.saved"), "ok");
+      // Saved, but not all of it: say what is missing rather than nothing.
+      for (const gap of saved.unfinished) {
+        ctx.toast(
+          gap.kind === "identityNotLinked"
+            ? t("modals.host.identityNotLinked", { msg: gap.message })
+            : t("modals.host.identityPinKept", { msg: gap.message }),
+          "warn",
+        );
+      }
     } catch (e) {
       ctx.toast(apiErrorMessage(e), "err");
     }
@@ -1455,7 +1382,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                       <button
                         key={m}
                         type="button"
-                        onClick={() => setJMode(m)}
+                        onClick={() => { setJumpTouched(true); setJMode(m); }}
                         style={{
                           flex: 1,
                           padding: `${rem(7)} ${rem(10)}`,
@@ -1480,7 +1407,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                   <Field label={t("modals.host.jumpRefProfile")} w="100%">
                     <NHSelect
                       value={jRef}
-                      onChange={setJRef}
+                      onChange={(v) => { setJumpTouched(true); setJRef(v); }}
                       options={refHosts.map((h) => ({
                         value: h.uid,
                         label: h.label || `${h.user}@${h.host}`,
@@ -1495,20 +1422,20 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                   <>
                     <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", gap: rem(12) }}>
                       <Field label={t("modals.host.bastionHost")} w="100%">
-                        <Input value={jHost} placeholder="bastion.corp.net" mono onChange={setJHost} />
+                        <Input value={jHost} placeholder="bastion.corp.net" mono onChange={(v) => { setJumpTouched(true); setJHost(v); }} />
                       </Field>
                       <Field label={t("modals.host.port")} w={narrow ? "100%" : "96px"}>
-                        <Input value={jPort} mono selectOnFocus onChange={setJPort} />
+                        <Input value={jPort} mono selectOnFocus onChange={(v) => { setJumpTouched(true); setJPort(v); }} />
                       </Field>
                     </div>
                     <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", gap: rem(12) }}>
                       <Field label={t("modals.host.user")} w="100%">
-                        <Input value={jUser} placeholder="ops" mono onChange={setJUser} />
+                        <Input value={jUser} placeholder="ops" mono onChange={(v) => { setJumpTouched(true); setJUser(v); }} />
                       </Field>
                       <Field label={t("modals.host.key")} w="100%">
                         <NHSelect
                           value={jKeyId}
-                          onChange={setJKeyId}
+                          onChange={(v) => { setJumpTouched(true); setJKeyId(v); }}
                           options={keyItems.map((k) => ({ value: k.itemId, label: k.itemId }))}
                           empty={t("modals.host.noKeys")}
                         />
@@ -1986,7 +1913,7 @@ function NewKeyModal({ onClose }: { onClose: () => void }) {
   const [passphrase, setPassphrase] = useState("");
   const [busy, setBusy] = useState(false);
 
-  // The core's generate_ssh_key always produces Ed25519. For other algorithms
+  // The core's create_ssh_key always produces Ed25519. For other algorithms
   // (or a key loaded from a file / pasted) we import the existing OpenSSH key.
   const canGenerate = algo === "ed25519";
   // Once a key is provided (pasted or loaded from a file) we import it regardless
@@ -2034,24 +1961,26 @@ function NewKeyModal({ onClose }: { onClose: () => void }) {
           setBusy(false);
           return;
         }
-        await api.importSshKey(vault, name.trim(), imported.trim(), passphrase.trim() || undefined);
+        await api.createImportedSshKey(vault, name.trim(), imported.trim(), passphrase.trim() || undefined);
         ctx.toast(t("modals.key.imported"), "ok");
       } else {
-        await api.generateSshKey(vault, name.trim());
+        await api.createSshKey(vault, name.trim());
         ctx.toast(t("modals.key.generated"), "ok");
       }
       await useApp.getState().reloadVault();
       onClose();
     } catch (e) {
-      // Encrypted key: keep the modal open and hint about the passphrase
-      // (the messages are stable English strings from the core, see AgentError).
-      const msg = apiErrorMessage(e);
-      if (/passphrase is required|passphrase-protected/i.test(msg)) {
+      // Encrypted key: keep the modal open and hint about the passphrase. A
+      // name already taken is refused by the core (creating never replaces).
+      const kind = isApiError(e) ? e.kind : null;
+      if (kind === "passphraseRequired") {
         ctx.toast(t("modals.key.needPassphrase"), "warn");
-      } else if (/incorrect passphrase/i.test(msg)) {
+      } else if (kind === "wrongPassphrase") {
         ctx.toast(t("modals.key.wrongPassphrase"), "err");
+      } else if (kind === "alreadyExists") {
+        ctx.toast(t("modals.host.keyNameTaken"), "warn");
       } else {
-        ctx.toast(msg, "err");
+        ctx.toast(apiErrorMessage(e), "err");
       }
     } finally {
       setBusy(false);
@@ -3065,7 +2994,14 @@ function CopyKeyToServerModal({
       ctx.toast(t("modals.copyKey.selectHost"), "warn");
       return;
     }
-    const cmd = authorizedKeysAppendCmd(openssh);
+    // The core builds it: the same idempotent ssh-copy-id the guided rotation deploys with.
+    let cmd: string;
+    try {
+      cmd = await api.authorizedKeysAppendCommand(openssh);
+    } catch (e) {
+      ctx.toast(apiErrorMessage(e), "err");
+      return;
+    }
 
     setBusy(true);
     setErrors([]);

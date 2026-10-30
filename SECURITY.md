@@ -375,6 +375,17 @@ Reports are welcome anywhere in the repo, but the **highest-value review targets
   treats the transport as **untrusted**. Anything that lets a malicious server
   get an unverified, rolled-back, foreign-signed, below-epoch-floor, or
   equivocating object **applied** to local state is a high-severity bug.
+  One user-confirmed exception exists: discarding edits by this account that
+  cannot be sent (`unissh vaults discard-unpushable`, the app's "Discard unsent
+  changes", #166) deletes exactly those rows past version monotonicity, so that
+  the server's lower version can take their place. Only those rows are
+  affected, and only after the user confirms and a fresh check confirms that
+  they cannot be sent. An edit its author may not make is dropped on the local
+  author check without being sent. An edit the server refused is sent once
+  more and dropped only if the server refuses it again. The server's copy is still verified before it is applied.
+  If the copy for a dropped item does not verify, the discard rolls back and
+  nothing is dropped. A dropped item the server holds nothing of is removed,
+  and the confirmation says so. Anything else that lowers a version is in scope.
 
 Also in scope: the server's defense-in-depth signature re-verification, the
 admin-panel wasm crypto, anti-rollback floors, and any path that could route
