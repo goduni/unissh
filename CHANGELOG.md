@@ -208,6 +208,23 @@ starts with `0.`:
 
 ### Fixed
 
+- Saving a host in the app preserves its entire jump chain, including hops
+  the editor does not show. Turning ProxyJump off removes the whole chain.
+- Host imports, imported-key attachment and tag edits use the core host-save
+  rules. An SSH config without `User` uses the account's default username;
+  without either, the import is refused without partially writing the batch.
+  A saved bastion cannot switch to an interactive or Personal login while
+  other hosts reference it; the error names those hosts.
+- Guided key rotation includes Personal hosts whose bound identity uses the
+  key, through the ordinary destination-pin check. Broken relevant bindings
+  stop planning instead of silently omitting a machine. Unpinned machines
+  are skipped and remain in the explicit finish lockout warning; a scoped
+  CLI run includes its key-bearing jump hosts. Concurrent app starts cannot
+  replace a run still in flight.
+- Key usage and delete warnings inspect references from other readable
+  vaults, qualify host ids by vault, and name vaults not inspected. The Keys
+  tab fetches all usage counts in one call.
+
 - A teammate could never receive a vault shared with them, in the app or the
   CLI: their device rejected it, because it did not know the vault's owner and
   nothing let them say who that was. Now they confirm the owner's fingerprint

@@ -374,6 +374,7 @@ pub fn run() {
             commands::abandon_key_rotation,
             commands::list_key_rotations,
             commands::key_usage,
+            commands::key_usages,
             commands::key_rotation_plan,
             commands::key_rotation_committed,
             commands::key_rotation_start,

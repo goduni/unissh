@@ -65,7 +65,7 @@ import { indexHostGroups } from "@/support/hostGroups";
 import { AppearancePicker } from "@/components/AppearancePicker";
 import type { TagColor } from "@/components/appearance";
 import { effectiveHostColor, indexAppearance } from "@/support/hostAppearance";
-import { NEW_GROUP, groupChoice, hopCandidates, identityToLink } from "./hostSave";
+import { NEW_GROUP, groupChoice, hopCandidates, identityToLink, editedJumpChain } from "./hostSave";
 
 // ── Form atoms ─────────────────────────────────────────────────
 interface MSegOption<T extends string> {
@@ -458,6 +458,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
 
   const [useJump, setUseJump] = useState(edit ? edit.jumps.length > 0 : false);
   const jump0 = edit?.jumps[0];
+  const [jumpTouched, setJumpTouched] = useState(false);
   const [jHost, setJHost] = useState(jump0?.host ?? "");
   const [jPort, setJPort] = useState(jump0 ? String(jump0.port) : "22");
   const [jUser, setJUser] = useState(jump0?.user ?? "");
@@ -812,6 +813,8 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
       }
     }
 
+    const savedJumps = editedJumpChain(edit?.jumps ?? [], jumps[0], useJump, jumpTouched);
+
     // Mirror the render: no host typed → no proxy saved (the toggle alone is
     // not a configuration). SOCKS4 has no password in the protocol, so a
     // picked password item is dropped rather than stored dead.
@@ -845,7 +848,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
       port: parseInt(port, 10) || 22,
       user: user.trim(),
       auth: profileAuth,
-      jumps,
+      jumps: savedJumps,
       proxy,
       tags,
       startupSnippetIds,
@@ -1379,7 +1382,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                       <button
                         key={m}
                         type="button"
-                        onClick={() => setJMode(m)}
+                        onClick={() => { setJumpTouched(true); setJMode(m); }}
                         style={{
                           flex: 1,
                           padding: `${rem(7)} ${rem(10)}`,
@@ -1404,7 +1407,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                   <Field label={t("modals.host.jumpRefProfile")} w="100%">
                     <NHSelect
                       value={jRef}
-                      onChange={setJRef}
+                      onChange={(v) => { setJumpTouched(true); setJRef(v); }}
                       options={refHosts.map((h) => ({
                         value: h.uid,
                         label: h.label || `${h.user}@${h.host}`,
@@ -1419,20 +1422,20 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                   <>
                     <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", gap: rem(12) }}>
                       <Field label={t("modals.host.bastionHost")} w="100%">
-                        <Input value={jHost} placeholder="bastion.corp.net" mono onChange={setJHost} />
+                        <Input value={jHost} placeholder="bastion.corp.net" mono onChange={(v) => { setJumpTouched(true); setJHost(v); }} />
                       </Field>
                       <Field label={t("modals.host.port")} w={narrow ? "100%" : "96px"}>
-                        <Input value={jPort} mono selectOnFocus onChange={setJPort} />
+                        <Input value={jPort} mono selectOnFocus onChange={(v) => { setJumpTouched(true); setJPort(v); }} />
                       </Field>
                     </div>
                     <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", gap: rem(12) }}>
                       <Field label={t("modals.host.user")} w="100%">
-                        <Input value={jUser} placeholder="ops" mono onChange={setJUser} />
+                        <Input value={jUser} placeholder="ops" mono onChange={(v) => { setJumpTouched(true); setJUser(v); }} />
                       </Field>
                       <Field label={t("modals.host.key")} w="100%">
                         <NHSelect
                           value={jKeyId}
-                          onChange={setJKeyId}
+                          onChange={(v) => { setJumpTouched(true); setJKeyId(v); }}
                           options={keyItems.map((k) => ({ value: k.itemId, label: k.itemId }))}
                           empty={t("modals.host.noKeys")}
                         />

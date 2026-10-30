@@ -286,7 +286,7 @@ export function KeyRotationModal({
                 <Btn
                   icon="refresh"
                   onClick={start}
-                  disabled={starting || committed === null || plan === null || unpinned.length > 0}
+                  disabled={starting || committed === null || plan === null}
                   style={mobileBtn}
                 >
                   {t(resumeCandidate ? "keyRotation.continue" : "keyRotation.start")}
@@ -344,7 +344,7 @@ export function KeyRotationModal({
           ) : (
             <ul aria-live="polite" style={{ listStyle: "none", margin: 0, padding: 0 }}>
               {plan.targets.map((tg, i) => {
-                const s: RotationTargetState = run?.states[tg.id] ?? { kind: "pending", step: "deploy" };
+                const s: RotationTargetState = run?.states[tg.id] ?? (run ? { kind: "keptOld", after: null } : { kind: "pending", step: "deploy" });
                 return (
                   <li
                     key={tg.id}

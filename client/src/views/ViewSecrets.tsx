@@ -20,7 +20,6 @@ import * as api from "@/bridge/api";
 import { apiErrorMessage, isApiError, ItemType } from "@/bridge/types";
 import { logWarn } from "@/bridge/log";
 import type {
-  ConnectionProfile,
   ItemInfo,
   Identity,
   KeyRotationLink,
@@ -237,7 +236,9 @@ function KeyRow({
   agentShared,
   onAgentShared,
   rotation,
+  usage,
 }: {
+  usage: KeyUsage | null;
   item: ItemInfo;
   isMobile: boolean;
   first?: boolean;
@@ -250,34 +251,10 @@ function KeyRow({
   const { t, i18n } = useTranslation();
   const ctx = useCtx();
   const { fmtDate } = useFmt();
-  const hosts = useApp((s) => s.hosts);
-  const items = useApp((s) => s.items);
   const keyAgeDays = useApp((s) => s.keyAgeDays);
   const vault = useApp((s) => s.vaultId);
-  // The core's answer to "what uses this key" (hosts and identities). Reloaded
-  // whenever the vault's hosts or items change; null until it arrives.
-  const [usage, setUsage] = useState<KeyUsage | null>(null);
-  useEffect(() => {
-    let alive = true;
-    // Never show the previous vault's or item's count while this one loads.
-    setUsage(null);
-    if (!vault) return;
-    api.keyUsage(vault, item.itemId).then(
-      (u) => alive && setUsage(u),
-      (e) => {
-        logWarn(`key usage lookup failed: ${apiErrorMessage(e)}`);
-        if (alive) setUsage(null);
-      },
-    );
-    return () => {
-      alive = false;
-    };
-  }, [vault, item.itemId, hosts, items]);
   const uses = usage ? keyUsageCount(usage) : null;
-  const usedHosts = (pick: (roles: KeyUseRole[]) => boolean): ConnectionProfile[] => {
-    const ids = new Set(usage?.hosts.filter((u) => pick(u.roles)).map((u) => u.profileId));
-    return hosts.filter((h) => ids.has(h.profileId));
-  };
+  const usedHosts = (pick: (roles: KeyUseRole[]) => boolean) => usage?.hosts.filter((u) => pick(u.roles)) ?? [];
   const old = isKeyOld(item.createdAt, keyAgeDays, Date.now());
   const [open, setOpen] = useState(false);
   const detailsId = `key-details-${item.itemId}`;
@@ -381,11 +358,13 @@ function KeyRow({
   // Rotate in place: new keypair under the same item id, so every host
   // referencing it follows automatically — but the old private key is replaced
   // at once, so hosts lacking the new public key refuse logins until updated.
-  const onRotate = () => {
+  const onRotate = async () => {
     if (!vault) return;
+    const now = await usageNow(vault, item.itemId);
+    const uses = now ? t("secrets.replaceUses", { hosts: now.hosts.map((h) => h.label).concat(now.identities.map((i) => i.label)).join(", ") }) : "";
     ctx.confirm({
       title: t("secrets.rotateKeyTitle"),
-      body: t("secrets.rotateKeyBody", { item: item.itemId }),
+      body: [t("secrets.rotateKeyBody", { item: item.itemId }), uses, now?.unscannedVaults?.length ? t("secrets.usageIncomplete", { vaults: now.unscannedVaults.join(", ") }) : ""].filter(Boolean).join("\n\n"),
       danger: true,
       confirmLabel: t("secrets.rotateKeyConfirm"),
       icon: "refresh",
@@ -635,6 +614,7 @@ function KeyRow({
                 hosts={usedHosts((r) => r.includes("inlineHop") || r.includes("referencedHop"))}
               />
               <KeyIdentityList label={t("secrets.keyUsedIdentity")} identities={usage.identities} />
+              {(usage.unscannedVaults?.length ?? 0) > 0 && <p style={{ color: p.amber, fontSize: TEXT.small }}>{t("secrets.usageIncomplete", { vaults: usage.unscannedVaults?.join(", ") })}</p>}
             </>
           ) : null}
         </div>
@@ -645,10 +625,12 @@ function KeyRow({
 
 /** One "where used" list in a key's details: each host is a button that opens
  *  its profile. Renders nothing when empty, so a key that only hops shows one. */
-function KeyHostList({ label, hosts }: { label: string; hosts: ConnectionProfile[] }) {
+function KeyHostList({ label, hosts }: { label: string; hosts: KeyUsage["hosts"] }) {
   const p = usePalette();
   const { t } = useTranslation();
   const ctx = useCtx();
+  const localHosts = useApp((state) => state.hosts);
+  const vault = useApp((state) => state.vaultId);
   if (hosts.length === 0) return null;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: rem(4) }}>
@@ -656,10 +638,13 @@ function KeyHostList({ label, hosts }: { label: string; hosts: ConnectionProfile
         {label}
       </div>
       <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexWrap: "wrap", gap: rem(6) }}>
-        {hosts.map((h) => (
-          <li key={h.profileId}>
+        {hosts.map((h) => {
+          const edit = (!h.vaultId || h.vaultId === vault) ? localHosts.find((host) => host.profileId === h.profileId) : undefined;
+          return (
+          <li key={`${h.vaultId ?? vault}/${h.profileId}`}>
             <button
-              onClick={() => ctx.openModal({ kind: "host", edit: h })}
+              disabled={!edit}
+              onClick={() => { if (edit) ctx.openModal({ kind: "host", edit }); }}
               aria-label={t("secrets.keyOpenHost", { host: h.label })}
               style={{
                 display: "inline-flex",
@@ -670,7 +655,7 @@ function KeyHostList({ label, hosts }: { label: string; hosts: ConnectionProfile
                 border: `1px solid ${p.line}`,
                 background: p.bg2,
                 color: p.txt,
-                cursor: "pointer",
+                cursor: edit ? "pointer" : "default",
                 fontSize: TEXT.small,
               }}
             >
@@ -678,7 +663,7 @@ function KeyHostList({ label, hosts }: { label: string; hosts: ConnectionProfile
               {h.label}
             </button>
           </li>
-        ))}
+        ); })}
       </ul>
     </div>
   );
@@ -722,6 +707,7 @@ function KeyIdentityList({ label, identities }: { label: string; identities: Key
  *  apart (each pluralised); empty for an unused one. */
 function usedBy(t: TFunction, u: KeyUsage): string {
   return [
+    (u.unscannedVaults?.length ?? 0) > 0 && t("secrets.usageIncomplete", { vaults: u.unscannedVaults?.join(", ") }),
     u.hosts.length > 0 && t("secrets.usedByHosts", { count: u.hosts.length }),
     u.identities.length > 0 && t("secrets.usedByIdentities", { count: u.identities.length }),
   ]
@@ -735,7 +721,7 @@ function usedBy(t: TFunction, u: KeyUsage): string {
 async function usageNow(vaultId: string, itemId: string): Promise<KeyUsage | null> {
   try {
     const u = await api.keyUsage(vaultId, itemId);
-    return keyUsageCount(u) > 0 ? u : null;
+    return keyUsageCount(u) > 0 || (u.unscannedVaults?.length ?? 0) > 0 ? u : null;
   } catch (e) {
     logWarn(`key usage lookup before delete failed: ${apiErrorMessage(e)}`);
     return null;
@@ -748,6 +734,18 @@ function KeysTab({ keys, isMobile }: { keys: ItemInfo[]; isMobile: boolean }) {
   const ctx = useCtx();
   const vault = useApp((s) => s.vaultId);
   const [links, setLinks] = useState<KeyRotationLink[]>([]);
+  const hosts = useApp((s) => s.hosts);
+  const items = useApp((s) => s.items);
+  const [usages, setUsages] = useState<Record<string, KeyUsage> | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setUsages(null);
+    if (vault) api.keyUsages(vault).then(
+      (value) => { if (alive) setUsages(value); },
+      (error) => logWarn(`key usage lookup failed: ${apiErrorMessage(error)}`),
+    );
+    return () => { alive = false; };
+  }, [vault, hosts, items]);
 
   // Staged rotations (device-local links + synced candidates); re-read whenever the
   // key set changes (begin/finish/abandon all reload the vault). Keyed on a
@@ -835,6 +833,7 @@ function KeysTab({ keys, isMobile }: { keys: ItemInfo[]; isMobile: boolean }) {
           <KeyRow
             key={k.itemId}
             item={k}
+            usage={usages?.[k.itemId] ?? null}
             isMobile={isMobile}
             first={i === 0}
             rotation={rotationOf(k.itemId)}

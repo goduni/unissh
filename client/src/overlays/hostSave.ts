@@ -3,7 +3,7 @@
 // `unissh hosts add|edit`; this only maps the form onto the request and
 // picks what the form offers.
 
-import type { ConnectionProfile, HostGroupChoice, IdentityLink } from "@/bridge/types";
+import type { ConnectionProfile, HostGroupChoice, IdentityLink, JumpHost } from "@/bridge/types";
 
 /** Sentinel `groupId` meaning "create a new group (named `newGroupName`) on
  *  save". The core mints group ids as `slug-timestamp`, so this can never
@@ -46,4 +46,11 @@ export function identityToLink(
   identityId: string,
 ): IdentityLink | null {
   return personal && vaultId && identityId ? { vaultId, identityId } : null;
+}
+
+/** The editor changes the first hop; the remaining route is kept verbatim. */
+export function editedJumpChain(previous: readonly JumpHost[], first: JumpHost | undefined, enabled: boolean, touched: boolean): JumpHost[] {
+  if (!enabled) return [];
+  if (!touched && previous.length > 0) return [...previous];
+  return first ? [first, ...previous.slice(1)] : [];
 }

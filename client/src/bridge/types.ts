@@ -817,8 +817,9 @@ export type KeyUseRole = "login" | "inlineHop" | "referencedHop" | "proxyPasswor
 /** What in a vault uses one key or password item — the core's single answer
  *  (`key_usage`, #169), shared with the CLI. Ids and labels only. */
 export interface KeyUsage {
+  unscannedVaults?: string[];
   /** Hosts using it, each once, with every way it does. */
-  hosts: { profileId: string; label: string; roles: KeyUseRole[] }[];
+  hosts: { vaultId?: string; profileId: string; label: string; roles: KeyUseRole[] }[];
   /** Identities referencing it as their key or password. */
   identities: { identityId: string; label: string }[];
 }
