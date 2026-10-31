@@ -17,11 +17,12 @@ use windows_sys::Win32::Foundation::{HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows_sys::Win32::System::Console::{
     FlushConsoleInputBuffer, GetConsoleCP, GetConsoleMode, GetConsoleOutputCP,
     GetConsoleProcessList, GetConsoleScreenBufferInfo, GetStdHandle, PeekConsoleInputW,
-    ReadConsoleInputW, SetConsoleCP, SetConsoleMode, WriteConsoleW, CONSOLE_SCREEN_BUFFER_INFO,
-    DISABLE_NEWLINE_AUTO_RETURN, ENABLE_ECHO_INPUT, ENABLE_EXTENDED_FLAGS, ENABLE_LINE_INPUT,
-    ENABLE_MOUSE_INPUT, ENABLE_PROCESSED_INPUT, ENABLE_PROCESSED_OUTPUT, ENABLE_QUICK_EDIT_MODE,
-    ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING, ENABLE_WINDOW_INPUT,
-    INPUT_RECORD, KEY_EVENT, STD_INPUT_HANDLE,
+    ReadConsoleInputW, SetConsoleCP, SetConsoleMode, SetConsoleOutputCP, WriteConsoleW,
+    CONSOLE_SCREEN_BUFFER_INFO, DISABLE_NEWLINE_AUTO_RETURN, ENABLE_ECHO_INPUT,
+    ENABLE_EXTENDED_FLAGS, ENABLE_LINE_INPUT, ENABLE_MOUSE_INPUT, ENABLE_PROCESSED_INPUT,
+    ENABLE_PROCESSED_OUTPUT, ENABLE_QUICK_EDIT_MODE, ENABLE_VIRTUAL_TERMINAL_INPUT,
+    ENABLE_VIRTUAL_TERMINAL_PROCESSING, ENABLE_WINDOW_INPUT, INPUT_RECORD, KEY_EVENT,
+    STD_INPUT_HANDLE,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcessId, WaitForSingleObject};
 use zeroize::Zeroizing;
@@ -207,12 +208,7 @@ impl Tty {
                 Key::End => return Err(ended()),
                 Key::More if echo => {
                     if editor.text.len() > bytes {
-                        // Wait for a complete UTF-8 character, never echo partial bytes.
-                        if let Ok(text) = std::str::from_utf8(&editor.text) {
-                            if let Some(c) = text.chars().next_back() {
-                                write_console(&self.output, c.encode_utf8(&mut [0; 4]))?;
-                            }
-                        }
+                        echo_character(&self.output, &editor.text)?;
                     }
                     for _ in editor.chars()..chars {
                         write_console(&self.output, "\x08 \x08")?;
@@ -222,6 +218,17 @@ impl Tty {
             }
         }
     }
+}
+
+// Wait for a complete UTF-8 character, never echo partial bytes.
+fn echo_character(output: &File, bytes: &[u8]) -> io::Result<()> {
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return Ok(());
+    };
+    if let Some(c) = text.chars().next_back() {
+        write_console(output, c.encode_utf8(&mut [0; 4]))?;
+    }
+    Ok(())
 }
 
 fn write_console(file: &File, text: &str) -> io::Result<()> {

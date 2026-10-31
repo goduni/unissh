@@ -21,8 +21,8 @@ use windows_sys::Win32::Security::Authorization::{
     SDDL_REVISION_1, SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::{
-    GetAce, GetTokenInformation, TokenUser, ACCESS_ALLOWED_ACE, ACCESS_DENIED_ACE_TYPE, ACE_HEADER,
-    ACL, DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
+    GetAce, GetTokenInformation, TokenUser, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL,
+    DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
     SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
 };
 use windows_sys::Win32::Storage::FileSystem::{
@@ -124,8 +124,7 @@ fn descriptor() -> io::Result<Allocation> {
 
 fn attributes(descriptor: &Allocation) -> io::Result<SECURITY_ATTRIBUTES> {
     Ok(SECURITY_ATTRIBUTES {
-        nLength: u32::try_from(std::mem::size_of::<SECURITY_ATTRIBUTES>())
-            .map_err(io::Error::other)?,
+        nLength: u32::try_from(size_of::<SECURITY_ATTRIBUTES>()).map_err(io::Error::other)?,
         lpSecurityDescriptor: descriptor.0,
         bInheritHandle: 0,
     })
@@ -235,7 +234,7 @@ pub(super) fn is_private(file: &File) -> io::Result<bool> {
         }
         // SAFETY: successful GetAce returns a valid ACE headed by ACE_HEADER.
         let header = unsafe { &*ace.cast::<ACE_HEADER>() };
-        if u32::from(header.AceType) == ACCESS_DENIED_ACE_TYPE {
+        if header.AceType == 1 {
             continue;
         }
         // Only simple allow ACEs can be interpreted here. Unknown object or
