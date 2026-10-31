@@ -551,6 +551,11 @@ jobs:
             echo "::error::could not extract the AppImage — the check below would pass vacuously."
             exit 1
           fi
+          DESKTOP_ENTRY=$(find "$WORK/squashfs-root/usr/share/applications" -name '*.desktop' -print -quit)
+          if [ -z "$DESKTOP_ENTRY" ] || ! grep -Eq '^Exec=.* --gui([[:space:]]|$)' "$DESKTOP_ENTRY"; then
+            echo "::error::the AppImage desktop entry must explicitly open the GUI"
+            exit 1
+          fi
           # The pattern must mirror the cleanup's glob EXACTLY, `.so*` included.
           # A bare `libwayland-*` also matches the packages' documentation
           # directories under usr/share/doc, which are inert and which the arm64

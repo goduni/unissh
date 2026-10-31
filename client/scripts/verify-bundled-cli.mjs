@@ -2,7 +2,8 @@
 import process from "node:process";
 import { log } from "node:console";
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { verifyWindowsCliImports } from "./windows-cli-imports.mjs";
@@ -30,6 +31,10 @@ if (mac) {
   }
 }
 if (process.platform === "linux") {
+  const dependencies = execFileSync("ldd", [binary], { encoding: "utf8" });
+  if (/lib(?:gtk|gdk|webkit|javascriptcoregtk)/i.test(dependencies)) {
+    throw new Error(`Terminal commands must not load GUI libraries: ${dependencies}`);
+  }
   const directory = join(release, "bundle", "deb");
   const packages = readdirSync(directory).filter(name => name.endsWith(".deb"));
   if (!packages.length) throw new Error("No Debian package was produced");
@@ -37,6 +42,17 @@ if (process.platform === "linux") {
     const contents = execFileSync("dpkg-deb", ["--contents", join(directory, name)], { encoding: "utf8" });
     if (!/(?:^|\s)(?:\.\/)?usr\/lib\/\S+\/cli\/unissh-cli(?:\r?\n|$)/m.test(contents)) {
       throw new Error(`${name} does not contain the CLI at its resource path:\n${contents}`);
+    }
+    const extracted = mkdtempSync(join(tmpdir(), "unissh-desktop-check-"));
+    try {
+      execFileSync("dpkg-deb", ["--extract", join(directory, name), extracted]);
+      const applications = join(extracted, "usr", "share", "applications");
+      const entries = readdirSync(applications).filter(file => file.endsWith(".desktop"));
+      if (!entries.length || entries.some(file => !/^Exec=.* --gui(?:\s|$)/m.test(readFileSync(join(applications, file), "utf8")))) {
+        throw new Error(`${name} must explicitly open the GUI from its desktop entry`);
+      }
+    } finally {
+      rmSync(extracted, { recursive: true, force: true });
     }
   }
 }
