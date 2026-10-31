@@ -204,7 +204,11 @@ impl Layout {
             // Dotfile managers commonly symlink shell profiles. Update the
             // target atomically and preserve the link; a dangling link fails
             // before any profile is replaced.
-            let path = if path.is_symlink() { fs::canonicalize(path)? } else { path };
+            let path = if path.is_symlink() {
+                fs::canonicalize(path)?
+            } else {
+                path
+            };
             let mut text = match fs::read_to_string(&path) {
                 Ok(text) => text,
                 Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
@@ -443,7 +447,9 @@ mod tests {
         std::os::unix::fs::symlink(&target, &profile).unwrap();
         layout.configure_path().unwrap();
         assert!(profile.is_symlink());
-        assert!(std::fs::read_to_string(&target).unwrap().starts_with("# dotfiles\n"));
+        assert!(std::fs::read_to_string(&target)
+            .unwrap()
+            .starts_with("# dotfiles\n"));
         assert!(layout.path_configured().unwrap());
         std::fs::remove_file(&target).unwrap();
         assert!(layout.configure_path().is_err());
