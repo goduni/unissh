@@ -35,7 +35,9 @@ if (process.platform === "linux") {
   if (!packages.length) throw new Error("No Debian package was produced");
   for (const name of packages) {
     const contents = execFileSync("dpkg-deb", ["--contents", join(directory, name)], { encoding: "utf8" });
-    if (!/\.\/usr\/lib\/[^\s]+\/cli\/unissh-cli/.test(contents)) throw new Error(`${name} does not contain the CLI`);
+    if (!/(?:^|\s)(?:\.\/)?usr\/lib\/\S+\/cli\/unissh-cli(?:\r?\n|$)/m.test(contents)) {
+      throw new Error(`${name} does not contain the CLI at its resource path:\n${contents}`);
+    }
   }
 }
 log(`Verified bundled unissh-cli ${version}`);
