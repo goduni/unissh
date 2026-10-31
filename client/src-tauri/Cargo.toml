@@ -1,6 +1,6 @@
 [package]
 name = "unissh"
-version = "0.7.0"
+version = "0.7.1"
 description = "UniSSH — cross-platform SSH client"
 authors = ["UniSSH"]
 edition = "2021"
