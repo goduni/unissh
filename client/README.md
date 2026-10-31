@@ -17,7 +17,9 @@ optional per-user installation. The command is `unissh-cli`, so the GUI's
 
 `npm run tauri dev` / `build` first run `scripts/build-cli.mjs`. It builds the
 root workspace's CLI in its own target directory, embeds OpenSSL, and packages
-it as a resource outside PATH until the user chooses to install it. Universal
+it as a resource outside PATH until the user chooses to install it. This also
+requires a C compiler and Perl; on Windows use the native MSVC/Perl toolchain,
+with `OPENSSL_SRC_PERL` if Git Bash shadows the native Perl. Universal
 macOS builds include arm64 and x86-64. Mobile builds skip this hook.
 
 The managed copy lives in `~/.local/bin` on Unix and the app's local-data

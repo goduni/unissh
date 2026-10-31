@@ -41,8 +41,10 @@ be named `unissh`; the examples below use that name. When installed through the
 app, run the same commands as `unissh-cli`, for example `unissh-cli login pair`.
 
 From source: `cargo build --locked -p unissh-cli --bin unissh --release --features portable`.
-The desktop build hook builds the matching CLI automatically, including both
-architectures of the universal macOS bundle.
+Source builds need a C compiler and Perl for vendored OpenSSL. On Windows, use
+MSVC and a full native Windows Perl; `OPENSSL_SRC_PERL` can select it if Git Bash
+puts its incomplete Perl first in PATH. The desktop build hook builds the
+matching CLI automatically, including both architectures of the macOS bundle.
 
 ## Signing in
 
