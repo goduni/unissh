@@ -1018,6 +1018,7 @@ function SettingsGeneral() {
           to configure, and settings for something that cannot exist are noise. */}
       {!isMobile && <SettingsLocalTerminal />}
 
+      <CliTools />
       <SectionLabel>{t("settings.sectionBehavior")}</SectionLabel>
       <SettingRow title={t("settings.confirmQuitTitle")} desc={t("settings.confirmQuitDesc")}>
         <Toggle checked={confirmQuit} onChange={onConfirmQuit} />
@@ -1181,7 +1182,6 @@ function SettingsLocalTerminal() {
       <div style={{ fontSize: TEXT.small, color: p.txt3, marginTop: rem(12) }}>
         {t("settings.localLockNote")}
       </div>
-      <CliTools />
     </>
   );
 }

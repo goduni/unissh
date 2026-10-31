@@ -286,6 +286,7 @@ jobs:
       - name: Cache Rust (client/src-tauri standalone workspace)
         uses: Swatinem/rust-cache@v2
         with:
+          cache-on-failure: true
           workspaces: |
             client/src-tauri
             . -> target/cli-desktop
@@ -357,7 +358,9 @@ jobs:
         run: echo "OPENSSL_RUST_USE_NASM=0" >> "$GITHUB_ENV"
 
       - name: Build the bundled command-line client
-        shell: bash
+        # Git Bash shadows Strawberry Perl with its incomplete MSYS Perl.
+        # OpenSSL's Configure requires the native runner's full Perl install.
+        shell: ${{ matrix.os == 'windows' && 'pwsh' || 'bash' }}
         env:
           TAURI_ENV_TARGET_TRIPLE: ${{ matrix.os == 'macos' && 'universal-apple-darwin' || '' }}
         run: node client/scripts/build-cli.mjs

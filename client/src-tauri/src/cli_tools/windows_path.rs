@@ -37,10 +37,10 @@ fn check(error: u32) -> io::Result<()> {
 fn key(create: bool) -> io::Result<Option<Key>> {
     let name: Vec<u16> = "Environment\0".encode_utf16().collect();
     let mut handle = std::ptr::null_mut();
-    // SAFETY: name is NUL-terminated and handle is a valid out-pointer. HKCU
-    // is borrowed; only the returned key is owned by Key.
-    let result = unsafe {
-        if create {
+    let result = if create {
+        // SAFETY: name is terminated and handle is writable. HKCU is borrowed;
+        // only the returned key is owned by Key.
+        unsafe {
             RegCreateKeyExW(
                 HKEY_CURRENT_USER,
                 name.as_ptr(),
@@ -52,7 +52,10 @@ fn key(create: bool) -> io::Result<Option<Key>> {
                 &mut handle,
                 std::ptr::null_mut(),
             )
-        } else {
+        }
+    } else {
+        // SAFETY: name is terminated and handle is a valid out-pointer.
+        unsafe {
             RegOpenKeyExW(
                 HKEY_CURRENT_USER,
                 name.as_ptr(),
@@ -194,8 +197,8 @@ fn change(directory: &Path, add: bool) -> io::Result<()> {
             SMTO_ABORTIFHUNG,
             1000,
             std::ptr::null_mut(),
-        )
-    };
+        );
+    }
     Ok(())
 }
 

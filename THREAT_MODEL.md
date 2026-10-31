@@ -271,7 +271,7 @@ What the design does about it:
   your whole account. The documentation tells people to use `join` for shared
   and production servers.
 - **No secret on the command line or in the environment.** Secrets are asked on
-  the controlling terminal (`/dev/tty`), with echo off — the invite of
+  the controlling terminal (`/dev/tty` on Unix, `CONIN$` on Windows), with echo off — the invite of
   `login join` included, since a single-use invite in argv is readable by every
   user of the machine until it is redeemed, and the pasted pairing text, which
   carries the pairing secret. Such a prompt reads a key at a time with the
@@ -280,6 +280,19 @@ What the design does about it:
   `--password-file` / `UNISSH_PASSWORD_FILE` names a file — never the password
   itself — and a file anyone but its owner can read is refused, as is a device
   directory that is not the user's alone.
+- **Private Windows storage.** Device directories and secret-bearing files are
+  created with a protected DACL for this OS user, SYSTEM and Administrators.
+  Reads check the owner and DACL of the opened handle and refuse other allowed
+  trustees or unsupported ACE types. Local administrators remain trusted, just
+  as root does on Unix.
+- **Optional desktop installation.** The GUI bundles a CLI resource outside
+  PATH. Only an explicit install action copies it into a per-user directory and
+  registers that directory in the user's shell profile or Windows user PATH.
+  It does not sign in, read GUI credentials or unlock either device. Updates and
+  removal touch only a copy matching the recorded installed digest; a replaced
+  command or symlink is refused. The bundled binary receives the app's update
+  signature and release-integrity coverage; standalone downloads are included
+  in signed checksums and provenance.
 - **Untrusted text stays text.** Instance and space names, server errors, host
   labels and keyboard-interactive prompts come from the server, vault members
   or the remote host; they reach the terminal without control characters, so
@@ -884,7 +897,7 @@ The stdio server is fail-closed. Its terminal, if any, belongs to the client tha
 spawned it, so it prompts for nothing (no unlock, no approval, no SSH password or
 one-time code) and runs trusted grants only; everything that needs an answer fails
 with `approval_unavailable`. Manual approval exists only in `--http` mode with stdin
-as the controlling terminal and the server in its foreground process group, a
+as the controlling terminal and, on Unix, the server in its foreground process group, a
 terminal the user opened for the server (checked again before each question; in
 the background a question is answered `approval_unavailable`). There the
 terminal is the boundary: a process that can write to it can fake prompt text or
@@ -898,7 +911,11 @@ from another process reach a running server through the storage revision (SQLite
 database from another process (a grant edit for another integration, a sync or a
 vault edit by another `unissh` command) revokes every live grant, cancelling the
 commands and sessions in flight, before the unchanged saved grants are restored.
-A running HTTP server keeps the token list it read at start until restarted. On
+A running HTTP server keeps the token list it read at start until restarted.
+Windows has no Unix foreground process-group check: manual approval requires
+an exclusive console, with the CLI server its only attached process. A shared
+shell console or redirected stdin fails closed; use a dedicated window (for
+example PowerShell's `Start-Process`) for manual HTTP approvals. On
 Linux the server suspends on logind's session `Lock`, a raised `LockedHint` and
 `PrepareForSleep(true)`, and resumes on `Unlock`, a lowered hint, or a wake while
 the session is not locked, like the desktop's native half. Both watchers accept

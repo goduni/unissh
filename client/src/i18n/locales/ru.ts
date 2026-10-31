@@ -2541,6 +2541,7 @@ export const ru = {
     "removeServerDone": "Сервер удалён"
   },
   cliTools: {
+      "optional": "По желанию: UniSSH в терминале.",
       "title": "Командная строка",
       "description": "По желанию: установить unissh-cli и добавить команду в PATH терминала.",
       "installed": "CLI установлен и добавлен в PATH.",

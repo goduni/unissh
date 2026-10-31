@@ -25,7 +25,7 @@ use windows_sys::Win32::System::Console::{
     STD_INPUT_HANDLE,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcessId, WaitForSingleObject};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use super::{cancelled, ended, Key, QuietLine, STOP_TICK};
 use crate::failure::best_effort;
@@ -111,6 +111,43 @@ impl Drop for InputMode {
     }
 }
 
+// ReadFile needs room for a complete UTF-8 character (up to four bytes).
+// Reading one byte at a time can report zero for a non-ASCII console key.
+// Keep typeahead between pasted lines, and wipe both consumed and pending input.
+struct ConsoleKeys {
+    bytes: Zeroizing<[u8; 128]>,
+    position: usize,
+    used: usize,
+}
+
+impl ConsoleKeys {
+    fn new() -> Self {
+        Self {
+            bytes: Zeroizing::new([0; 128]),
+            position: 0,
+            used: 0,
+        }
+    }
+
+    const fn pending(&self) -> bool {
+        self.position < self.used
+    }
+
+    fn next(&mut self, mut input: &File) -> io::Result<u8> {
+        if !self.pending() {
+            self.bytes.zeroize();
+            self.used = input.read(self.bytes.as_mut())?;
+            self.position = 0;
+            if self.used == 0 {
+                return Err(ended());
+            }
+        }
+        let byte = self.bytes.get(self.position).copied().ok_or_else(ended)?;
+        self.position += 1;
+        Ok(byte)
+    }
+}
+
 /// Prompts address the console even when a command has redirected standard I/O.
 pub struct Tty {
     input: File,
@@ -135,8 +172,14 @@ impl Tty {
 
     pub(super) fn read_line(&self, quiet: bool) -> io::Result<Zeroizing<Vec<u8>>> {
         let _mode = InputMode::enter(&self.input, true)?;
-        self.read_edited(&mut QuietLine::new(), !quiet, None, &|| false)?
-            .ok_or_else(ended)
+        self.read_edited(
+            &mut QuietLine::new(),
+            &mut ConsoleKeys::new(),
+            !quiet,
+            None,
+            &|| false,
+        )?
+        .ok_or_else(ended)
     }
 
     pub(super) fn read_quiet_lines(
@@ -146,8 +189,9 @@ impl Tty {
         let _mode = InputMode::enter(&self.input, true)?;
         let mut editor = QuietLine::new();
         let mut text = Zeroizing::new(Vec::with_capacity(1024));
+        let mut keys = ConsoleKeys::new();
         loop {
-            let line = match self.read_edited(&mut editor, false, None, &|| false) {
+            let line = match self.read_edited(&mut editor, &mut keys, false, None, &|| false) {
                 Ok(Some(line)) => line,
                 Ok(None) => return Ok(text),
                 Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(text),
@@ -175,31 +219,35 @@ impl Tty {
         stop: &dyn Fn() -> bool,
     ) -> io::Result<Option<Zeroizing<Vec<u8>>>> {
         let _mode = InputMode::enter(&self.input, true)?;
-        self.read_edited(&mut QuietLine::new(), echo, Some(deadline), stop)
+        self.read_edited(
+            &mut QuietLine::new(),
+            &mut ConsoleKeys::new(),
+            echo,
+            Some(deadline),
+            stop,
+        )
     }
 
     fn read_edited(
         &self,
         editor: &mut QuietLine,
+        keys: &mut ConsoleKeys,
         echo: bool,
         deadline: Option<Instant>,
         stop: &dyn Fn() -> bool,
     ) -> io::Result<Option<Zeroizing<Vec<u8>>>> {
-        let mut byte = [0_u8; 1];
         loop {
             let left = deadline.map_or(STOP_TICK, |d| d.saturating_duration_since(Instant::now()));
             if stop() || left.is_zero() {
                 return Ok(None);
             }
-            if !ready(self.input.as_raw_handle(), left.min(STOP_TICK))? {
+            if !keys.pending() && !ready(self.input.as_raw_handle(), left.min(STOP_TICK))? {
                 continue;
             }
-            if (&self.input).read(&mut byte)? == 0 {
-                return Err(ended());
-            }
+            let byte = keys.next(&self.input)?;
             let bytes = editor.text.len();
             let chars = editor.chars();
-            match editor.key(byte[0]) {
+            match editor.key(byte) {
                 Key::Enter => {
                     if echo {
                         write_console(&self.output, "\r\n")?;

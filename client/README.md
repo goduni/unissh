@@ -8,6 +8,25 @@ The UI uses shared design tokens, Hanken Grotesk and JetBrains Mono, light/dark/
 appearance, optional theme families, and separate interface and terminal scaling.
 Desktop panes and the mobile shell share the same core and file operations.
 
+## Optional command-line tools
+
+Desktop builds bundle the native CLI for the same OS and architecture. The
+first-run screen and **Settings → General → Command-line tools** offer an
+optional per-user installation. The command is `unissh-cli`, so the GUI's
+`unissh` launcher keeps its name. The CLI signs in as a separate device.
+
+`npm run tauri dev` / `build` first run `scripts/build-cli.mjs`. It builds the
+root workspace's CLI in its own target directory, embeds OpenSSL, and packages
+it as a resource outside PATH until the user chooses to install it. Universal
+macOS builds include arm64 and x86-64. Mobile builds skip this hook.
+
+The managed copy lives in `~/.local/bin` on Unix and the app's local-data
+`cli-bin` directory on Windows. Installation adds the directory to the user's
+shell profile / user PATH, never the system PATH. Only an opted-in, unchanged
+copy is refreshed after an app update or removed from Settings. An unrelated
+command is never overwritten. CLI removal leaves Unix's shared `~/.local/bin`
+PATH entry; on Windows it removes only the dedicated `cli-bin` entry.
+
 ## Architecture
 
 ```

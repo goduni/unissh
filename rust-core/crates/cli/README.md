@@ -1,11 +1,11 @@
 # unissh-cli
 
-`unissh` is UniSSH in a terminal. It signs a machine without a GUI — typically a
-server you reached over plain SSH — in as a device of a UniSSH account, keeps a
-synced, encrypted copy of the account's vaults there, and connects to their hosts:
-an interactive terminal, a one-off command, a file copy. It is the same core as the
-desktop app, with the same vault format, host-key pinning and verify-before-apply
-sync, and it never takes a secret on the command line.
+`unissh` is UniSSH in a terminal on macOS, Windows and Linux. It signs the
+machine in as a device of a UniSSH account, keeps a synced, encrypted copy of the
+account's vaults there, and connects to their hosts: an interactive terminal,
+a one-off command, a file copy. It uses the desktop app's core, vault format,
+host-key pinning and verify-before-apply sync, and never takes a secret on the
+command line.
 
 The crate also builds `unissh-harness`, the original core harness for driving the
 FFI facade without a server. It takes secrets as arguments and is for debugging
@@ -13,11 +13,36 @@ only.
 
 ## Getting it
 
-Releases carry a static Linux binary per architecture,
-`unissh-cli_<version>_linux-{x86_64,aarch64}` (musl, no shared libraries), hashed
-into the signed `SHA256SUMS`. Install it as `unissh` on a server. The desktop
-app's Linux binary has that name too, so on a machine with the app, use another
-one such as `unissh-cli`. From source: `cargo build -p unissh-cli --release`.
+Desktop builds include the CLI. On the first-run screen, choose **Install CLI**,
+or install it later in **Settings → General → Command-line tools**. This is
+optional, needs no administrator privileges, and exposes `unissh-cli` in a new
+terminal. The app refreshes an opted-in copy on launch after an update; the same
+Settings section can remove it. Installing the tools does not sign the CLI in:
+pair or sign in below to create its separate device.
+
+Native release artifacts are also available without the GUI:
+
+| Platform | Artifact |
+| --- | --- |
+| macOS, Apple Silicon and Intel | `unissh-cli_<version>_macos-universal` |
+| Windows, x86-64 | `unissh-cli_<version>_windows-x86_64.exe` |
+| Windows, ARM64 | `unissh-cli_<version>_windows-aarch64.exe` |
+| Linux, x86-64 / ARM64 | `unissh-cli_<version>_linux-{x86_64,aarch64}` |
+
+Check the artifact against the release's signed `SHA256SUMS`. Linux artifacts
+are static musl binaries; macOS and Windows binaries embed their OpenSSL
+dependency. These native desktop artifacts are added after v0.7.0; older release
+pages carry only Linux CLI binaries.
+
+For a manual installation, rename the download to `unissh-cli` (Windows:
+`unissh-cli.exe`) and put its directory in PATH. On macOS/Linux, also make it
+executable with `chmod +x unissh-cli`. On a server without the GUI it can instead
+be named `unissh`; the examples below use that name. When installed through the
+app, run the same commands as `unissh-cli`, for example `unissh-cli login pair`.
+
+From source: `cargo build --locked -p unissh-cli --bin unissh --release --features portable`.
+The desktop build hook builds the matching CLI automatically, including both
+architectures of the universal macOS bundle.
 
 ## Signing in
 
@@ -77,7 +102,7 @@ Hosts are named by label, `vault/label`, the start of a label, or their address.
 A name that matches several hosts is refused, with the candidates listed.
 
 Every command unlocks the instance for that process only. The master password comes
-from the terminal (`/dev/tty`, so pipes still work) or from an owner-only
+from the controlling terminal (`/dev/tty` on Unix, `CONIN$` on Windows, so pipes still work) or from an owner-only
 `--password-file` / `UNISSH_PASSWORD_FILE`. A command that reads hosts syncs first
 when the local copy is more than five minutes old; a sync that fails is a warning,
 and the command uses the copy on this machine. `--offline` never contacts the server.
@@ -232,9 +257,8 @@ recording may leave on (VT52, synchronized output, reverse video, cursor shape,
 margins). Keys are read from the controlling terminal
 itself, and when the replay ends what is still coming in is read and discarded
 before the keyboard is given back, so nothing reaches the shell as typed input.
-That last guarantee is Unix-only: on Windows, `play` writes to stdout and does
-not read the console, so an answer a console gives to something the filter let
-through could still land in the shell's input.
+On Windows the replay likewise owns the console input while it runs and flushes
+pending input before restoring its modes and code pages.
 
 `export` writes the recording exactly as the core keeps it: an
 [asciicast v2](https://docs.asciinema.org/manual/asciicast/v2/) document that
@@ -410,7 +434,7 @@ unissh mcp --http [--port 8765]                      # loopback HTTP, in a termi
   and kept in its foreground (its stdin is the controlling terminal; sent to the
   background with Ctrl-Z/`bg` or started with `&`, it answers each question with
   `approval_unavailable` and logs a warning). A command under a confirm grant is then
-  asked about there, on `/dev/tty`: the exact command, working directory,
+  asked about there, on the controlling terminal: the exact command, working directory,
   environment and stdin in escaped string notation, the host, and the application
   asking. Only a typed `yes` allows it; anything else denies, and an unanswered
   question expires after two minutes, as in the app. The prompt says by when, in
@@ -442,6 +466,12 @@ unissh mcp --http [--port 8765]                      # loopback HTTP, in a termi
   was running may be unknown to the agent. A running `--http` server reads tokens
   only at start: restart it after `integrations rotate` or `rm`, or it keeps
   accepting the old token.
+- **Windows manual approvals.** Windows does not expose Unix foreground process
+  groups. Manual confirmations require an exclusive console with this server as
+  its only attached process. From PowerShell, start a dedicated window with
+  `Start-Process unissh-cli -ArgumentList 'mcp --http'` (include the server flags
+  you need). A shared shell console or redirected stdin cannot authorize an
+  approval; trusted grants and stdio keep their documented behavior.
 - **Lock and sleep (Linux).** Like the desktop, a running server pauses when the
   session locks or the machine goes to sleep (logind's `Lock`, the session's
   `LockedHint`, and `PrepareForSleep`): access is revoked, running commands are
@@ -498,7 +528,7 @@ Agent forwarding (each signature needs an approval prompt, which a raw terminal
 cannot show), the saved-password offer at `sudo` prompts, running a host's
 startup snippets, auto-reconnect, creating or sharing vaults, claiming an
 instance, SSO sign-in,
-and more than one server per machine. Interactive use needs a Unix terminal.
+and more than one server per machine. Interactive use needs an attached native terminal (including Windows Terminal / ConPTY).
 
 Sessions are recorded when the host asks for it, as in the app, and the recording
 is sent to the server when the session ends. One-off commands are not recorded,

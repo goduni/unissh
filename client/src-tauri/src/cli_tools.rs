@@ -175,10 +175,10 @@ impl Layout {
         }
         #[cfg(unix)]
         {
-            if std::env::var_os("PATH").is_some_and(|value| {
-                std::env::split_paths(&value)
-                    .any(|p| p == self.binary.parent().unwrap_or(Path::new("")))
-            }) {
+            let directory = parent(&self.binary)?;
+            if std::env::var_os("PATH")
+                .is_some_and(|value| std::env::split_paths(&value).any(|p| p == directory))
+            {
                 return Ok(true);
             }
             let (path, _) = shell_profile(&self.home);
@@ -258,6 +258,9 @@ fn shell_profile(home: &Path) -> (PathBuf, bool) {
         .and_then(|n| n.to_str())
     {
         Some("zsh") => (home.join(".zshrc"), false),
+        #[cfg(target_os = "macos")]
+        Some("bash") => (home.join(".bash_profile"), false),
+        #[cfg(not(target_os = "macos"))]
         Some("bash") => (home.join(".bashrc"), false),
         Some("fish") => (home.join(".config/fish/conf.d/unissh-cli.fish"), true),
         #[cfg(target_os = "macos")]
@@ -306,10 +309,19 @@ pub async fn cli_tools_remove(app: tauri::AppHandle) -> ApiResult<CliStatus> {
     blocking_api(move || {
         let _installation = INSTALLATION.lock().map_err(ApiError::other)?;
         let layout = Layout::for_app(&app)?;
-        layout.remove_files().map_err(ApiError::other)?;
         #[cfg(windows)]
-        windows_path::remove(parent(&layout.binary).map_err(ApiError::other)?)
-            .map_err(ApiError::other)?;
+        {
+            if !layout.owned().map_err(ApiError::other)? {
+                return Err(ApiError::other(
+                    "the installed command has changed; it was left untouched",
+                ));
+            }
+            // If PATH cannot be updated, keep the managed copy and marker so
+            // removal can be retried. Never alter PATH for an unrelated file.
+            windows_path::remove(parent(&layout.binary).map_err(ApiError::other)?)
+                .map_err(ApiError::other)?;
+        }
+        layout.remove_files().map_err(ApiError::other)?;
         layout.status().map_err(ApiError::other)
     })
     .await
@@ -352,9 +364,12 @@ mod tests {
         std::fs::create_dir_all(layout.source.parent().unwrap()).unwrap();
         std::fs::write(&layout.source, b"first CLI").unwrap();
         assert!(!layout.binary.exists());
+        assert!(!layout.status().unwrap().installed);
         layout.install_files().unwrap();
         assert!(layout.owned().unwrap());
+        assert!(!layout.status().unwrap().update_available);
         std::fs::write(&layout.source, b"updated CLI").unwrap();
+        assert!(layout.status().unwrap().update_available);
         layout.install_files().unwrap();
         assert_eq!(std::fs::read(&layout.binary).unwrap(), b"updated CLI");
         std::fs::write(&layout.binary, b"a user's different command").unwrap();
@@ -378,6 +393,38 @@ mod tests {
         assert!(!layout.binary.exists());
         assert!(!layout.marker.exists());
         assert!(layout.source.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn installation_never_adopts_a_symbolic_link() {
+        let tmp = tempfile::tempdir().unwrap();
+        let layout = layout(tmp.path());
+        std::fs::create_dir_all(layout.source.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(layout.binary.parent().unwrap()).unwrap();
+        std::fs::write(&layout.source, b"CLI").unwrap();
+        std::os::unix::fs::symlink(&layout.source, &layout.binary).unwrap();
+        assert!(layout.install_files().is_err());
+        assert!(!layout.owned().unwrap());
+        assert!(layout.remove_files().is_err());
+        assert!(layout.binary.is_symlink());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_registration_preserves_the_profile_and_is_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let layout = layout(tmp.path());
+        let (profile, _) = super::shell_profile(&layout.home);
+        std::fs::create_dir_all(profile.parent().unwrap()).unwrap();
+        std::fs::write(&profile, "# user's settings\nexport EDITOR=vim\n").unwrap();
+        assert!(!layout.path_configured().unwrap());
+        layout.configure_path().unwrap();
+        assert!(layout.path_configured().unwrap());
+        let configured = std::fs::read(&profile).unwrap();
+        layout.configure_path().unwrap();
+        assert_eq!(std::fs::read(&profile).unwrap(), configured);
+        assert!(configured.starts_with(b"# user's settings\nexport EDITOR=vim\n"));
     }
 
     #[cfg(unix)]

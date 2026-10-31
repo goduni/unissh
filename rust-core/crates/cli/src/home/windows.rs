@@ -267,6 +267,28 @@ pub(super) fn is_private(file: &File) -> io::Result<bool> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn secrets_and_directories_readable_by_everyone_are_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let directory = tmp.path().join("device");
+        super::create_dir(&directory).unwrap();
+        let path = directory.join("secret");
+        drop(super::create_file(&path).unwrap());
+        for path in [&path, &directory] {
+            let result = std::process::Command::new("icacls")
+                .arg(path)
+                .args(["/grant", "*S-1-1-0:(R)"])
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "icacls could not grant the test ACL"
+            );
+        }
+        assert!(!super::is_private(&std::fs::File::open(path).unwrap()).unwrap());
+        assert!(!super::check_dir(&directory).unwrap());
+    }
+
+    #[test]
     fn new_secrets_and_device_directories_are_private() {
         let tmp = tempfile::tempdir().unwrap();
         let directory = tmp.path().join("device");

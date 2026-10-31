@@ -2496,6 +2496,7 @@ export const en = {
     "removeServerDone": "Server removed"
   },
   cliTools: {
+      "optional": "Optional: use UniSSH in your terminal.",
       "title": "Command-line tools",
       "description": "Optional: install unissh-cli and add it to your terminal’s PATH.",
       "installed": "The CLI is installed and added to PATH.",

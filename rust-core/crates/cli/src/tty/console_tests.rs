@@ -13,6 +13,8 @@ const SECRET: &str = "sëcret🔑";
 #[test]
 #[ignore = "PTY child; native_console_contract launches it with a controlling terminal"]
 fn console_child() {
+    #[cfg(windows)]
+    let original_console = console_state();
     let case = std::env::var("UNISSH_TTY_TEST_CASE").unwrap();
     let mut tty = super::Tty::open().unwrap();
     match case.as_str() {
@@ -73,6 +75,12 @@ fn console_child() {
         }
         other => panic!("unexpected terminal case {other}"),
     }
+    #[cfg(windows)]
+    assert_eq!(
+        console_state(),
+        original_console,
+        "console modes and code pages must be restored"
+    );
     tty.say("\r\nCLI_TTY_OK\r\n").unwrap();
 }
 
@@ -202,4 +210,36 @@ fn run_case(case: &str) {
             "pairing text was echoed: {output}"
         );
     }
+}
+
+#[cfg(windows)]
+#[expect(
+    unsafe_code,
+    reason = "test observes the live console before and after the real guards"
+)]
+fn console_state() -> (u32, u32, u32, u32) {
+    use windows_sys::Win32::System::Console::{
+        GetConsoleCP, GetConsoleMode, GetConsoleOutputCP, GetStdHandle, STD_INPUT_HANDLE,
+        STD_OUTPUT_HANDLE,
+    };
+    // SAFETY: GetStdHandle returns borrowed process console handles.
+    let input = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
+    // SAFETY: GetStdHandle returns a borrowed output handle.
+    let output = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
+    let mut input_mode = 0;
+    let mut output_mode = 0;
+    // A pipe has no console mode; its unchanged zero value is compared instead.
+    // SAFETY: the out-pointer is valid; the API safely rejects pipe handles.
+    unsafe {
+        GetConsoleMode(input, &mut input_mode);
+    }
+    // SAFETY: the out-pointer is valid for this borrowed output handle.
+    unsafe {
+        GetConsoleMode(output, &mut output_mode);
+    }
+    // SAFETY: these APIs return the attached console's current code pages.
+    let input_cp = unsafe { GetConsoleCP() };
+    // SAFETY: observing the attached console's output code page needs no buffer.
+    let output_cp = unsafe { GetConsoleOutputCP() };
+    (input_mode, output_mode, input_cp, output_cp)
 }

@@ -1,16 +1,46 @@
 ---
 title: Command-line client
-description: Use UniSSH on a machine without a GUI — sign a server in as a device, sync the vaults there, and connect to their hosts from its terminal.
+description: Use UniSSH from a macOS, Windows or Linux terminal, with or without the desktop app.
 ---
 
-`unissh` is UniSSH in a terminal. It is for the machine with no desktop on it,
-most often a server you reached over plain SSH and want to go on from. It signs
-that machine in as a device of a UniSSH account, keeps a synced, encrypted copy
-of the account's vaults there, and connects to their hosts. It uses the same core
-as the desktop app, with the same vault format, host-key pinning and
-verify-before-apply sync, and it never takes a secret on the command line.
+UniSSH's command-line client runs on macOS, Windows and Linux, including
+machines without a GUI. It signs the machine in as a separate device, syncs an
+encrypted copy of its vaults, and connects to their hosts. It shares the desktop
+app's core, host-key pinning and verify-before-apply sync.
 
 ## Install
+
+### With the desktop app
+
+Desktop builds after v0.7.0 bundle the CLI. Choose **Install CLI** on the first-run
+screen, or open **Settings → General → Command-line tools** later. Installation
+is optional and needs no administrator privileges. Open a new terminal and run:
+
+```sh
+unissh-cli --help
+unissh-cli login pair
+```
+
+The CLI signs in as its own device. Installing it does not share the desktop
+app's unlocked session. After an app update, launching the app refreshes a CLI
+you previously installed. You can remove it from the same Settings section.
+
+### Without the desktop app
+
+| Platform | Download from the release page |
+| --- | --- |
+| macOS, Apple Silicon and Intel | `unissh-cli_<version>_macos-universal` |
+| Windows, x86-64 | `unissh-cli_<version>_windows-x86_64.exe` |
+| Windows, ARM64 | `unissh-cli_<version>_windows-aarch64.exe` |
+| Linux, x86-64 / ARM64 | `unissh-cli_<version>_linux-{x86_64,aarch64}` |
+
+The macOS/Windows artifacts are added after v0.7.0. Rename your download to
+`unissh-cli` (`unissh-cli.exe` on Windows), put its directory in PATH, and on
+macOS/Linux make it executable with `chmod +x unissh-cli`. Verify the release's
+signed checksums before installing. No separate OpenSSL installation is needed.
+The examples below use `unissh`; with the desktop tools, use `unissh-cli` instead.
+
+### Linux server
 
 Each [release](https://github.com/goduni/unissh/releases) carries the client as
 one static Linux binary per architecture, so it runs on any distribution,
@@ -36,7 +66,7 @@ Or build it from source (see [Build from source](../../operations/build/) for th
 prerequisites):
 
 ```bash
-cargo build -p unissh-cli --release     # → target/release/unissh
+cargo build --locked -p unissh-cli --bin unissh --release --features portable     # → target/release/unissh
 ```
 
 ## Sign the machine in
@@ -161,9 +191,8 @@ other device, it says so first: deleting its data then loses the account. With
 ## What it does not do yet
 
 Agent forwarding, the saved-password offer at `sudo` prompts, startup snippets,
-auto-reconnect, port forwarding, editing hosts and vaults, claiming an instance,
-SSO sign-in, and more than one server per machine. Interactive use needs a Unix
-terminal. One-off commands are not recorded, the same as Fleet commands in the
+auto-reconnect, claiming an instance, SSO sign-in, and more than one server per
+machine. Interactive use needs an attached native terminal. One-off commands are not recorded, the same as Fleet commands in the
 app.
 
 ## Security
