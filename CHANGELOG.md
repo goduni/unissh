@@ -32,6 +32,12 @@ starts with `0.`:
 
 ## [Unreleased]
 
+### Compatibility
+
+**Vault format: unchanged. Server protocol: unchanged.**
+
+## [0.7.1] — 2026-10-31
+
 ### Added
 
 - Unified Linux command after optional desktop CLI installation: `unissh` runs
@@ -46,11 +52,13 @@ starts with `0.`:
 - Standalone macOS universal and Windows x86-64/ARM64 CLI release artifacts,
   alongside the existing static Linux binaries.
 - Optional CLI installation with the desktop app, offered on first run and in
-  Settings → General. Installs `unissh-cli` for the current user, registers PATH,
+  Settings → General. Installs the native CLI for the current user, registers PATH,
   updates managed copies with the app, and supports removal from Settings.
 
 ### Fixed
 
+- Release uploads remain draft until all platform builds and verification finish,
+  so installed clients keep receiving the previous complete updater manifest.
 - macOS CLI terminal waits now respect deadlines and session shutdown when
   reading the controlling terminal.
 

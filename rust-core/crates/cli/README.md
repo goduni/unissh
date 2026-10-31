@@ -13,7 +13,7 @@ only.
 
 ## Getting it
 
-Desktop builds include the CLI. On the first-run screen, choose **Install CLI**,
+Desktop builds starting with v0.7.1 include the CLI. On the first-run screen, choose **Install CLI**,
 or install it later in **Settings → General → Command-line tools**. This is
 optional and needs no administrator privileges. In a new terminal, run
 `unissh` on Linux or `unissh-cli` on macOS/Windows. Linux desktop tools also
@@ -33,7 +33,7 @@ Native release artifacts are also available without the GUI:
 
 Check the artifact against the release's signed `SHA256SUMS`. Linux artifacts
 are static musl binaries; macOS and Windows binaries embed their OpenSSL
-dependency. These native desktop artifacts are added after v0.7.0; older release
+dependency. These native desktop artifacts are available starting with v0.7.1; older release
 pages carry only Linux CLI binaries.
 
 For a manual installation, rename the download to `unissh-cli` (Windows:

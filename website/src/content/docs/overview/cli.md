@@ -12,7 +12,7 @@ app's core, host-key pinning and verify-before-apply sync.
 
 ### With the desktop app
 
-Desktop builds after v0.7.0 bundle the CLI. Choose **Install CLI** on the first-run
+Desktop builds starting with v0.7.1 bundle the CLI. Choose **Install CLI** on the first-run
 screen, or open **Settings → General → Command-line tools** later. Installation
 is optional and needs no administrator privileges. Open a new terminal. On
 macOS/Windows, run:
@@ -41,7 +41,7 @@ you previously installed. You can remove it from the same Settings section.
 | Windows, ARM64 | `unissh-cli_<version>_windows-aarch64.exe` |
 | Linux, x86-64 / ARM64 | `unissh-cli_<version>_linux-{x86_64,aarch64}` |
 
-The macOS/Windows artifacts are added after v0.7.0. Rename your download to
+The macOS/Windows artifacts are available starting with v0.7.1. Rename your download to
 `unissh-cli` (`unissh-cli.exe` on Windows), put its directory in PATH, and on
 macOS/Linux make it executable with `chmod +x unissh-cli`. Verify the release's
 signed checksums before installing. No separate OpenSSL installation is needed.
@@ -58,7 +58,7 @@ however old its libc: `unissh-cli_<version>_linux-x86_64` and
 `SHA256SUMS` before installing it:
 
 ```bash
-V=0.7.0 A=x86_64   # the release you want; A=aarch64 on ARM
+V=0.7.1 A=x86_64   # the release you want; A=aarch64 on ARM
 curl -fLO https://github.com/goduni/unissh/releases/download/v$V/unissh-cli_${V}_linux-$A
 curl -fLO https://github.com/goduni/unissh/releases/download/v$V/SHA256SUMS
 curl -fLO https://github.com/goduni/unissh/releases/download/v$V/SHA256SUMS.minisig

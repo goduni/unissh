@@ -72,8 +72,8 @@ _Your keys, your hosts, your machine. The client is complete on its own — no a
 | Android | pick your own | `_arm64` / `_armv7` / `_x86_64` / `_x86` `.apk` — smaller |
 | iOS | Apple Silicon | `UniSSH_<version>_ios-sideload.ipa` — unsigned, [sideload](#ios) |
 | Linux, command line | x86-64 / ARM64 | `unissh-cli_<version>_linux-x86_64` / `_linux-aarch64` — one static binary, for a server without a GUI ([command-line client](https://unissh.dev/overview/cli/)) |
-| macOS, command line | Apple Silicon + Intel | `unissh-cli_<version>_macos-universal` (after v0.7.0) |
-| Windows, command line | x86-64 / ARM64 | `unissh-cli_<version>_windows-x86_64.exe` / `_windows-aarch64.exe` (after v0.7.0) |
+| macOS, command line | Apple Silicon + Intel | `unissh-cli_<version>_macos-universal` (v0.7.1+) |
+| Windows, command line | x86-64 / ARM64 | `unissh-cli_<version>_windows-x86_64.exe` / `_windows-aarch64.exe` (v0.7.1+) |
 
 **Every desktop platform here covers both architectures**, so take the ARM file on
 an ARM machine instead of letting it emulate the x86-64 one — Windows on ARM will
@@ -85,7 +85,7 @@ on ARM: Asahi, ARM laptops, Snapdragon Windows machines, a Raspberry Pi on a des
 ARM *servers* are served by the [container images](#b-self-host-a-sync-server-optional),
 which are multi-arch.
 
-Desktop builds after v0.7.0 include an optional CLI: choose **Install CLI** during
+Desktop builds starting with v0.7.1 include an optional CLI: choose **Install CLI** during
 first-run setup or in **Settings → General → Command-line tools**. Open a new
 terminal and run `unissh --help` on Linux or `unissh-cli --help` on macOS/Windows.
 On Linux, `unissh --gui` opens the desktop app; its menu entry always opens the GUI.

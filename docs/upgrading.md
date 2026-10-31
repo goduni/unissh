@@ -1,9 +1,12 @@
 # Upgrading UniSSH
 
 Read the **Compatibility** and any **Breaking changes** entries in the
-[changelog](../CHANGELOG.md#070--2026-10-27) before upgrading. The changes in
-0.7.0 preserve the vault format, AAD encodings and encrypted-sync
+[changelog](../CHANGELOG.md#071--2026-10-31) before upgrading. The changes in
+0.7.1 preserve the vault format, AAD encodings and encrypted-sync
 protocol; no vault conversion is required.
+
+**Upgrading from 0.6.x or older?** Also read the
+[0.7.0 owner-repair notes](../CHANGELOG.md#070--2026-10-30).
 
 ## Before installing
 
@@ -38,6 +41,18 @@ After opening the updated client:
   arrives on the other device, then remove it and synchronize again.
 - To check a backup, restore it under a **new** vault name and verify representative
   items. Restore creates a local vault and never overwrites an existing vault.
+
+## Changes to expect in 0.7.1
+
+The desktop app now offers optional native command-line tools on first run and
+in **Settings → General → Command-line tools**. Open a new terminal after
+installation. Linux uses `unissh` for the CLI and `unissh --gui` to open the app;
+macOS and Windows use `unissh-cli`. Application-menu entries keep opening the GUI.
+
+The CLI enrolls as a separate device. Pair it from a signed-in app with
+`unissh login pair` (Linux) or `unissh-cli login pair` (macOS/Windows). Installing
+the tools does not copy the GUI's session. Standalone native CLI downloads are
+also available for all three desktop platforms.
 
 ## Changes to expect in 0.5.0
 
