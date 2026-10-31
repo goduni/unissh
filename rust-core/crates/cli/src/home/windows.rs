@@ -34,7 +34,9 @@ struct Allocation(PSECURITY_DESCRIPTOR);
 impl Drop for Allocation {
     fn drop(&mut self) {
         // SAFETY: these descriptors/strings are returned by LocalAlloc-based APIs.
-        unsafe { LocalFree(self.0) };
+        unsafe {
+            LocalFree(self.0);
+        }
     }
 }
 
@@ -42,7 +44,9 @@ struct Token(HANDLE);
 impl Drop for Token {
     fn drop(&mut self) {
         // SAFETY: this module owns this token handle and closes it once.
-        unsafe { CloseHandle(self.0) };
+        unsafe {
+            CloseHandle(self.0);
+        }
     }
 }
 
@@ -56,25 +60,28 @@ fn sid_string(sid: PSID) -> io::Result<String> {
     let _allocation = Allocation(string.cast());
     let mut length = 0;
     // SAFETY: ConvertSidToStringSidW returns a NUL-terminated allocated UTF-16 string.
-    unsafe {
-        while *string.add(length) != 0 {
-            length += 1;
-        }
-        String::from_utf16(std::slice::from_raw_parts(string, length))
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    while unsafe { *string.wrapping_add(length) } != 0 {
+        length += 1;
     }
+    // SAFETY: the loop counted initialized UTF-16 units in that live allocation.
+    let text = unsafe { std::slice::from_raw_parts(string, length) };
+    String::from_utf16(text).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
 fn current_user() -> io::Result<String> {
     let mut token = std::ptr::null_mut();
-    // SAFETY: token is a valid out-pointer; GetCurrentProcess is a borrowed pseudo-handle.
-    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+    // SAFETY: GetCurrentProcess returns a borrowed pseudo-handle, never closed here.
+    let process = unsafe { GetCurrentProcess() };
+    // SAFETY: token is a valid out-pointer for this live process handle.
+    if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) } == 0 {
         return Err(io::Error::last_os_error());
     }
     let token = Token(token);
     let mut length = 0;
     // SAFETY: a null buffer with length zero asks for the required buffer size.
-    unsafe { GetTokenInformation(token.0, TokenUser, std::ptr::null_mut(), 0, &mut length) };
+    unsafe {
+        GetTokenInformation(token.0, TokenUser, std::ptr::null_mut(), 0, &mut length);
+    }
     if length == 0 {
         return Err(io::Error::last_os_error());
     }

@@ -18,7 +18,9 @@ struct Key(HKEY);
 impl Drop for Key {
     fn drop(&mut self) {
         // SAFETY: this module owns a registry key returned by Open/CreateKey.
-        unsafe { RegCloseKey(self.0) };
+        unsafe {
+            RegCloseKey(self.0);
+        }
     }
 }
 

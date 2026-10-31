@@ -384,7 +384,7 @@ jobs:
         working-directory: client/src-tauri
 
       - name: Test optional CLI installation (Tauri crate)
-        run: cargo test --locked --release --lib cli_tools:: -- --test-threads=1
+        run: cargo test --locked --release --lib cli_tools -- --test-threads=1
         working-directory: client/src-tauri
 
       # Token rotation's bookkeeping: a caller holding a token someone else

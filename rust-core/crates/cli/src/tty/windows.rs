@@ -104,7 +104,9 @@ impl Drop for InputMode {
     fn drop(&mut self) {
         best_effort(flush(&self.file));
         // SAFETY: the code page was returned by GetConsoleCP on this console.
-        unsafe { SetConsoleCP(self.code_page) };
+        unsafe {
+            SetConsoleCP(self.code_page);
+        }
         best_effort(set_mode(&self.file, self.saved));
     }
 }
@@ -303,7 +305,9 @@ impl RawMode {
 impl Drop for RawMode {
     fn drop(&mut self) {
         // SAFETY: restored from GetConsoleOutputCP for the same console.
-        unsafe { SetConsoleOutputCP(self.output_code_page) };
+        unsafe {
+            SetConsoleOutputCP(self.output_code_page);
+        }
         best_effort(set_mode(&self.output, self.saved_output));
     }
 }
@@ -411,7 +415,7 @@ fn ready(input: HANDLE, timeout: Duration) -> io::Result<bool> {
         if count == 0 {
             continue;
         }
-        if record.EventType == KEY_EVENT as u16 {
+        if u32::from(record.EventType) == KEY_EVENT {
             // SAFETY: KEY_EVENT identifies the initialized KeyEvent union arm.
             let key = unsafe { record.Event.KeyEvent };
             // SAFETY: Unicode console APIs initialize the UnicodeChar arm.
