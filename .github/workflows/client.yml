@@ -286,6 +286,7 @@ jobs:
       - name: Cache Rust (client/src-tauri standalone workspace)
         uses: Swatinem/rust-cache@v2
         with:
+          key: native-cli-${{ hashFiles('client/scripts/build-cli.mjs') }}
           cache-on-failure: true
           workspaces: |
             client/src-tauri
