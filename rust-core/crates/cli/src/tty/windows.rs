@@ -419,9 +419,15 @@ pub fn wait_for_input(timeout: Duration) -> io::Result<bool> {
 }
 
 pub fn read_stdin(buf: &mut [u8]) -> io::Result<usize> {
-    // Read the console directly: std::Stdin's cooked buffer must not retain
-    // bytes across the raw/cooked transitions of the host picker.
-    (&console("CONIN$")?).read(buf)
+    use std::io::IsTerminal;
+    // Read a real console directly so Stdin's cooked buffer cannot retain
+    // bytes across raw/cooked transitions. A one-off SSH command must instead
+    // forward its actual redirected input, without consuming the console.
+    if io::stdin().is_terminal() {
+        (&console("CONIN$")?).read(buf)
+    } else {
+        io::stdin().read(buf)
+    }
 }
 
 /// Windows has no foreground process groups. Terminal approvals require a

@@ -330,6 +330,33 @@ fn absolute_env(name: &str) -> Option<PathBuf> {
         .filter(|p| p.is_absolute())
 }
 
+/// Creates a new private file, refusing to replace any existing entry.
+/// Windows applies its protected DACL before any plaintext is written.
+pub fn create_private_file(path: &Path) -> io::Result<File> {
+    #[cfg(windows)]
+    {
+        windows::create_file(path)
+    }
+    #[cfg(not(windows))]
+    {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        options.open(path)
+    }
+}
+
+/// An owner-private sibling for atomic downloads and recording exports.
+pub fn private_tempfile(directory: &Path) -> io::Result<tempfile::NamedTempFile> {
+    tempfile::Builder::new()
+        .prefix(".unissh-")
+        .make_in(directory, create_private_file)
+}
+
 /// Writes `bytes` to `path` readable by the owner only, replacing it atomically.
 pub fn write_private(path: &Path, bytes: &[u8]) -> Res<()> {
     let tmp = path.with_extension("tmp");
@@ -340,19 +367,7 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Res<()> {
         Err(e) if e.kind() == ErrorKind::NotFound => {}
         Err(e) => return Err(e.into()),
     }
-    #[cfg(windows)]
-    let mut file = windows::create_file(&tmp)?;
-    #[cfg(not(windows))]
-    let mut options = OpenOptions::new();
-    #[cfg(not(windows))]
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    #[cfg(not(windows))]
-    let mut file = options.open(&tmp)?;
+    let mut file = create_private_file(&tmp)?;
     file.write_all(bytes)?;
     file.sync_all()?;
     drop(file);

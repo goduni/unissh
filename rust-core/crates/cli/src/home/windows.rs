@@ -27,6 +27,7 @@ use windows_sys::Win32::Security::{
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateDirectoryW, CreateFileW, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_BACKUP_SEMANTICS,
+    FILE_SHARE_DELETE,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -171,13 +172,15 @@ pub(super) fn create_file(path: &Path) -> io::Result<File> {
     let attributes = attributes(&descriptor)?;
     let name = path_wide(path)?;
     // GENERIC_WRITE | READ_CONTROL. CREATE_NEW never follows an existing link.
+    // Sharing deletion lets a private tempfile be atomically persisted while
+    // open; the protected DACL still limits who may replace it.
     // SAFETY: all pointed-to values outlive the call; a successful handle is
     // transferred exactly once to File, which closes it.
     let handle = unsafe {
         CreateFileW(
             name.as_ptr(),
             0x4002_0000,
-            0,
+            FILE_SHARE_DELETE,
             &attributes,
             CREATE_NEW,
             FILE_ATTRIBUTE_NORMAL,
@@ -286,6 +289,21 @@ mod tests {
         }
         assert!(!super::is_private(&std::fs::File::open(path).unwrap()).unwrap());
         assert!(!super::check_dir(&directory).unwrap());
+    }
+
+    #[test]
+    fn private_temporary_files_can_be_atomically_persisted() {
+        use std::io::Write;
+        let tmp = tempfile::tempdir().unwrap();
+        let mut file = tempfile::Builder::new()
+            .make_in(tmp.path(), super::create_file)
+            .unwrap();
+        assert!(super::is_private(file.as_file()).unwrap());
+        file.write_all(b"private export").unwrap();
+        let path = tmp.path().join("recording.cast");
+        drop(file.persist(&path).unwrap());
+        assert!(super::is_private(&std::fs::File::open(&path).unwrap()).unwrap());
+        assert_eq!(std::fs::read(path).unwrap(), b"private export");
     }
 
     #[test]

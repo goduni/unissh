@@ -7,7 +7,9 @@
 
 use std::io::{self, Read as _};
 use std::path::Path;
-use std::process::{Command, ExitStatus};
+#[cfg(not(windows))]
+use std::process::Command;
+use std::process::ExitStatus;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::{Args, Subcommand};
@@ -91,6 +93,10 @@ impl Body {
         Ok(text)
     }
 }
+
+#[cfg(windows)]
+#[path = "snippet_edit/windows.rs"]
+mod windows;
 
 /// `unissh snippets add|edit|rm`.
 #[derive(Subcommand)]
@@ -250,7 +256,7 @@ fn in_editor(current: &str) -> Res<String> {
         .iter()
         .filter_map(|name| std::env::var(name).ok())
         .find(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "vi".to_owned());
+        .unwrap_or_else(|| if cfg!(windows) { "notepad.exe" } else { "vi" }.to_owned());
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_millis());
@@ -273,18 +279,21 @@ fn in_editor(current: &str) -> Res<String> {
 /// Runs `editor` on `path` as git does: through the shell, so a value like
 /// `code --wait` works.
 fn launch(editor: &str, path: &Path) -> Res<ExitStatus> {
-    #[cfg(unix)]
-    let mut command = {
-        let mut c = Command::new("sh");
-        c.arg("-c").arg(format!("{editor} \"$@\"")).arg(editor);
-        c
+    #[cfg(windows)]
+    let status = windows::launch(editor, path);
+    #[cfg(not(windows))]
+    let status = {
+        #[cfg(unix)]
+        let mut command = {
+            let mut c = Command::new("sh");
+            c.arg("-c").arg(format!("{editor} \"$@\"")).arg(editor);
+            c
+        };
+        #[cfg(not(unix))]
+        let mut command = Command::new(editor);
+        command.arg(path).status()
     };
-    #[cfg(not(unix))]
-    let mut command = Command::new(editor);
-    command
-        .arg(path)
-        .status()
-        .map_err(|e| Failure::msg(format!("cannot start the editor ({editor}): {e}")))
+    status.map_err(|e| Failure::msg(format!("cannot start the editor ({editor}): {e}")))
 }
 
 #[cfg(test)]

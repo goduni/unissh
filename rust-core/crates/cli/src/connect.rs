@@ -445,13 +445,27 @@ pub enum Endpoint {
 
 impl Endpoint {
     /// `host:path` is remote — as with `scp`, a `/` before the first `:`
-    /// makes it a local path that merely contains a colon.
+    /// makes it a local path that merely contains a colon. Windows drive and
+    /// UNC prefixes are local too, including drive-relative `C:file`.
     pub fn parse(spec: &str) -> Self {
+        #[cfg(windows)]
+        if matches!(
+            Path::new(spec).components().next(),
+            Some(std::path::Component::Prefix(_))
+        ) {
+            return Self::Local(PathBuf::from(spec));
+        }
         match spec.split_once(':') {
-            Some((host, path)) if !host.is_empty() && !host.contains('/') => Self::Remote {
-                host: host.to_owned(),
-                path: path.strip_prefix("~/").unwrap_or(path).to_owned(),
-            },
+            Some((host, path))
+                if !host.is_empty()
+                    && !host.contains('/')
+                    && !(cfg!(windows) && host.contains('\\')) =>
+            {
+                Self::Remote {
+                    host: host.to_owned(),
+                    path: path.strip_prefix("~/").unwrap_or(path).to_owned(),
+                }
+            }
             Some(_) | None => Self::Local(PathBuf::from(spec)),
         }
     }
@@ -627,9 +641,7 @@ fn atomic_download(
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(parent)?;
-    let part = tempfile::Builder::new()
-        .prefix(".unissh-")
-        .tempfile_in(parent)?;
+    let part = crate::home::private_tempfile(parent)?;
     if !transfer(part.as_file().try_clone()?)? {
         return Ok(false);
     }
@@ -722,6 +734,29 @@ mod tests {
             Endpoint::parse("notes.txt"),
             Endpoint::Local(PathBuf::from("notes.txt"))
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_drives_unc_and_backslashes_are_local_copy_paths() {
+        for path in [
+            r"C:\Users\Alex\notes.txt",
+            "C:/Users/Alex/notes.txt",
+            "C:notes.txt",
+            r"\\server\share\notes.txt",
+            r"\\?\C:\notes.txt",
+            r".\notes:backup.txt",
+        ] {
+            assert_eq!(
+                Endpoint::parse(path),
+                Endpoint::Local(PathBuf::from(path)),
+                "{path}"
+            );
+        }
+        assert!(matches!(
+            Endpoint::parse("deploy@c:notes.txt"),
+            Endpoint::Remote { .. }
+        ));
     }
 
     #[test]

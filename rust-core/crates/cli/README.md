@@ -165,7 +165,10 @@ the reader does, with status 141 as `ssh` would. `unissh cp` downloads into a
 temporary file beside the destination and renames it into place when the copy is
 complete, so a failed copy leaves an existing file as it was. A downloaded file
 is owner-only (0600) on Unix, whatever its mode on the host: `chmod` it if others
-need it, or to run it. An upload, as with `scp`, writes the remote file in place.
+need it, or to run it. Windows downloads and recording exports receive a private
+ACL too. Drive-letter paths (`C:\Users\Alex\file`, `C:/Users/Alex/file`) and
+UNC paths are local copy endpoints on Windows. An upload, as with `scp`, writes
+the remote file in place.
 
 `unissh cp -r` copies a directory: into the destination when that is an
 existing directory, else as the destination. Each file goes as a single-file
@@ -286,6 +289,10 @@ input and environment, and its raw output. Treat an export like the vault item
 it came from.
 
 ### Editing the vaults
+
+Snippet editing uses `$VISUAL` / `$EDITOR`, including arguments such as
+`code --wait`; the default is Notepad on Windows and `vi` on Unix.
+
 
 What the app edits, the CLI edits too, with the same fields and checks:
 

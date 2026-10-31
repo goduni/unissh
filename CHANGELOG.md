@@ -37,6 +37,8 @@ starts with `0.`:
 - Native Windows CLI console support: hidden prompts, Unicode, interactive SSH,
   terminal resize, cancellation and recording playback. Device directories and
   secret files are created with private Windows ACLs and checked before use.
+  Windows drive paths stay local in file copies, piped input is forwarded, and
+  snippet editing supports Notepad and configured editor launchers.
 - Standalone macOS universal and Windows x86-64/ARM64 CLI release artifacts,
   alongside the existing static Linux binaries.
 - Optional CLI installation with the desktop app, offered on first run and in

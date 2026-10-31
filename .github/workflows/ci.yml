@@ -115,6 +115,8 @@ jobs:
     env:
       # SQLCipher's vendored OpenSSL in portable C; these checks need no NASM.
       OPENSSL_RUST_USE_NASM: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
     steps:
       - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
@@ -122,8 +124,10 @@ jobs:
           cache-on-failure: true
       # Exercise native consoles, not just cfg-gated compilation: the PTY
       # contract covers Unicode, hidden prompts, cancellation, pipes and resize.
-      - run: cargo clippy --locked -p unissh-cli --all-targets -- -D warnings
-      - run: cargo test --locked -p unissh-cli --bin unissh -- --test-threads=1
+      # CLI contracts are terminal/filesystem tests, not Argon2 benchmarks.
+      # Avoid optimizing the entire FFI/bindgen tree just to run these tests.
+      - run: cargo clippy --locked -p unissh-cli --all-targets --config 'profile.dev.package."*".opt-level=0' -- -D warnings
+      - run: cargo test --locked -p unissh-cli --bin unissh --config 'profile.dev.package."*".opt-level=0' -- --test-threads=1
 
   deny:
     name: cargo-deny (supply chain)

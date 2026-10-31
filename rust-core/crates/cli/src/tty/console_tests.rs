@@ -22,9 +22,16 @@ fn console_child() {
             let value = tty.secret("CLI_PASSWORD: ").unwrap();
             assert_eq!(&*value, SECRET);
             if case == "pipe" {
-                let mut pipe = String::new();
-                std::io::stdin().read_to_string(&mut pipe).unwrap();
-                assert_eq!(pipe.trim(), "PIPE_SENTINEL");
+                let mut pipe = Vec::new();
+                let mut buffer = [0_u8; 64];
+                loop {
+                    let n = super::read_stdin(&mut buffer).unwrap();
+                    if n == 0 {
+                        break;
+                    }
+                    pipe.extend_from_slice(&buffer[..n]);
+                }
+                assert_eq!(String::from_utf8(pipe).unwrap().trim(), "PIPE_SENTINEL");
                 assert!(
                     !super::stdin_is_foreground(),
                     "a pipe never authorizes an MCP confirmation"
@@ -137,12 +144,20 @@ fn run_case(case: &str) {
     let mut output = String::new();
     let mut sent = false;
     let mut visible = false;
+    let mut cursor_reported = false;
     let end = Instant::now() + Duration::from_secs(30);
     while Instant::now() < end && !output.contains("CLI_TTY_OK") {
         if let Ok(bytes) = receive.recv_timeout(Duration::from_millis(100)) {
             output.push_str(&String::from_utf8_lossy(&bytes));
         } else if child.try_wait().unwrap().is_some() {
             break;
+        }
+        // ConPTY starts with PSEUDOCONSOLE_INHERIT_CURSOR and waits for the
+        // terminal emulator's cursor report before it launches the child.
+        if !cursor_reported && output.contains("\x1b[6n") {
+            input.write_all(b"\x1b[1;1R").unwrap();
+            input.flush().unwrap();
+            cursor_reported = true;
         }
         if !sent
             && output.contains(if case == "raw" {
