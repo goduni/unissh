@@ -112,12 +112,12 @@ fn run_case(case: &str) {
     let exe = std::env::current_exe().unwrap();
     let mut command = if case == "pipe" {
         #[cfg(windows)]
-        let (shell, script) = ("cmd.exe", "echo PIPE_SENTINEL| \"%UNISSH_TTY_TEST_BINARY%\" --exact tty::console_tests::console_child --ignored --nocapture");
+        let (shell, script) = ("powershell.exe", "'PIPE_SENTINEL' | & $env:UNISSH_TTY_TEST_BINARY --exact tty::console_tests::console_child --ignored --nocapture");
         #[cfg(unix)]
         let (shell, script) = ("sh", "printf 'PIPE_SENTINEL\\n' | \"$UNISSH_TTY_TEST_BINARY\" --exact tty::console_tests::console_child --ignored --nocapture");
         let mut command = CommandBuilder::new(shell);
         #[cfg(windows)]
-        command.args(["/d", "/s", "/c", script]);
+        command.args(["-NoProfile", "-NonInteractive", "-Command", script]);
         #[cfg(unix)]
         command.args(["-c", script]);
         command.env("UNISSH_TTY_TEST_BINARY", &exe);
