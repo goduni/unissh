@@ -295,7 +295,7 @@ The host library is shown [at the top](#unissh) — dark mode, with the operatio
 alongside a remote one. Permissions and modification times are shown for what they are: read-only
 facts about the file, not fields to edit here.
 
-<img src="docs/screenshots/sftp-dark.png" alt="UniSSH SFTP — two panes, each browsing a different host" width="900">
+<img src="docs/screenshots/sftp-dark.png" alt="UniSSH SFTP — local and remote files side by side" width="900">
 
 **Broadcast.** One synchronized input mirrored to every live host at once, each tile showing that
 host's own output. Destructive commands re-confirm before they fan out.
@@ -307,9 +307,13 @@ reported separately — bounded concurrency, and a stop that actually skips host
 
 <img src="docs/screenshots/fleet-exec-dark.png" alt="UniSSH Fleet exec — one command across three hosts with per-host exit codes" width="900">
 
-The rest of the client — terminal, secrets, tunnels, known hosts, recordings, snippets — and the
-server's admin panel are captured in [`docs/screenshots/`](docs/screenshots), viewable in the browser
-without cloning anything.
+**Administration.** The fully redesigned interface brings together server status, accounts,
+spaces, devices, vault access, and the audit log.
+
+<img src="docs/screenshots/admin-dark.png" alt="UniSSH administration — server overview" width="900">
+
+See the [screenshot gallery](docs/screenshots/README.md) for light and dark versions of the host
+library, terminal, SFTP, MCP, and administration panel, plus captures of other client features.
 
 ---
 
