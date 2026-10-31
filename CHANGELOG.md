@@ -45,6 +45,11 @@ starts with `0.`:
   Settings → General. Installs `unissh-cli` for the current user, registers PATH,
   updates managed copies with the app, and supports removal from Settings.
 
+### Fixed
+
+- macOS CLI terminal waits now respect deadlines and session shutdown when
+  reading the controlling terminal.
+
 ### Compatibility
 
 **Vault format: unchanged. Server protocol: unchanged.** The CLI enrolls as its

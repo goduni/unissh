@@ -271,7 +271,9 @@ mod imp {
     use std::os::fd::{AsFd, BorrowedFd};
     use std::time::{Duration, Instant};
 
-    use rustix::event::{poll, PollFd, PollFlags, Timespec};
+    use rustix::event::Timespec;
+    #[cfg(not(target_os = "macos"))]
+    use rustix::event::{poll, PollFd, PollFlags};
     use rustix::io::Errno;
     use rustix::termios::{
         tcgetattr, tcgetwinsize, tcsetattr, OptionalActions, OutputModes, Termios,
@@ -596,13 +598,40 @@ mod imp {
             }
             let left = Timespec::try_from(left)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-            let mut fds = [PollFd::new(&fd, PollFlags::IN)];
-            match poll(&mut fds, Some(&left)) {
-                Ok(ready) => return Ok(ready > 0),
+            match read_ready_once(fd, &left) {
+                Ok(ready) => return Ok(ready),
                 Err(e) if e == Errno::INTR => {}
                 Err(e) => return Err(e.into()),
             }
         }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn read_ready_once(fd: BorrowedFd<'_>, timeout: &Timespec) -> rustix::io::Result<bool> {
+        let mut fds = [PollFd::new(&fd, PollFlags::IN)];
+        poll(&mut fds, Some(timeout)).map(|count| count > 0)
+    }
+
+    // Darwin poll can report /dev/tty ready when a read would still block.
+    // select works for that controlling-terminal alias, preserving deadlines
+    // and the SSH input worker's bounded cancellation waits.
+    #[cfg(target_os = "macos")]
+    #[expect(
+        unsafe_code,
+        reason = "select receives only a live borrowed descriptor in a correctly sized set"
+    )]
+    fn read_ready_once(fd: BorrowedFd<'_>, timeout: &Timespec) -> rustix::io::Result<bool> {
+        use rustix::event::{fd_set_insert, fd_set_num_elements, select, FdSetElement};
+        use std::os::fd::AsRawFd;
+        let raw = fd.as_raw_fd();
+        let bound = raw.checked_add(1).ok_or(Errno::INVAL)?;
+        let mut readable = vec![FdSetElement::default(); fd_set_num_elements(1, bound)];
+        fd_set_insert(&mut readable, raw);
+        // SAFETY: fd stays borrowed for this call. The initialized set has the
+        // exact capacity requested by rustix, contains only fd, and no other
+        // descriptor sets are supplied. rustix supports Darwin's unlimited select.
+        unsafe { select(bound, Some(&mut readable), None, None, Some(timeout)) }
+            .map(|count| count > 0)
     }
 
     /// Reads what is available on stdin, unbuffered: `0` is end of input.
