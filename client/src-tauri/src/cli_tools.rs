@@ -201,6 +201,10 @@ impl Layout {
                 return Ok(());
             }
             let (path, fish) = shell_profile(&self.home);
+            // Dotfile managers commonly symlink shell profiles. Update the
+            // target atomically and preserve the link; a dangling link fails
+            // before any profile is replaced.
+            let path = if path.is_symlink() { fs::canonicalize(path)? } else { path };
             let mut text = match fs::read_to_string(&path) {
                 Ok(text) => text,
                 Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
@@ -425,6 +429,26 @@ mod tests {
         layout.configure_path().unwrap();
         assert_eq!(std::fs::read(&profile).unwrap(), configured);
         assert!(configured.starts_with(b"# user's settings\nexport EDITOR=vim\n"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_registration_preserves_symlinked_dotfiles_and_refuses_dangling_links() {
+        let tmp = tempfile::tempdir().unwrap();
+        let layout = layout(tmp.path());
+        let (profile, _) = super::shell_profile(&layout.home);
+        std::fs::create_dir_all(profile.parent().unwrap()).unwrap();
+        let target = tmp.path().join("shell-settings");
+        std::fs::write(&target, "# dotfiles\n").unwrap();
+        std::os::unix::fs::symlink(&target, &profile).unwrap();
+        layout.configure_path().unwrap();
+        assert!(profile.is_symlink());
+        assert!(std::fs::read_to_string(&target).unwrap().starts_with("# dotfiles\n"));
+        assert!(layout.path_configured().unwrap());
+        std::fs::remove_file(&target).unwrap();
+        assert!(layout.configure_path().is_err());
+        assert!(profile.is_symlink());
+        assert!(!target.exists());
     }
 
     #[cfg(unix)]
