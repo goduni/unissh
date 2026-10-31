@@ -41,6 +41,7 @@ import { exportPath } from "@/support/paths";
 import { ServerVaultsSection } from "./ServerVaultsSection";
 import { OwnFingerprintRow } from "./SharedVaultTrust";
 import { Modal } from "@/components/Modal";
+import { CliTools } from "@/components/CliTools";
 import type { IconName } from "@/components/primitives";
 import { forgetTerminalWorkspace, moveTerminalWorkspace, useApp } from "@/store/app";
 import { localShellSettings, setLocalShellSetting, useLocalMachine } from "@/store/localShell";
@@ -1017,6 +1018,7 @@ function SettingsGeneral() {
           to configure, and settings for something that cannot exist are noise. */}
       {!isMobile && <SettingsLocalTerminal />}
 
+      <CliTools />
       <SectionLabel>{t("settings.sectionBehavior")}</SectionLabel>
       <SettingRow title={t("settings.confirmQuitTitle")} desc={t("settings.confirmQuitDesc")}>
         <Toggle checked={confirmQuit} onChange={onConfirmQuit} />

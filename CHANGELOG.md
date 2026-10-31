@@ -32,6 +32,30 @@ starts with `0.`:
 
 ## [Unreleased]
 
+### Added
+
+- Native Windows CLI console support: hidden prompts, Unicode, interactive SSH,
+  terminal resize, cancellation and recording playback. Device directories and
+  secret files are created with private Windows ACLs and checked before use.
+  Windows drive paths stay local in file copies, piped input is forwarded, and
+  snippet editing supports Notepad and configured editor launchers.
+- Standalone macOS universal and Windows x86-64/ARM64 CLI release artifacts,
+  alongside the existing static Linux binaries.
+- Optional CLI installation with the desktop app, offered on first run and in
+  Settings → General. Installs `unissh-cli` for the current user, registers PATH,
+  updates managed copies with the app, and supports removal from Settings.
+
+### Fixed
+
+- macOS CLI terminal waits now respect deadlines and session shutdown when
+  reading the controlling terminal.
+
+### Compatibility
+
+**Vault format: unchanged. Server protocol: unchanged.** The CLI enrolls as its
+own device; installing it does not reuse the desktop app's session or keychain.
+
+
 ## [0.7.0] — 2026-10-30
 
 ### Breaking changes

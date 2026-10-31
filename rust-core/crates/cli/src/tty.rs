@@ -1,6 +1,6 @@
 //! The terminal: prompts that do not echo, and raw mode for a session.
 //!
-//! Prompts talk to the controlling terminal (`/dev/tty`), not to stdin and
+//! Prompts talk to the controlling terminal (`/dev/tty` or `CONIN$`/`CONOUT$`), not to stdin and
 //! stdout, so `cat file | unissh ssh host -- cmd` can still ask for a password
 //! and nothing a prompt prints ends up in a pipe. Every terminal setting this
 //! module changes is put back when its guard is dropped.
@@ -49,11 +49,11 @@ fn shown(c: char) -> bool {
         )
 }
 
-// The quiet-prompt line editor is the Unix terminal's (Windows has no `Tty`);
-// it is pure, so its tests run everywhere.
+// The quiet-prompt editor is shared by the Unix and Windows terminals.
+// It is pure, so its tests run everywhere.
 
 /// What one key does at a quiet prompt.
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows, test))]
 #[derive(Debug, PartialEq, Eq)]
 enum Key {
     /// Keep reading.
@@ -66,15 +66,15 @@ enum Key {
     End,
 }
 
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows, test))]
 const CTRL_C: u8 = 0x03;
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows, test))]
 const CTRL_D: u8 = 0x04;
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows, test))]
 const BACKSPACE: u8 = 0x08;
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows, test))]
 const CTRL_U: u8 = 0x15;
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows, test))]
 const DELETE: u8 = 0x7f;
 
 /// Line editing for a prompt that echoes nothing. The terminal's own line
@@ -83,13 +83,13 @@ const DELETE: u8 = 0x7f;
 /// terminal would — Backspace and Ctrl-U edit, Enter ends the line (a CR LF
 /// pair once), Ctrl-D on an empty line ends input — and Ctrl-C cancels, with
 /// the terminal put back by whoever turned echo off.
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows, test))]
 struct QuietLine {
     text: Zeroizing<Vec<u8>>,
     after_cr: bool,
 }
 
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows, test))]
 impl QuietLine {
     fn new() -> Self {
         Self {
@@ -134,7 +134,7 @@ impl QuietLine {
 
     /// How many characters the line holds (UTF-8 continuation bytes are part
     /// of the character before them).
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn chars(&self) -> usize {
         self.text.iter().filter(|b| **b & 0xC0 != 0x80).count()
     }
@@ -145,12 +145,12 @@ impl QuietLine {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn cancelled() -> io::Error {
     io::Error::new(io::ErrorKind::Interrupted, "cancelled")
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn ended() -> io::Error {
     io::Error::new(io::ErrorKind::UnexpectedEof, "cancelled")
 }
@@ -271,7 +271,9 @@ mod imp {
     use std::os::fd::{AsFd, BorrowedFd};
     use std::time::{Duration, Instant};
 
-    use rustix::event::{poll, PollFd, PollFlags, Timespec};
+    use rustix::event::Timespec;
+    #[cfg(not(target_os = "macos"))]
+    use rustix::event::{poll, PollFd, PollFlags};
     use rustix::io::Errno;
     use rustix::termios::{
         tcgetattr, tcgetwinsize, tcsetattr, OptionalActions, OutputModes, Termios,
@@ -596,13 +598,40 @@ mod imp {
             }
             let left = Timespec::try_from(left)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-            let mut fds = [PollFd::new(&fd, PollFlags::IN)];
-            match poll(&mut fds, Some(&left)) {
-                Ok(ready) => return Ok(ready > 0),
+            match read_ready_once(fd, &left) {
+                Ok(ready) => return Ok(ready),
                 Err(e) if e == Errno::INTR => {}
                 Err(e) => return Err(e.into()),
             }
         }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn read_ready_once(fd: BorrowedFd<'_>, timeout: &Timespec) -> rustix::io::Result<bool> {
+        let mut fds = [PollFd::new(&fd, PollFlags::IN)];
+        poll(&mut fds, Some(timeout)).map(|count| count > 0)
+    }
+
+    // Darwin poll can report /dev/tty ready when a read would still block.
+    // select works for that controlling-terminal alias, preserving deadlines
+    // and the SSH input worker's bounded cancellation waits.
+    #[cfg(target_os = "macos")]
+    #[expect(
+        unsafe_code,
+        reason = "select receives only a live borrowed descriptor in a correctly sized set"
+    )]
+    fn read_ready_once(fd: BorrowedFd<'_>, timeout: &Timespec) -> rustix::io::Result<bool> {
+        use rustix::event::{fd_set_insert, fd_set_num_elements, select, FdSetElement};
+        use std::os::fd::AsRawFd;
+        let raw = fd.as_raw_fd();
+        let bound = raw.checked_add(1).ok_or(Errno::INVAL)?;
+        let mut readable = vec![FdSetElement::default(); fd_set_num_elements(1, bound)];
+        fd_set_insert(&mut readable, raw);
+        // SAFETY: fd stays borrowed for this call. The initialized set has the
+        // exact capacity requested by rustix, contains only fd, and no other
+        // descriptor sets are supplied. rustix supports Darwin's unlimited select.
+        unsafe { select(bound, Some(&mut readable), None, None, Some(timeout)) }
+            .map(|count| count > 0)
     }
 
     /// Reads what is available on stdin, unbuffered: `0` is end of input.
@@ -622,7 +651,11 @@ mod imp {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+#[path = "tty/windows.rs"]
+mod imp;
+
+#[cfg(not(any(unix, windows)))]
 mod imp {
     use std::io::{self, Read, Write};
     use std::time::{Duration, Instant};
@@ -745,7 +778,7 @@ mod imp {
 pub const INPUT_TICK: Duration = Duration::from_millis(100);
 
 /// How often a timed prompt looks whether it is still wanted.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const STOP_TICK: Duration = Duration::from_millis(200);
 
 #[cfg(test)]
@@ -814,3 +847,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tty/console_tests.rs"]
+mod console_tests;

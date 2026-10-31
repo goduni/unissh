@@ -6,7 +6,6 @@
 //! someone who does not run UniSSH.
 
 use std::fmt::Write as _;
-use std::fs::OpenOptions;
 use std::io::{self, Write as _};
 use std::path::Path;
 use std::time::Duration;
@@ -299,14 +298,7 @@ pub fn export(device: &Device, query: &str, path: &Path, force: bool) -> Res<()>
 fn save(path: &Path, bytes: &[u8], force: bool) -> Res<()> {
     let failed = |e: &dyn std::fmt::Display| Failure::msg(format!("{}: {e}", path.display()));
     if !force {
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut file = options.open(path).map_err(|e| {
+        let mut file = crate::home::create_private_file(path).map_err(|e| {
             if e.kind() == io::ErrorKind::AlreadyExists {
                 Failure::msg(format!("{} exists; --force replaces it", path.display()))
             } else {
@@ -330,8 +322,8 @@ fn save(path: &Path, bytes: &[u8], force: bool) -> Res<()> {
         .parent()
         .filter(|dir| !dir.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    // `tempfile` creates it 0600 on unix, and removes it if anything fails.
-    let mut file = tempfile::NamedTempFile::new_in(dir).map_err(|e| failed(&e))?;
+    // Private from creation on every native platform; removed on failure.
+    let mut file = crate::home::private_tempfile(dir).map_err(|e| failed(&e))?;
     file.write_all(bytes)
         .and_then(|()| file.as_file().sync_all())
         .map_err(|e| failed(&e))?;

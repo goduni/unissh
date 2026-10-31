@@ -33,13 +33,6 @@ const SWAP_PAUSE: Duration = Duration::from_secs(1);
 /// where whatever types into the terminal could answer; a server started with
 /// `&` shares it with whatever runs in the foreground instead. Checked again
 /// before each question ([`still_attended`]).
-#[cfg_attr(
-    not(unix),
-    expect(
-        clippy::missing_const_for_fn,
-        reason = "only off Unix is the answer fixed; on Unix it asks the terminal"
-    )
-)]
 pub fn attended(http: bool) -> bool {
     http && stdin_is_foreground()
 }

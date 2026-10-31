@@ -43,9 +43,15 @@ on:
   schedule:
     - cron: "0 6 * * 1" # weekly — surfaces new advisories via cargo-deny
   workflow_dispatch:
+    inputs:
+      cli_os:
+        description: "Run all checks, or only one native CLI platform"
+        type: choice
+        default: all
+        options: [all, macos-latest, windows-latest]
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}-${{ inputs.cli_os || 'all' }}
   cancel-in-progress: true
 
 env:
@@ -54,6 +60,7 @@ env:
 
 jobs:
   lint:
+    if: inputs.cli_os == '' || inputs.cli_os == 'all'
     name: rustfmt + clippy
     runs-on: ubuntu-latest
     steps:
@@ -70,6 +77,7 @@ jobs:
         run: python3 scripts/check-log-redaction.py
 
   test:
+    if: inputs.cli_os == '' || inputs.cli_os == 'all'
     name: test (linux · root container · sshd)
     runs-on: ubuntu-latest
     # The sshd-backed integration tests are designed to run as root in an
@@ -91,6 +99,7 @@ jobs:
       - run: cargo test --workspace --features unissh-automation/core
 
   mcp-platform:
+    if: inputs.cli_os == '' || inputs.cli_os == 'all'
     name: MCP loopback (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -107,22 +116,31 @@ jobs:
   cli-platform:
     name: CLI (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        os: ${{ fromJSON(inputs.cli_os != '' && inputs.cli_os != 'all' && format('["{0}"]', inputs.cli_os) || '["macos-latest", "windows-latest"]') }}
     env:
-      # The vendored OpenSSL (SQLCipher on Windows) in portable C: this job
-      # lints, it ships nothing, and NASM is one more thing to install.
+      # SQLCipher's vendored OpenSSL in portable C; these checks need no NASM.
       OPENSSL_RUST_USE_NASM: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
     steps:
       - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
-      # `lint` covers Linux; these hosts compile the halves of the CLI it never
-      # sees — macOS termios, and the Windows stand-ins for the terminal.
-      - run: cargo clippy -p unissh-cli --all-targets -- -D warnings
+        with:
+          key: native-console-opt0
+          cache-on-failure: true
+      # Exercise native consoles, not just cfg-gated compilation: the PTY
+      # contract covers Unicode, hidden prompts, cancellation, pipes and resize.
+      # CLI contracts are terminal/filesystem tests, not Argon2 benchmarks.
+      # Avoid optimizing the entire FFI/bindgen tree just to run these tests.
+      - run: cargo clippy --locked -p unissh-cli --all-targets --config 'profile.dev.package."*".opt-level=0' -- -D warnings
+      - run: cargo test --locked -p unissh-cli --bin unissh --config 'profile.dev.package."*".opt-level=0' -- --test-threads=1
 
   deny:
+    if: inputs.cli_os == '' || inputs.cli_os == 'all'
     name: cargo-deny (supply chain)
     runs-on: ubuntu-latest
     steps:

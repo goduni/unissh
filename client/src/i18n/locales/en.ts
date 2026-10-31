@@ -2495,6 +2495,20 @@ export const en = {
     "removeServerBody": "The link to {{server}} will be removed, and this device leaves the account's devices there. Cloud vaults synced through it will stop syncing on this device.",
     "removeServerDone": "Server removed"
   },
+  cliTools: {
+      "optional": "Optional: use UniSSH in your terminal.",
+      "title": "Command-line tools",
+      "description": "Optional: install unissh-cli and add it to your terminal’s PATH.",
+      "installed": "The CLI is installed and added to PATH.",
+      "install": "Install CLI",
+      "update": "Update CLI",
+      "finish": "Finish setup",
+      "remove": "Remove CLI",
+      "loading": "Checking CLI installation…",
+      "unavailable": "The CLI is not included in this development build.",
+      "newTerminal": "Open a new terminal to get started. Sign in or pair the CLI as a separate device.",
+      "error": "CLI setup: {{error}}"
+  },
   support: {
     "tab": "Support",
     "lede": "UniSSH is free, open source, and has no company behind it. If it solved a problem for you, you can support the project. Nothing here is gated and nothing will be — donations don't buy priority support or private builds.",

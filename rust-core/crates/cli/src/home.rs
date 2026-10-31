@@ -21,6 +21,10 @@ use zeroize::Zeroizing;
 
 use crate::failure::{best_effort, Failure, Res};
 
+#[cfg(windows)]
+#[path = "home/windows.rs"]
+mod windows;
+
 const DB: &str = "unissh.db";
 const DB_JOURNAL: &str = "unissh.db-journal";
 const KEYSET: &str = "unissh-keyset.bin";
@@ -122,15 +126,20 @@ impl Home {
 
     /// Creates the directory, private to the user.
     pub fn create(&self) -> Res<()> {
-        let mut builder = fs::DirBuilder::new();
-        builder.recursive(true);
-        #[cfg(unix)]
+        #[cfg(windows)]
+        windows::create_dir(&self.dir)?;
+        #[cfg(not(windows))]
         {
-            use std::os::unix::fs::DirBuilderExt;
-            builder.mode(0o700);
+            let mut builder = fs::DirBuilder::new();
+            builder.recursive(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                builder.mode(0o700);
+            }
+            builder.create(&self.dir)?;
         }
-        builder.create(&self.dir)?;
-        Ok(())
+        self.check_private()
     }
 
     /// Refuses a directory that is not the user's alone: whoever can write to
@@ -142,12 +151,18 @@ impl Home {
             Err(e) if e.kind() == ErrorKind::NotFound => return Ok(()),
             Err(e) => return Err(e.into()),
         };
-        if owned_privately(&meta) {
+        #[cfg(windows)]
+        let private = {
+            let _ = meta;
+            windows::check_dir(&self.dir)?
+        };
+        #[cfg(not(windows))]
+        let private = owned_privately(&meta);
+        if private {
             Ok(())
         } else {
             Err(Failure::msg(format!(
-                "{} must belong to you and be writable by you alone (`chmod 700 {}`)",
-                self.dir.display(),
+                "{} must belong to you and be private to your OS account",
                 self.dir.display()
             )))
         }
@@ -284,6 +299,13 @@ pub fn read_private(path: &Path) -> Res<Option<Zeroizing<String>>> {
             )));
         }
     }
+    #[cfg(windows)]
+    if !windows::is_private(&file)? {
+        return Err(Failure::msg(format!(
+            "{} must be owned by you and private to your Windows account",
+            path.display()
+        )));
+    }
     Ok(Some(Zeroizing::new(io::read_to_string(&mut file)?)))
 }
 
@@ -295,7 +317,7 @@ fn owned_privately(meta: &fs::Metadata) -> bool {
 }
 
 /// Not checked here: the per-user profile directories are already private.
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 const fn owned_privately(_meta: &fs::Metadata) -> bool {
     true
 }
@@ -308,6 +330,33 @@ fn absolute_env(name: &str) -> Option<PathBuf> {
         .filter(|p| p.is_absolute())
 }
 
+/// Creates a new private file, refusing to replace any existing entry.
+/// Windows applies its protected DACL before any plaintext is written.
+pub fn create_private_file(path: &Path) -> io::Result<File> {
+    #[cfg(windows)]
+    {
+        windows::create_file(path)
+    }
+    #[cfg(not(windows))]
+    {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        options.open(path)
+    }
+}
+
+/// An owner-private sibling for atomic downloads and recording exports.
+pub fn private_tempfile(directory: &Path) -> io::Result<tempfile::NamedTempFile> {
+    tempfile::Builder::new()
+        .prefix(".unissh-")
+        .make_in(directory, create_private_file)
+}
+
 /// Writes `bytes` to `path` readable by the owner only, replacing it atomically.
 pub fn write_private(path: &Path, bytes: &[u8]) -> Res<()> {
     let tmp = path.with_extension("tmp");
@@ -318,16 +367,10 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Res<()> {
         Err(e) if e.kind() == ErrorKind::NotFound => {}
         Err(e) => return Err(e.into()),
     }
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(&tmp)?;
+    let mut file = create_private_file(&tmp)?;
     file.write_all(bytes)?;
     file.sync_all()?;
+    drop(file);
     fs::rename(&tmp, path)?;
     Ok(())
 }

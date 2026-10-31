@@ -9,6 +9,7 @@ import { usePalette } from "@/theme/ThemeProvider";
 import { MONO, rem, rgba, TEXT, UI } from "@/theme/tokens";
 import { Btn, Checkbox, Field, Icon, Input, Logo, NO_AUTOCORRECT, Spinner, Toggle } from "@/components/primitives";
 import { useApp } from "@/store/app";
+import { CliTools } from "@/components/CliTools";
 import { recoverInstance } from "@/store/recovery";
 import {
   BIOMETRIC_CHECK_GRACE_MS,
@@ -373,6 +374,7 @@ function Onboarding({ onCreated }: { onCreated: (secretKey: string) => void }) {
           />
         </span>
       </div>
+      <CliTools compact />
       <Btn
         size="lg"
         icon={busy ? undefined : "key"}

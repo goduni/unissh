@@ -1,6 +1,8 @@
 //! UniSSH Tauri backend — wires the `unissh_ffi::Core` into Tauri commands.
 
 mod biometric;
+#[cfg(desktop)]
+mod cli_tools;
 mod cloud;
 mod commands;
 // `pub` only so the DTOs (and the `ApiError` one of them carries) are nameable:
@@ -68,6 +70,8 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     // One local instance = two files in the app-data dir: the SQLCipher DB
     // and the encrypted keyset sidecar. The DB key is derived from the
     // unlocked keyset, so neither opens without unlocking.
+    #[cfg(desktop)]
+    cli_tools::refresh_installed(app.handle().clone());
     let dir = app.path().app_data_dir()?;
     if let Err(e) = std::fs::create_dir_all(&dir) {
         // Not fatal here: opening the instance then fails with its own error,
@@ -295,6 +299,12 @@ pub fn run() {
     builder
         .setup(setup_app)
         .invoke_handler(tauri::generate_handler![
+            #[cfg(desktop)]
+            cli_tools::cli_tools_status,
+            #[cfg(desktop)]
+            cli_tools::cli_tools_install,
+            #[cfg(desktop)]
+            cli_tools::cli_tools_remove,
             #[cfg(desktop)]
             mcp::mcp_status,
             #[cfg(desktop)]
