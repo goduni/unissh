@@ -289,34 +289,31 @@ Everything below is implemented in the shared Rust core and exposed to the clien
 
 ## Screenshots
 
-The host library is shown [at the top](#unissh) — with colour tags and icons for hosts and groups,
-operations on the left, and the selected host's connection, auth, and host-key status on the right.
-These v0.7.0 captures use synthetic demo data and macOS-style window framing.
+The host library is shown [at the top](#unissh) — dark mode, with the operations rail (terminals, SFTP, run) and the vault & network group (secrets, tunnels, known hosts) on the left, and the selected host's connection, auth, and host-key status on the right.
 
 **SFTP, two panes.** Any pane can hold any location — a different host in each, or your own machine
 alongside a remote one. Permissions and modification times are shown for what they are: read-only
 facts about the file, not fields to edit here.
 
-<img src="docs/screenshots/sftp-dark.png" alt="UniSSH SFTP — local files beside a remote host" width="900">
+<img src="docs/screenshots/sftp-dark.png" alt="UniSSH SFTP — local and remote files side by side" width="900">
 
-**Terminal splits.** Keep several SSH sessions side by side in one tab, with a separate terminal
-and connection state for each pane.
+**Broadcast.** One synchronized input mirrored to every live host at once, each tile showing that
+host's own output. Destructive commands re-confirm before they fan out.
 
-<img src="docs/screenshots/terminal-dark.png" alt="UniSSH terminals — two production hosts in a split tab" width="900">
+<img src="docs/screenshots/broadcast-dark.png" alt="UniSSH Broadcast — one input mirrored to three live hosts" width="900">
 
-**MCP.** Choose which hosts each local AI application can reach, how long its access lasts, and
-whether commands need confirmation. Connections and command results appear in the activity feed.
+**Fleet exec.** The same command run across a selection, with each host's exit code and timing
+reported separately — bounded concurrency, and a stop that actually skips hosts that have not started.
 
-<img src="docs/screenshots/mcp-dark.png" alt="UniSSH MCP — application access, selected hosts, and command activity" width="900">
+<img src="docs/screenshots/fleet-exec-dark.png" alt="UniSSH Fleet exec — one command across three hosts with per-host exit codes" width="900">
 
-**Administration.** The fully redesigned admin interface covers server status, accounts, spaces,
-devices, vault access, and the audit log. Vault contents remain encrypted on the devices.
+**Administration.** The fully redesigned interface brings together server status, accounts,
+spaces, devices, vault access, and the audit log.
 
-<img src="docs/screenshots/admin-dark.png" alt="UniSSH administration — redesigned server overview" width="900">
+<img src="docs/screenshots/admin-dark.png" alt="UniSSH administration — server overview" width="900">
 
-See the [screenshot gallery](docs/screenshots/README.md) for light and dark versions of the client
-and admin panel, including accounts and audit. Earlier captures of other client features are kept
-there as well.
+See the [screenshot gallery](docs/screenshots/README.md) for light and dark versions of the host
+library, terminal, SFTP, MCP, and administration panel, plus captures of other client features.
 
 ---
 
