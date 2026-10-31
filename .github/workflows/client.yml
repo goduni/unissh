@@ -552,7 +552,7 @@ jobs:
             exit 1
           fi
           DESKTOP_ENTRY=$(find "$WORK/squashfs-root/usr/share/applications" -name '*.desktop' -print -quit)
-          if [ -z "$DESKTOP_ENTRY" ] || ! grep -Eq '^Exec=.* --gui([[:space:]]|$)' "$DESKTOP_ENTRY"; then
+          if [ -z "$DESKTOP_ENTRY" ] || ! grep -Eq '^Exec=unissh --gui([[:space:]]|$)' "$DESKTOP_ENTRY"; then
             echo "::error::the AppImage desktop entry must explicitly open the GUI"
             exit 1
           fi

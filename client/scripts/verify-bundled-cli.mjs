@@ -48,8 +48,8 @@ if (process.platform === "linux") {
       execFileSync("dpkg-deb", ["--extract", join(directory, name), extracted]);
       const applications = join(extracted, "usr", "share", "applications");
       const entries = readdirSync(applications).filter(file => file.endsWith(".desktop"));
-      if (!entries.length || entries.some(file => !/^Exec=.* --gui(?:\s|$)/m.test(readFileSync(join(applications, file), "utf8")))) {
-        throw new Error(`${name} must explicitly open the GUI from its desktop entry`);
+      if (!entries.length || entries.some(file => !/^Exec=\/usr\/bin\/unissh --gui(?:\s|$)/m.test(readFileSync(join(applications, file), "utf8")))) {
+        throw new Error(`${name} must open its GUI by absolute path, independently of CLI aliases`);
       }
     } finally {
       rmSync(extracted, { recursive: true, force: true });

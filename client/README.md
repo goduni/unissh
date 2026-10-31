@@ -18,6 +18,10 @@ its tools). Menu entries explicitly request the GUI. macOS/Windows use
 `unissh-cli`; that command also remains available on Linux. The CLI signs in as
 a separate device.
 
+Debian/RPM menu entries execute `/usr/bin/unissh --gui` directly, so a CLI
+already present on PATH cannot intercept them. AppImage entries use the bundled
+GUI selected by AppRun's own PATH. Neither needs the optional CLI installation.
+
 `npm run tauri dev` / `build` first run `scripts/build-cli.mjs`. It builds the
 root workspace's CLI in its own target directory, embeds OpenSSL, and packages
 it as a resource outside PATH until the user chooses to install it. This also
