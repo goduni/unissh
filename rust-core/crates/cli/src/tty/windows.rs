@@ -11,14 +11,15 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::windows::io::AsRawHandle;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows_sys::Win32::System::Console::{
     FlushConsoleInputBuffer, GetConsoleCP, GetConsoleMode, GetConsoleOutputCP,
     GetConsoleProcessList, GetConsoleScreenBufferInfo, GetStdHandle, PeekConsoleInputW,
-    ReadConsoleInputW, SetConsoleCP, SetConsoleMode, SetConsoleOutputCP, WriteConsoleW,
-    CONSOLE_SCREEN_BUFFER_INFO, DISABLE_NEWLINE_AUTO_RETURN, ENABLE_ECHO_INPUT,
+    ReadConsoleInputW, ReadConsoleW, SetConsoleCP, SetConsoleMode, SetConsoleOutputCP,
+    WriteConsoleW, CONSOLE_SCREEN_BUFFER_INFO, DISABLE_NEWLINE_AUTO_RETURN, ENABLE_ECHO_INPUT,
     ENABLE_EXTENDED_FLAGS, ENABLE_LINE_INPUT, ENABLE_MOUSE_INPUT, ENABLE_PROCESSED_INPUT,
     ENABLE_PROCESSED_OUTPUT, ENABLE_QUICK_EDIT_MODE, ENABLE_VIRTUAL_TERMINAL_INPUT,
     ENABLE_VIRTUAL_TERMINAL_PROCESSING, ENABLE_WINDOW_INPUT, INPUT_RECORD, KEY_EVENT,
@@ -111,41 +112,109 @@ impl Drop for InputMode {
     }
 }
 
-// ReadFile needs room for a complete UTF-8 character (up to four bytes).
-// Reading one byte at a time can report zero for a non-ASCII console key.
-// Keep typeahead between pasted lines, and wipe both consumed and pending input.
+// Decode UTF-16 ourselves. ReadFile's UTF-8 conversion can replace the two
+// surrogate records of a non-BMP key separately. Keep a trailing high surrogate
+// until the next read, and retain UTF-8 typeahead between pasted lines.
 struct ConsoleKeys {
-    bytes: Zeroizing<[u8; 128]>,
+    bytes: Zeroizing<Vec<u8>>,
     position: usize,
-    used: usize,
+    surrogate: Zeroizing<u16>,
 }
 
 impl ConsoleKeys {
     fn new() -> Self {
         Self {
-            bytes: Zeroizing::new([0; 128]),
+            bytes: Zeroizing::new(Vec::with_capacity(384)),
             position: 0,
-            used: 0,
+            surrogate: Zeroizing::new(0),
         }
     }
 
-    const fn pending(&self) -> bool {
-        self.position < self.used
+    fn pending(&self) -> bool {
+        self.position < self.bytes.len()
     }
 
-    fn next(&mut self, mut input: &File) -> io::Result<u8> {
+    fn fill(&mut self, input: &File) -> io::Result<()> {
+        self.bytes.zeroize();
+        self.bytes.clear();
+        self.position = 0;
+        let mut wide = Zeroizing::new([0_u16; 128]);
+        let prefix = usize::from(*self.surrogate != 0);
+        if let Some(first) = wide.first_mut() {
+            *first = std::mem::take(&mut *self.surrogate);
+        }
+        let buffer = wide.get_mut(prefix..).ok_or_else(ended)?;
+        let capacity = u32::try_from(buffer.len()).map_err(io::Error::other)?;
+        let mut count = 0;
+        // SAFETY: input owns a live console handle; buffer is initialized UTF-16
+        // storage of capacity elements and count is a valid out-pointer.
+        if unsafe {
+            ReadConsoleW(
+                input.as_raw_handle(),
+                buffer.as_mut_ptr().cast(),
+                capacity,
+                &mut count,
+                std::ptr::null(),
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        if count == 0 {
+            return Err(ended());
+        }
+        let mut used = prefix + usize::try_from(count).map_err(io::Error::other)?;
+        if wide
+            .get(used.saturating_sub(1))
+            .is_some_and(|unit| (0xd800..=0xdbff).contains(unit))
+        {
+            used -= 1;
+            *self.surrogate = *wide.get(used).ok_or_else(ended)?;
+        }
+        let units = wide.get(..used).ok_or_else(ended)?;
+        for character in char::decode_utf16(units.iter().copied()) {
+            let character = character.map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            let mut encoded = Zeroizing::new([0_u8; 4]);
+            self.bytes
+                .extend_from_slice(character.encode_utf8(encoded.as_mut()).as_bytes());
+        }
+        Ok(())
+    }
+
+    fn read(&mut self, input: &File, buffer: &mut [u8]) -> io::Result<usize> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
         if !self.pending() {
-            self.bytes.zeroize();
-            self.used = input.read(self.bytes.as_mut())?;
-            self.position = 0;
-            if self.used == 0 {
-                return Err(ended());
-            }
+            self.fill(input)?;
         }
-        let byte = self.bytes.get(self.position).copied().ok_or_else(ended)?;
-        self.position += 1;
-        Ok(byte)
+        if !self.pending() {
+            // Only a high surrogate arrived. Let the caller check its deadline
+            // or session cancellation while the console waits for the low half.
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        let rest = self.bytes.get(self.position..).ok_or_else(ended)?;
+        let count = rest.len().min(buffer.len());
+        buffer
+            .get_mut(..count)
+            .ok_or_else(ended)?
+            .copy_from_slice(rest.get(..count).ok_or_else(ended)?);
+        self.position += count;
+        Ok(count)
     }
+
+    fn next(&mut self, input: &File) -> io::Result<u8> {
+        let mut byte = [0];
+        self.read(input, &mut byte)?;
+        Ok(byte[0])
+    }
+}
+
+// A raw session has one input worker, joined before RawMode is dropped. Clear
+// its decoded typeahead on each mode transition, including cancelled sessions.
+static STDIN_KEYS: Mutex<Option<ConsoleKeys>> = Mutex::new(None);
+fn stdin_keys() -> MutexGuard<'static, Option<ConsoleKeys>> {
+    STDIN_KEYS.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Prompts address the console even when a command has redirected standard I/O.
@@ -244,7 +313,11 @@ impl Tty {
             if !keys.pending() && !ready(self.input.as_raw_handle(), left.min(STOP_TICK))? {
                 continue;
             }
-            let byte = keys.next(&self.input)?;
+            let byte = match keys.next(&self.input) {
+                Ok(byte) => byte,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => continue,
+                Err(e) => return Err(e),
+            };
             let bytes = editor.text.len();
             let chars = editor.chars();
             match editor.key(byte) {
@@ -321,6 +394,7 @@ pub struct RawMode {
 
 impl RawMode {
     pub fn enter() -> io::Result<Self> {
+        *stdin_keys() = None;
         let output = console("CONOUT$")?;
         let saved_output = mode(&output)?;
         let input = InputMode::enter(&console("CONIN$")?, false)?;
@@ -352,6 +426,7 @@ impl RawMode {
 
 impl Drop for RawMode {
     fn drop(&mut self) {
+        *stdin_keys() = None;
         // SAFETY: restored from GetConsoleOutputCP for the same console.
         unsafe {
             SetConsoleOutputCP(self.output_code_page);
@@ -363,6 +438,7 @@ impl Drop for RawMode {
 pub struct ReplayTerminal {
     tty: Tty,
     _raw: RawMode,
+    keys: Mutex<ConsoleKeys>,
 }
 
 impl ReplayTerminal {
@@ -370,16 +446,20 @@ impl ReplayTerminal {
         Ok(Self {
             tty: Tty::open()?,
             _raw: RawMode::enter()?,
+            keys: Mutex::new(ConsoleKeys::new()),
         })
     }
 
     pub fn keys(&self, timeout: Duration, buf: &mut [u8]) -> io::Result<Option<usize>> {
-        if !self.tty.wait(timeout)? {
+        let mut keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
+        if !keys.pending() && !self.tty.wait(timeout)? {
             return Ok(Some(0));
         }
-        match (&self.tty.input).read(buf)? {
-            0 => Ok(None),
-            n => Ok(Some(n)),
+        match keys.read(&self.tty.input, buf) {
+            Ok(count) => Ok(Some(count)),
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(Some(0)),
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => Ok(None),
+            Err(e) => Err(e),
         }
     }
 }
@@ -415,6 +495,9 @@ fn stdin_handle() -> HANDLE {
 }
 
 pub fn wait_for_input(timeout: Duration) -> io::Result<bool> {
+    if stdin_keys().as_ref().is_some_and(ConsoleKeys::pending) {
+        return Ok(true);
+    }
     ready(stdin_handle(), timeout)
 }
 
@@ -424,7 +507,9 @@ pub fn read_stdin(buf: &mut [u8]) -> io::Result<usize> {
     // bytes across raw/cooked transitions. A one-off SSH command must instead
     // forward its actual redirected input, without consuming the console.
     if io::stdin().is_terminal() {
-        (&console("CONIN$")?).read(buf)
+        stdin_keys()
+            .get_or_insert_with(ConsoleKeys::new)
+            .read(&console("CONIN$")?, buf)
     } else {
         io::stdin().read(buf)
     }

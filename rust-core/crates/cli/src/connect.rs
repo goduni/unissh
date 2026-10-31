@@ -321,6 +321,14 @@ fn pump_keys(session: &SshSession, stop: &AtomicBool, ended: &Ended, mut size: (
         }
         let typed = match tty::read_stdin(&mut buf) {
             Ok(n) if n > 0 => buf.get(..n).unwrap_or_default(),
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                ) =>
+            {
+                continue
+            }
             Ok(_) | Err(_) => {
                 hang_up = true;
                 break;
