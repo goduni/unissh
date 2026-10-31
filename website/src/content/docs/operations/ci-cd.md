@@ -29,7 +29,11 @@ A push to `main` publishes the `latest` tag; a `v*` tag publishes the matching s
 One file carries two flows:
 
 - **CI** — on pull requests and pushes to `main`: build the desktop bundles to validate they compile and bundle. No GitHub Release is created.
-- **Release** — on a `v*` tag: build release bundles and attach them to a GitHub Release.
+- **Release** — on a `v*` tag: build release bundles and attach them to a draft
+  GitHub Release. The maintainer publishes it after all platform builds, signed
+  checksums, provenance and the complete updater manifest have been verified:
+  `gh release edit v<version> --draft=false --latest`. Until then, installed
+  clients keep receiving the previous complete release.
 
 It builds on a five-way matrix: `ubuntu-22.04` and `ubuntu-22.04-arm` (the version is pinned for webkit2gtk-4.1 availability and broad AppImage glibc compatibility → `.deb`/`.rpm`/`.AppImage`), `windows-latest` and `windows-11-arm` (`.msi` via WiX + NSIS `.exe`), and `macos-latest` building `--target universal-apple-darwin` (`.dmg`/`.app` for Apple Silicon and Intel in one bundle). Both ARM legs build natively rather than cross-compiling, which is what keeps the vendored-OpenSSL and webkit dependencies straightforward. Node 22 + the repo-root pinned Rust toolchain are used; the client's path dependency on `../../rust-core/crates/ffi` resolves inside the single checkout (no cross-repo checkout, no PAT).
 

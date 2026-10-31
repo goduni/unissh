@@ -1,0 +1,9 @@
+[Desktop Entry]
+Categories=Development;
+Comment=Cross-platform SSH client
+Exec=unissh --gui
+StartupWMClass=unissh
+Icon=unissh
+Name=UniSSH
+Terminal=false
+Type=Application

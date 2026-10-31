@@ -2498,7 +2498,8 @@ export const en = {
   cliTools: {
       "optional": "Optional: use UniSSH in your terminal.",
       "title": "Command-line tools",
-      "description": "Optional: install unissh-cli and add it to your terminal’s PATH.",
+      "description": "Optional: install {{command}} and add it to your terminal’s PATH.",
+      "openDesktop": "Open the desktop app:",
       "installed": "The CLI is installed and added to PATH.",
       "install": "Install CLI",
       "update": "Update CLI",
