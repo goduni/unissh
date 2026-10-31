@@ -19,6 +19,12 @@ fn console_child() {
     let mut tty = super::Tty::open().unwrap();
     match case.as_str() {
         "secret" | "pipe" => {
+            if case == "secret" {
+                assert!(
+                    super::stdin_is_foreground(),
+                    "an exclusive native terminal can authorize approvals"
+                );
+            }
             let value = tty.secret("CLI_PASSWORD: ").unwrap();
             assert_eq!(&*value, SECRET);
             if case == "pipe" {
