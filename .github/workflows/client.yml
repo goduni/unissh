@@ -75,6 +75,7 @@ on:
       - "scripts/bump-version.py"
       - "scripts/assert-icons-replaced.py"
       - ".github/workflows/client.yml"
+      - ".github/desktop-platforms.json"
   pull_request:
     paths:
       - "client/**"
@@ -85,94 +86,108 @@ on:
       - "scripts/bump-version.py"
       - "scripts/assert-icons-replaced.py"
       - ".github/workflows/client.yml"
+      - ".github/desktop-platforms.json"
   workflow_dispatch:
+    inputs:
+      platform:
+        description: "Build all targets, or one desktop platform"
+        type: choice
+        default: all
+        options: [all, ubuntu-22.04, ubuntu-22.04-arm, windows-latest, windows-11-arm, macos-latest]
 
 concurrency:
-  group: client-${{ github.ref }}
+  group: client-${{ github.ref }}-${{ inputs.platform || 'all' }}
   cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  desktop-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.targets.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: targets
+        env:
+          SELECTED_PLATFORM: ${{ inputs.platform || 'all' }}
+        run: |
+          python3 - <<'PY_MATRIX'
+          import json, os
+          targets = json.load(open('.github/desktop-platforms.json'))
+          selected = os.environ['SELECTED_PLATFORM']
+          if selected != 'all':
+              targets = [target for target in targets if target['platform'] == selected]
+          if not targets:
+              raise SystemExit('Unknown desktop platform')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              print('matrix=' + json.dumps({'include': targets}), file=output)
+          PY_MATRIX
+
   build:
     name: build (${{ matrix.platform }})
+    needs: desktop-matrix
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          # NOTE the `os` field. Steps below branch on IT, not on the runner
-          # label, because the label is not a reliable predicate: `ubuntu-22.04`
-          # and `ubuntu-22.04-arm` are both Linux, and an `== 'ubuntu-22.04'`
-          # test silently excludes the arm one. That is not hypothetical — the
-          # webkit/AppImage dependency step was written that way, so adding the
-          # arm runner without this would have skipped its system deps and failed
-          # deep inside the bundler instead of at the missing package.
-          # The rule is "use the predicate you actually mean", not "never look at
-          # the label": the three steps that DO test a label — the frontend
-          # tests, the Tauri lint, and the NASM pair — mean one specific runner or
-          # one specific architecture, and each says so where it is written.
-          #
-          # ubuntu-22.04 pinned (both architectures): webkit2gtk-4.1 availability
-          # + broad AppImage glibc compatibility. Produces .deb / .rpm / .AppImage.
-          - platform: ubuntu-22.04
-            os: linux
-            args: ""
-          # Linux on ARM is not a niche for an SSH client specifically: Asahi,
-          # ARM laptops and desktop Raspberry Pi are exactly where one gets used.
-          # (ARM servers are covered by the multi-arch container image instead —
-          # nobody runs a GUI client on a VPS.) The runner is free for public
-          # repositories, same as the arm64 runners publish-images.yml uses.
-          - platform: ubuntu-22.04-arm
-            os: linux
-            args: ""
-          # .msi (WiX) + NSIS .exe
-          - platform: windows-latest
-            os: windows
-            args: ""
-          # Windows on ARM, built NATIVELY rather than cross-compiled: this
-          # runner's own host triple is aarch64-pc-windows-msvc, so there is no
-          # `--target` to pass and matrix.args stays empty — the bundler reads
-          # the arch off the host and emits `_arm64-setup.exe` / `_arm64_en-US.msi`
-          # by itself. (Cross-compiling from the x64 runner would also have to
-          # cross-build vendored OpenSSL, which is the part that goes wrong.)
-          # The runner is free for public repositories, same as the arm64 Linux
-          # one above and the ones publish-images.yml uses.
-          #
-          # Worth a leg of its own even though ARM Windows emulates x64 happily:
-          # emulation is a tax on exactly the two things this app does all day,
-          # vault crypto and terminal I/O.
-          #
-          # PURELY ADDITIVE for the installed base — this cannot strand anyone.
-          # tauri-action derives the updater key from the runner's own arch
-          # (utils.ts getTargetInfo: process.arch 'arm64', normalized to
-          # 'aarch64'), so it ADDS `windows-aarch64` to latest.json and rewrites
-          # no existing key. An x64 install sitting on an ARM machine keeps
-          # polling `windows-x86_64`, because the updater matches the arch the
-          # binary was COMPILED for, not the one it happens to be running on.
-          - platform: windows-11-arm
-            os: windows
-            args: ""
-          # .dmg / .app. `macos-latest` has been Apple Silicon since early 2025,
-          # so a default build here is arm64-ONLY and silently ships nothing an
-          # Intel Mac can run. Building the universal target instead is the fix
-          # that survives: the last Intel RUNNER (`macos-15-intel`) is gone in
-          # Fall 2027, but cross-compiling x86_64 from an arm64 runner is not
-          # affected by that — it only needs the second rustup target below.
-          #
-          # SAFE FOR THE INSTALLED BASE. tauri-plugin-updater 2.10.1 looks up
-          # only `{os}-{arch}-{installer}` then `{os}-{arch}` (updater.rs:578-596)
-          # — there is NO `darwin-universal` fallback, so publishing that key
-          # alone would strand every client already installed on `darwin-aarch64`.
-          # It doesn't happen here: tauri-action's upload-version-json.ts special-
-          # cases `os === 'darwin' && arch === 'universal'` and writes the SAME
-          # artifact under BOTH `darwin-aarch64` and `darwin-x86_64` (guarded by
-          # `if (!versionContent.platforms[...])`, so a native build still wins).
-          # Verified against the released `@v0`, not just `dev` — the two have
-          # disagreed before (see uploadUpdaterJson below).
-          - platform: macos-latest
-            os: macos
-            args: "--target universal-apple-darwin"
+      # NOTE the `os` field. Steps below branch on IT, not on the runner
+      # label, because the label is not a reliable predicate: `ubuntu-22.04`
+      # and `ubuntu-22.04-arm` are both Linux, and an `== 'ubuntu-22.04'`
+      # test silently excludes the arm one. That is not hypothetical — the
+      # webkit/AppImage dependency step was written that way, so adding the
+      # arm runner without this would have skipped its system deps and failed
+      # deep inside the bundler instead of at the missing package.
+      # The rule is "use the predicate you actually mean", not "never look at
+      # the label": the three steps that DO test a label — the frontend
+      # tests, the Tauri lint, and the NASM pair — mean one specific runner or
+      # one specific architecture, and each says so where it is written.
+      #
+      # ubuntu-22.04 pinned (both architectures): webkit2gtk-4.1 availability
+      # + broad AppImage glibc compatibility. Produces .deb / .rpm / .AppImage.
+      # Linux on ARM is not a niche for an SSH client specifically: Asahi,
+      # ARM laptops and desktop Raspberry Pi are exactly where one gets used.
+      # (ARM servers are covered by the multi-arch container image instead —
+      # nobody runs a GUI client on a VPS.) The runner is free for public
+      # repositories, same as the arm64 runners publish-images.yml uses.
+      # .msi (WiX) + NSIS .exe
+      # Windows on ARM, built NATIVELY rather than cross-compiled: this
+      # runner's own host triple is aarch64-pc-windows-msvc, so there is no
+      # `--target` to pass and matrix.args stays empty — the bundler reads
+      # the arch off the host and emits `_arm64-setup.exe` / `_arm64_en-US.msi`
+      # by itself. (Cross-compiling from the x64 runner would also have to
+      # cross-build vendored OpenSSL, which is the part that goes wrong.)
+      # The runner is free for public repositories, same as the arm64 Linux
+      # one above and the ones publish-images.yml uses.
+      #
+      # Worth a leg of its own even though ARM Windows emulates x64 happily:
+      # emulation is a tax on exactly the two things this app does all day,
+      # vault crypto and terminal I/O.
+      #
+      # PURELY ADDITIVE for the installed base — this cannot strand anyone.
+      # tauri-action derives the updater key from the runner's own arch
+      # (utils.ts getTargetInfo: process.arch 'arm64', normalized to
+      # 'aarch64'), so it ADDS `windows-aarch64` to latest.json and rewrites
+      # no existing key. An x64 install sitting on an ARM machine keeps
+      # polling `windows-x86_64`, because the updater matches the arch the
+      # binary was COMPILED for, not the one it happens to be running on.
+      # .dmg / .app. `macos-latest` has been Apple Silicon since early 2025,
+      # so a default build here is arm64-ONLY and silently ships nothing an
+      # Intel Mac can run. Building the universal target instead is the fix
+      # that survives: the last Intel RUNNER (`macos-15-intel`) is gone in
+      # Fall 2027, but cross-compiling x86_64 from an arm64 runner is not
+      # affected by that — it only needs the second rustup target below.
+      #
+      # SAFE FOR THE INSTALLED BASE. tauri-plugin-updater 2.10.1 looks up
+      # only `{os}-{arch}-{installer}` then `{os}-{arch}` (updater.rs:578-596)
+      # — there is NO `darwin-universal` fallback, so publishing that key
+      # alone would strand every client already installed on `darwin-aarch64`.
+      # It doesn't happen here: tauri-action's upload-version-json.ts special-
+      # cases `os === 'darwin' && arch === 'universal'` and writes the SAME
+      # artifact under BOTH `darwin-aarch64` and `darwin-x86_64` (guarded by
+      # `if (!versionContent.platforms[...])`, so a native build still wins).
+      # Verified against the released `@v0`, not just `dev` — the two have
+      # disagreed before (see uploadUpdaterJson below).
+      matrix: ${{ fromJSON(needs.desktop-matrix.outputs.matrix) }}
 
     runs-on: ${{ matrix.platform }}
 
@@ -603,6 +618,7 @@ jobs:
   # signs the artifact users install; a bot-authored branch must never be able to
   # reach it.
   android-signable:
+    if: inputs.platform == '' || inputs.platform == 'all'
     name: android (can this run sign?)
     runs-on: ubuntu-latest
     outputs:
@@ -623,7 +639,7 @@ jobs:
     name: build (android, all ABIs)
     runs-on: ubuntu-latest
     needs: android-signable
-    if: needs.android-signable.outputs.signable == 'true'
+    if: (inputs.platform == '' || inputs.platform == 'all') && (needs.android-signable.outputs.signable == 'true')
     permissions:
       contents: write
 
@@ -1102,6 +1118,7 @@ jobs:
   # tauri CLI (`tauri ios xcode-script`).
   # ---------------------------------------------------------------------------
   ios:
+    if: inputs.platform == '' || inputs.platform == 'all'
     name: build (ios, unsigned sideload ipa)
     runs-on: macos-latest
     permissions:
@@ -1216,6 +1233,7 @@ jobs:
   # there is no system libcrypto to link a static binary against.
   # ---------------------------------------------------------------------------
   cli:
+    if: inputs.platform == '' || inputs.platform == 'all'
     name: CLI static binary (${{ matrix.arch }})
     strategy:
       fail-fast: false

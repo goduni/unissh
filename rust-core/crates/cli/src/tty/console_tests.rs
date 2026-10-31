@@ -16,6 +16,24 @@ fn console_child() {
     #[cfg(windows)]
     let original_console = console_state();
     let case = std::env::var("UNISSH_TTY_TEST_CASE").unwrap();
+    if case == "pipe_parent" {
+        // Native pipes with an explicitly closed producer avoid shell-specific
+        // handle inheritance (including emulated Windows PowerShell on ARM).
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", CHILD, "--ignored", "--nocapture"])
+            .env("UNISSH_TTY_TEST_CASE", "pipe")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut input = child.stdin.take().unwrap();
+        input.write_all(b"PIPE_SENTINEL\n").unwrap();
+        drop(input);
+        assert!(
+            child.wait().unwrap().success(),
+            "piped console child failed"
+        );
+        return;
+    }
     let mut tty = super::Tty::open().unwrap();
     match case.as_str() {
         "secret" | "pipe" => {
@@ -116,24 +134,12 @@ fn run_case(case: &str) {
         })
         .unwrap();
     let exe = std::env::current_exe().unwrap();
-    let mut command = if case == "pipe" {
-        #[cfg(windows)]
-        let (shell, script) = ("powershell.exe", "'PIPE_SENTINEL' | & $env:UNISSH_TTY_TEST_BINARY --exact tty::console_tests::console_child --ignored --nocapture");
-        #[cfg(unix)]
-        let (shell, script) = ("sh", "printf 'PIPE_SENTINEL\\n' | \"$UNISSH_TTY_TEST_BINARY\" --exact tty::console_tests::console_child --ignored --nocapture");
-        let mut command = CommandBuilder::new(shell);
-        #[cfg(windows)]
-        command.args(["-NoProfile", "-NonInteractive", "-Command", script]);
-        #[cfg(unix)]
-        command.args(["-c", script]);
-        command.env("UNISSH_TTY_TEST_BINARY", &exe);
-        command
-    } else {
-        let mut command = CommandBuilder::new(&exe);
-        command.args(["--exact", CHILD, "--ignored", "--nocapture"]);
-        command
-    };
-    command.env("UNISSH_TTY_TEST_CASE", case);
+    let mut command = CommandBuilder::new(&exe);
+    command.args(["--exact", CHILD, "--ignored", "--nocapture"]);
+    command.env(
+        "UNISSH_TTY_TEST_CASE",
+        if case == "pipe" { "pipe_parent" } else { case },
+    );
     let mut child = pty.slave.spawn_command(command).unwrap();
     drop(pty.slave);
     let mut input = pty.master.take_writer().unwrap();
