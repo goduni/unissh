@@ -44,6 +44,9 @@ for (const triple of targets) {
   const args = ["build", "--locked", "-p", "unissh-cli", "--bin", "unissh", "--features", "portable", "--target", triple];
   if (!debug) args.push("--release");
   run("cargo", args, { env: buildEnv });
+  if (process.argv.includes("--test")) {
+    run("cargo", ["test", ...args.slice(1), "--", "--test-threads=1"], { env: buildEnv });
+  }
   inputs.push(join(targetDir, triple, profile, `unissh${extension}`));
 }
 const directory = join(client, "src-tauri", "binaries", "cli");

@@ -369,7 +369,8 @@ jobs:
         # Git Bash shadows Strawberry Perl with its incomplete MSYS Perl.
         # OpenSSL's Configure requires the native runner's full Perl install.
         shell: pwsh
-        run: node client/scripts/build-cli.mjs
+        # Test the same static-runtime build on native x64 and ARM64 consoles.
+        run: node client/scripts/build-cli.mjs --test
 
       - name: Upload standalone native CLI
         if: matrix.os != 'linux'
