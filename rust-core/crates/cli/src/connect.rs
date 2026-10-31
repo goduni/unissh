@@ -457,9 +457,9 @@ impl Endpoint {
         }
         match spec.split_once(':') {
             Some((host, path))
-                if !host.is_empty()
-                    && !host.contains('/')
-                    && !(cfg!(windows) && host.contains('\\')) =>
+                if !(host.is_empty()
+                    || host.contains('/')
+                    || cfg!(windows) && host.contains('\\')) =>
             {
                 Self::Remote {
                     host: host.to_owned(),
