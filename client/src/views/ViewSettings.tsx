@@ -41,6 +41,7 @@ import { exportPath } from "@/support/paths";
 import { ServerVaultsSection } from "./ServerVaultsSection";
 import { OwnFingerprintRow } from "./SharedVaultTrust";
 import { Modal } from "@/components/Modal";
+import { CliTools } from "@/components/CliTools";
 import type { IconName } from "@/components/primitives";
 import { forgetTerminalWorkspace, moveTerminalWorkspace, useApp } from "@/store/app";
 import { localShellSettings, setLocalShellSetting, useLocalMachine } from "@/store/localShell";
@@ -1180,6 +1181,7 @@ function SettingsLocalTerminal() {
       <div style={{ fontSize: TEXT.small, color: p.txt3, marginTop: rem(12) }}>
         {t("settings.localLockNote")}
       </div>
+      <CliTools />
     </>
   );
 }

@@ -286,7 +286,9 @@ jobs:
       - name: Cache Rust (client/src-tauri standalone workspace)
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: client/src-tauri
+          workspaces: |
+            client/src-tauri
+            . -> target/cli-desktop
 
       - name: Install client npm deps
         # The committed lock includes every supported platform's native optional
@@ -318,6 +320,7 @@ jobs:
       - name: Lint (Tauri crate)
         if: matrix.platform == 'ubuntu-22.04'
         run: |
+          node ../scripts/build-cli.mjs
           cargo fmt --all --check
           cargo clippy --all-targets -- -D warnings
         working-directory: client/src-tauri
@@ -353,6 +356,21 @@ jobs:
         shell: bash
         run: echo "OPENSSL_RUST_USE_NASM=0" >> "$GITHUB_ENV"
 
+      - name: Build the bundled command-line client
+        shell: bash
+        env:
+          TAURI_ENV_TARGET_TRIPLE: ${{ matrix.os == 'macos' && 'universal-apple-darwin' || '' }}
+        run: node client/scripts/build-cli.mjs
+
+      - name: Upload standalone native CLI
+        if: matrix.os != 'linux'
+        uses: actions/upload-artifact@v7
+        with:
+          name: cli-native-${{ matrix.platform }}
+          path: client/src-tauri/cli-dist/unissh-cli_*
+          if-no-files-found: error
+          retention-days: 14
+
       # Exercise recovery with real crypto/SQLCipher on every desktop host.
       # Release mode shares compiled dependencies with the bundle build below.
       # The code lives in the unissh-cloud crate, a path dependency here: it
@@ -363,6 +381,10 @@ jobs:
 
       - name: Test local SFTP file integrity (Tauri crate)
         run: cargo test --locked --release --lib commands::local_symlink_tests -- --test-threads=1
+        working-directory: client/src-tauri
+
+      - name: Test optional CLI installation (Tauri crate)
+        run: cargo test --locked --release --lib cli_tools:: -- --test-threads=1
         working-directory: client/src-tauri
 
       # Token rotation's bookkeeping: a caller holding a token someone else
@@ -465,6 +487,10 @@ jobs:
           # PRE-pends the body to what it generates, and (b) have all five
           # desktop jobs race to write the same field.
           generateReleaseNotes: true
+
+      - name: Verify the CLI in the desktop bundle
+        shell: bash
+        run: node client/scripts/verify-bundled-cli.mjs
 
       # The tripwire for LINUXDEPLOY_EXCLUDED_LIBRARIES (see "KEEP libwayland OUT
       # OF THE APPIMAGE"). It already caught the previous mechanism — a seeded GTK
@@ -1278,10 +1304,9 @@ jobs:
       # itself, so that job needs no write token and nothing waits for the
       # release to exist. Whatever legs succeeded are attached.
       - name: Take the CLI binaries from this run
-        if: needs.cli.result != 'skipped'
         uses: actions/download-artifact@v8
         with:
-          pattern: cli-linux-*
+          pattern: cli-*
           merge-multiple: true
           path: cli-dist
 
@@ -1386,16 +1411,17 @@ jobs:
             --json body --jq .body > body.md
           # The CLI row names only the binaries this release really carries: a
           # failed leg must not advertise a file that 404s.
-          CLI_FILES=""
-          for arch in x86_64 aarch64; do
-            if [ -e "dist/unissh-cli_${VERSION}_linux-${arch}" ]; then
-              CLI_FILES="${CLI_FILES:+$CLI_FILES · }\`unissh-cli_${VERSION}_linux-${arch}\`"
+          CLI_ROWS=""
+          shopt -s nullglob
+          for platform in linux macos windows; do
+            CLI_FILES=""
+            for file in dist/unissh-cli_${VERSION}_${platform}-*; do
+              CLI_FILES="${CLI_FILES:+$CLI_FILES · }\`$(basename "$file")\`"
+            done
+            if [ -n "$CLI_FILES" ]; then
+              CLI_ROWS="${CLI_ROWS}| **CLI · ${platform}** | ${CLI_FILES} |"$'\n'
             fi
           done
-          CLI_ROW=""
-          if [ -n "$CLI_FILES" ]; then
-            CLI_ROW="| **Command line** (Linux servers; one static binary) | ${CLI_FILES} |"
-          fi
 
           # Re-runs must not stack a second footer onto the first.
           if grep -q '<!-- unissh:footer -->' body.md; then
@@ -1420,7 +1446,7 @@ jobs:
           | **Android** (sideload) | \`UniSSH_${VERSION}_universal.apk\` — works on any device |
           | ↳ smaller, if you know your ABI | \`_arm64\` · \`_armv7\` · \`_x86_64\` · \`_x86\` \`.apk\` |
           | **iOS** (sideload, unsigned) | \`UniSSH_${VERSION}_ios-sideload.ipa\` |
-          ${CLI_ROW}
+          ${CLI_ROWS}
 
           **Every platform above ships both architectures**, Windows included — so if
           your machine is ARM, take the ARM file rather than letting it emulate the

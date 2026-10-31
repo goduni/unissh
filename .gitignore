@@ -133,3 +133,7 @@ $RECYCLE.BIN/
 .#*
 \#*\#
 *.sublime-workspace
+
+# Native CLI sidecars and standalone desktop CLI release artifacts.
+/client/src-tauri/binaries/
+/client/src-tauri/cli-dist/
