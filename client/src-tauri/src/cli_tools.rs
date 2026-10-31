@@ -93,7 +93,7 @@ impl Layout {
             #[cfg(target_os = "linux")]
             desktop: std::env::var_os("APPIMAGE")
                 .map(PathBuf::from)
-                .map_or_else(std::env::current_exe, |path| fs::canonicalize(path))
+                .map_or_else(std::env::current_exe, fs::canonicalize)
                 .map_err(ApiError::other)?,
         })
     }
