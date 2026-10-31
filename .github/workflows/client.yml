@@ -357,12 +357,18 @@ jobs:
         shell: bash
         run: echo "OPENSSL_RUST_USE_NASM=0" >> "$GITHUB_ENV"
 
-      - name: Build the bundled command-line client
-        # Git Bash shadows Strawberry Perl with its incomplete MSYS Perl.
-        # OpenSSL's Configure requires the native runner's full Perl install.
-        shell: ${{ matrix.os == 'windows' && 'pwsh' || 'bash' }}
+      - name: Build the bundled command-line client (Unix)
+        if: matrix.os != 'windows'
+        shell: bash
         env:
           TAURI_ENV_TARGET_TRIPLE: ${{ matrix.os == 'macos' && 'universal-apple-darwin' || '' }}
+        run: node client/scripts/build-cli.mjs
+
+      - name: Build the bundled command-line client (Windows)
+        if: matrix.os == 'windows'
+        # Git Bash shadows Strawberry Perl with its incomplete MSYS Perl.
+        # OpenSSL's Configure requires the native runner's full Perl install.
+        shell: pwsh
         run: node client/scripts/build-cli.mjs
 
       - name: Upload standalone native CLI
