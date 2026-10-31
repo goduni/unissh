@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { verifyWindowsCliImports } from "./windows-cli-imports.mjs";
 
 const client = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const root = resolve(client, "..");
@@ -29,10 +30,20 @@ const extension = target.includes("windows") ? ".exe" : "";
 const targets = target === "universal-apple-darwin"
   ? ["aarch64-apple-darwin", "x86_64-apple-darwin"] : [target];
 const inputs = [];
+const buildEnv = { ...process.env, CARGO_TARGET_DIR: targetDir };
+if (target.includes("windows")) {
+  // The separately built CLI does not inherit tauri-build's static VC runtime
+  // setup. Embed it explicitly, so the optional copy also runs on a clean OS.
+  if (buildEnv.CARGO_ENCODED_RUSTFLAGS !== undefined) {
+    buildEnv.CARGO_ENCODED_RUSTFLAGS = [buildEnv.CARGO_ENCODED_RUSTFLAGS, "-Ctarget-feature=+crt-static"].filter(Boolean).join("\x1f");
+  } else {
+    buildEnv.RUSTFLAGS = `${buildEnv.RUSTFLAGS || ""} -Ctarget-feature=+crt-static`.trim();
+  }
+}
 for (const triple of targets) {
   const args = ["build", "--locked", "-p", "unissh-cli", "--bin", "unissh", "--features", "portable", "--target", triple];
   if (!debug) args.push("--release");
-  run("cargo", args, { env: { ...process.env, CARGO_TARGET_DIR: targetDir } });
+  run("cargo", args, { env: buildEnv });
   inputs.push(join(targetDir, triple, profile, `unissh${extension}`));
 }
 const directory = join(client, "src-tauri", "binaries", "cli");
@@ -44,6 +55,7 @@ else copyFileSync(inputs[0], destination);
 const version = JSON.parse(readFileSync(join(client, "src-tauri", "tauri.conf.json"), "utf8")).version;
 const reported = run(destination, ["--version"], { stdio: "pipe" });
 if (reported !== `unissh ${version}`) throw new Error(`Bundled CLI version mismatch: ${reported}`);
+if (target.includes("windows")) verifyWindowsCliImports(destination);
 
 // The same tested native binary is also available without installing the GUI.
 if (!debug && !target.includes("linux")) {
