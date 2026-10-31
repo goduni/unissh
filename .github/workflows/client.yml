@@ -3,8 +3,8 @@ name: Client (Tauri)
 # Two flows in one file:
 #   (a) CI  — on pull_request + push to main: build the desktop bundles to
 #             validate they compile/bundle. No GitHub Release is created.
-#   (b) Release — on push of a 'v*' tag: build release bundles and attach them
-#             to a GitHub Release.
+#   (b) Release — on push of a 'v*' tag: attach bundles to a draft release.
+#             Publish only after every build and release-integrity check passes.
 #
 # UNSIGNED BY DESIGN (privacy): no signing/notarization secrets are provided to
 # tauri-action — no APPLE_* (cert/identity/id/team/password), no Windows code-
@@ -481,7 +481,9 @@ jobs:
           # the bundles only and does NOT create a release.
           tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
           releaseName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
-          releaseDraft: false
+          # Keep incomplete updater manifests away from installed clients.
+          # Publish after every build and independent integrity verification.
+          releaseDraft: true
           # Must stay false: installed clients poll
           # /releases/latest/download/latest.json, and GitHub's "latest" pointer
           # skips prereleases. Flipping this would publish a release whose
@@ -528,10 +530,9 @@ jobs:
       # abort before the check that produces the useful message.
       #
       # Runs after tauri-action rather than before, because tauri-action builds and
-      # uploads in one step and there is no seam between them. On a tag that means
-      # the bad artifact is already on the release when this fires — a loud failure
-      # to act on, not a gate. Fixing that properly means driving `tauri build`
-      # ourselves, which costs more than it buys today.
+      # uploads in one step and there is no seam between them. Tagged uploads
+      # remain draft until these checks and independent integrity verification
+      # pass, so a failing artifact cannot become the public latest release.
       - name: Verify no libwayland got bundled into the AppImage
         if: matrix.os == 'linux'
         run: |
