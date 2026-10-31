@@ -5304,6 +5304,7 @@ dependencies = [
  "clap",
  "futures-util",
  "log",
+ "portable-pty",
  "rustix",
  "serde",
  "serde_json",
@@ -5313,6 +5314,7 @@ dependencies = [
  "unissh-cloud",
  "unissh-ffi",
  "unissh-mcp",
+ "windows-sys 0.61.2",
  "zbus",
  "zeroize",
 ]

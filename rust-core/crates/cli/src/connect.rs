@@ -219,7 +219,7 @@ impl SessionObserver for Screen {
 pub fn shell(core: &Core, host: &Host, mut target: Target) -> Res<i32> {
     if !tty::SUPPORTED {
         return Err(Failure::msg(
-            "an interactive session needs a Unix terminal here; give a command to run instead",
+            "an interactive session needs a native terminal here; give a command to run instead",
         ));
     }
     if !io::stdin().is_terminal() {

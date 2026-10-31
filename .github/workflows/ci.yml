@@ -112,15 +112,15 @@ jobs:
       matrix:
         os: [macos-latest, windows-latest]
     env:
-      # The vendored OpenSSL (SQLCipher on Windows) in portable C: this job
-      # lints, it ships nothing, and NASM is one more thing to install.
+      # SQLCipher's vendored OpenSSL in portable C; these checks need no NASM.
       OPENSSL_RUST_USE_NASM: 0
     steps:
       - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
-      # `lint` covers Linux; these hosts compile the halves of the CLI it never
-      # sees — macOS termios, and the Windows stand-ins for the terminal.
-      - run: cargo clippy -p unissh-cli --all-targets -- -D warnings
+      # Exercise native consoles, not just cfg-gated compilation: the PTY
+      # contract covers Unicode, hidden prompts, cancellation, pipes and resize.
+      - run: cargo clippy --locked -p unissh-cli --all-targets -- -D warnings
+      - run: cargo test --locked -p unissh-cli --bin unissh -- --test-threads=1
 
   deny:
     name: cargo-deny (supply chain)

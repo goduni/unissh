@@ -53,5 +53,24 @@ rustix = { version = "1", features = ["termios", "event", "process"] }
 zbus = { version = "6", default-features = false, features = ["tokio"] }
 futures-util = { version = "0.3", default-features = false }
 
+# Native console input, mode restoration, UTF-8 and private-file ACLs.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_Threading",
+] }
+
+[features]
+# Release binaries carry libcrypto, including both slices of the macOS binary.
+portable = ["unissh-ffi/vendored-openssl"]
+
+[dev-dependencies]
+# Exercise real PTYs, including native Windows ConPTY, rather than terminal stubs.
+portable-pty = "0.9"
+
 [lints]
 workspace = true
