@@ -12,8 +12,15 @@ Desktop panes and the mobile shell share the same core and file operations.
 
 Desktop builds bundle the native CLI for the same OS and architecture. The
 first-run screen and **Settings → General → Command-line tools** offer an
-optional per-user installation. The command is `unissh-cli`, so the GUI's
-`unissh` launcher keeps its name. The CLI signs in as a separate device.
+optional per-user installation. On Linux, `unissh` runs the CLI and
+`unissh --gui` opens the installed desktop app (or the AppImage used to install
+its tools). Menu entries explicitly request the GUI. macOS/Windows use
+`unissh-cli`; that command also remains available on Linux. The CLI signs in as
+a separate device.
+
+Debian/RPM menu entries execute `/usr/bin/unissh --gui` directly, so a CLI
+already present on PATH cannot intercept them. AppImage entries use the bundled
+GUI selected by AppRun's own PATH. Neither needs the optional CLI installation.
 
 `npm run tauri dev` / `build` first run `scripts/build-cli.mjs`. It builds the
 root workspace's CLI in its own target directory, embeds OpenSSL, and packages
@@ -26,7 +33,13 @@ The managed copy lives in `~/.local/bin` on Unix and the app's local-data
 `cli-bin` directory on Windows. Installation adds the directory to the user's
 shell profile / user PATH, never the system PATH. Only an opted-in, unchanged
 copy is refreshed after an app update or removed from Settings. An unrelated
-command is never overwritten. CLI removal leaves Unix's shared `~/.local/bin`
+command is never overwritten. Linux installs a small `unissh` launcher beside
+the native `unissh-cli` binary, so terminal use loads no GTK libraries. It
+forwards arguments, standard streams and exit status, and launches the GUI by
+its recorded absolute path rather than looking up `unissh` on PATH. Both files
+are managed by digest; moving an AppImage and launching it again refreshes the
+launcher target. The shell profile gives this optional launcher PATH priority.
+CLI removal leaves Unix's shared `~/.local/bin`
 PATH entry; on Windows it removes only the dedicated `cli-bin` entry.
 
 ## Architecture

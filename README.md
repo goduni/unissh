@@ -87,8 +87,10 @@ which are multi-arch.
 
 Desktop builds after v0.7.0 include an optional CLI: choose **Install CLI** during
 first-run setup or in **Settings → General → Command-line tools**. Open a new
-terminal and run `unissh-cli --help`. It installs for the current user without
-administrator privileges; sign in or pair it as a separate device.
+terminal and run `unissh --help` on Linux or `unissh-cli --help` on macOS/Windows.
+On Linux, `unissh --gui` opens the desktop app; its menu entry always opens the GUI.
+Installation is per-user without administrator privileges. Sign in or pair the CLI
+as a separate device.
 
 Release builds are **unsigned**. On desktop that means a one-time warning and a ten-second "open anyway" — on **Android** it means a permanent Play Protect warning, and on **iOS** it means re-signing the `.ipa` with your own Apple ID before it will run at all. The steps for all five platforms are in [Installing unsigned builds](#installing-unsigned-builds). Always [verify the download](#verifying-release-integrity) against the published checksum first.
 

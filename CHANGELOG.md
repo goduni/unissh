@@ -34,6 +34,10 @@ starts with `0.`:
 
 ### Added
 
+- Unified Linux command after optional desktop CLI installation: `unissh` runs
+  the terminal client and `unissh --gui` opens the desktop app or AppImage.
+  Application-menu entries keep opening the GUI. Existing user commands are
+  preserved; the native `unissh-cli` command remains available.
 - Native Windows CLI console support: hidden prompts, Unicode, interactive SSH,
   terminal resize, cancellation and recording playback. Device directories and
   secret files are created with private Windows ACLs and checked before use.

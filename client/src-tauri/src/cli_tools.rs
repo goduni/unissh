@@ -17,6 +17,9 @@ use crate::error::{ApiError, ApiResult};
 #[path = "cli_tools/windows_path.rs"]
 mod windows_path;
 
+#[cfg(target_os = "linux")]
+mod linux_launcher;
+
 const COMMAND: &str = if cfg!(windows) {
     "unissh-cli.exe"
 } else {
@@ -33,6 +36,7 @@ const PROFILE_END: &str = "# <<< UniSSH command-line tools <<<";
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CliStatus {
+    command: &'static str,
     available: bool,
     installed: bool,
     update_available: bool,
@@ -43,6 +47,9 @@ pub struct CliStatus {
 #[derive(Serialize, Deserialize)]
 struct Installed {
     sha256: String,
+    #[cfg(target_os = "linux")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    launcher_sha256: Option<String>,
 }
 
 struct Layout {
@@ -51,6 +58,8 @@ struct Layout {
     marker: PathBuf,
     #[cfg(unix)]
     home: PathBuf,
+    #[cfg(target_os = "linux")]
+    desktop: PathBuf,
 }
 
 impl Layout {
@@ -81,6 +90,11 @@ impl Layout {
                 .join(MARKER),
             #[cfg(unix)]
             home,
+            #[cfg(target_os = "linux")]
+            desktop: std::env::var_os("APPIMAGE")
+                .map(PathBuf::from)
+                .map_or_else(std::env::current_exe, fs::canonicalize)
+                .map_err(ApiError::other)?,
         })
     }
 
@@ -117,17 +131,44 @@ impl Layout {
         let installed = self.owned()?;
         let update_available =
             installed && available && digest(&self.source)? != digest(&self.binary)?;
+        #[cfg(target_os = "linux")]
+        let update_available = update_available
+            || (installed
+                && !self.launcher()?.current(
+                    self.saved()?
+                        .as_ref()
+                        .and_then(|s| s.launcher_sha256.as_deref()),
+                )?);
         Ok(CliStatus {
+            command: if cfg!(target_os = "linux") {
+                "unissh"
+            } else {
+                "unissh-cli"
+            },
             available,
             installed,
             update_available,
             path_configured: self.path_configured()?,
-            install_path: self.binary.to_string_lossy().into_owned(),
+            install_path: if cfg!(target_os = "linux") {
+                parent(&self.binary)?.join("unissh")
+            } else {
+                self.binary.clone()
+            }
+            .to_string_lossy()
+            .into_owned(),
         })
     }
 
     fn install_files(&self) -> io::Result<()> {
         let hash = digest(&self.source)?;
+        #[cfg(target_os = "linux")]
+        let launcher = self.launcher()?;
+        #[cfg(target_os = "linux")]
+        launcher.check_replace(
+            self.saved()?
+                .as_ref()
+                .and_then(|s| s.launcher_sha256.as_deref()),
+        )?;
         let metadata = self.binary.symlink_metadata().ok();
         if metadata
             .as_ref()
@@ -154,7 +195,12 @@ impl Layout {
             temporary.as_file().sync_all()?;
             temporary.persist(&self.binary).map_err(|e| e.error)?;
         }
-        let record = serde_json::to_vec(&Installed { sha256: hash }).map_err(io::Error::other)?;
+        let record = serde_json::to_vec(&Installed {
+            sha256: hash,
+            #[cfg(target_os = "linux")]
+            launcher_sha256: Some(launcher.install()?),
+        })
+        .map_err(io::Error::other)?;
         atomic_write(&self.marker, &record)
     }
 
@@ -164,8 +210,19 @@ impl Layout {
                 "the installed command has changed; it was left untouched",
             ));
         }
+        #[cfg(target_os = "linux")]
+        self.launcher()?.remove(
+            self.saved()?
+                .as_ref()
+                .and_then(|s| s.launcher_sha256.as_deref()),
+        )?;
         fs::remove_file(&self.binary)?;
         fs::remove_file(&self.marker)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn launcher(&self) -> io::Result<linux_launcher::Launcher> {
+        linux_launcher::Launcher::new(&self.binary, &self.desktop)
     }
 
     fn path_configured(&self) -> io::Result<bool> {
@@ -176,14 +233,21 @@ impl Layout {
         #[cfg(unix)]
         {
             let directory = parent(&self.binary)?;
-            if std::env::var_os("PATH")
-                .is_some_and(|value| std::env::split_paths(&value).any(|p| p == directory))
-            {
+            if std::env::var_os("PATH").is_some_and(|value| {
+                let mut paths = std::env::split_paths(&value);
+                if cfg!(target_os = "linux") {
+                    paths.next().is_some_and(|p| p == directory)
+                } else {
+                    paths.any(|p| p == directory)
+                }
+            }) {
                 return Ok(true);
             }
-            let (path, _) = shell_profile(&self.home);
+            let (path, fish) = shell_profile(&self.home);
             match fs::read_to_string(path) {
-                Ok(text) => Ok(text.contains(PROFILE_START) && text.contains(PROFILE_END)),
+                Ok(text) => Ok(text.contains(PROFILE_START)
+                    && text.contains(PROFILE_END)
+                    && (!cfg!(target_os = "linux") || profile_with_path(&text, fish) == text)),
                 Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
                 Err(e) => Err(e),
             }
@@ -280,15 +344,25 @@ fn shell_profile(home: &Path) -> (PathBuf, bool) {
 
 #[cfg(unix)]
 fn profile_with_path(existing: &str, fish: bool) -> String {
-    if existing.contains(PROFILE_START) {
-        return existing.to_owned();
-    }
     let command = if fish {
-        "fish_add_path --path \"$HOME/.local/bin\""
+        if cfg!(target_os = "linux") {
+            "fish_add_path --path --move --prepend \"$HOME/.local/bin\""
+        } else {
+            "fish_add_path --path \"$HOME/.local/bin\""
+        }
+    } else if cfg!(target_os = "linux") {
+        "case \"$PATH\" in\n  \"$HOME/.local/bin\"|\"$HOME/.local/bin:\"*) ;;\n  *) export PATH=\"$HOME/.local/bin:$PATH\" ;;\nesac"
     } else {
         "case \":$PATH:\" in\n  *\":$HOME/.local/bin:\"*) ;;\n  *) export PATH=\"$HOME/.local/bin:$PATH\" ;;\nesac"
     };
-    format!("{existing}\n{PROFILE_START}\n{command}\n{PROFILE_END}\n")
+    let block = format!("{PROFILE_START}\n{command}\n{PROFILE_END}");
+    if let Some((before, rest)) = existing.split_once(PROFILE_START) {
+        if let Some((_, after)) = rest.split_once(PROFILE_END) {
+            return format!("{before}{block}{after}");
+        }
+        return existing.to_owned();
+    }
+    format!("{existing}\n{block}\n")
 }
 
 #[tauri::command]
@@ -362,6 +436,8 @@ mod tests {
             marker: root.join("app/cli.json"),
             #[cfg(unix)]
             home: root.to_path_buf(),
+            #[cfg(target_os = "linux")]
+            desktop: root.join("application/UniSSH.AppImage"),
         }
     }
 
@@ -401,6 +477,121 @@ mod tests {
         assert!(!layout.binary.exists());
         assert!(!layout.marker.exists());
         assert!(layout.source.exists());
+        #[cfg(target_os = "linux")]
+        assert!(!layout.binary.parent().unwrap().join("unissh").exists());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn legacy_installation_can_add_the_unified_launcher() {
+        let tmp = tempfile::tempdir().unwrap();
+        let layout = layout(tmp.path());
+        std::fs::create_dir_all(layout.source.parent().unwrap()).unwrap();
+        std::fs::write(&layout.source, b"CLI").unwrap();
+        layout.install_files().unwrap();
+        let launcher = layout.binary.parent().unwrap().join("unissh");
+        std::fs::remove_file(&launcher).unwrap();
+        let old = serde_json::json!({"sha256": super::digest(&layout.binary).unwrap()});
+        std::fs::write(&layout.marker, serde_json::to_vec(&old).unwrap()).unwrap();
+        assert!(layout.status().unwrap().installed);
+        assert!(layout.status().unwrap().update_available);
+        layout.install_files().unwrap();
+        assert_eq!(layout.status().unwrap().command, "unissh");
+        assert!(!layout.status().unwrap().update_available);
+        assert!(launcher.is_file());
+        let original = std::fs::read(&launcher).unwrap();
+        let moved = super::Layout {
+            desktop: tmp.path().join("moved/UniSSH.AppImage"),
+            ..layout
+        };
+        assert!(moved.status().unwrap().update_available);
+        moved.install_files().unwrap();
+        assert_ne!(std::fs::read(&launcher).unwrap(), original);
+        assert!(!moved.status().unwrap().update_available);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn installed_launcher_runs_the_bundled_cli_without_a_display() {
+        let tmp = tempfile::tempdir().unwrap();
+        let layout = super::Layout {
+            source: std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("binaries/cli/unissh-cli"),
+            ..layout(tmp.path())
+        };
+        layout.install_files().unwrap();
+        let status = layout.status().unwrap();
+        let output = std::process::Command::new(&status.install_path)
+            .arg("--version")
+            .env("DISPLAY", "")
+            .env("WAYLAND_DISPLAY", "")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            format!("unissh {}\n", env!("CARGO_PKG_VERSION"))
+        );
+        let help = std::process::Command::new(status.install_path)
+            .arg("--help")
+            .output()
+            .unwrap();
+        assert!(help.status.success());
+        assert!(String::from_utf8(help.stdout)
+            .unwrap()
+            .contains("unissh --gui"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn path_registration_promotes_the_launcher_and_upgrades_only_its_own_block() {
+        let tmp = tempfile::tempdir().unwrap();
+        let old = format!(
+            "# before\n{}\nexport PATH=\"$PATH:$HOME/.local/bin\"\n{}\n# after\n",
+            super::PROFILE_START,
+            super::PROFILE_END
+        );
+        let configured = super::profile_with_path(&old, false);
+        assert!(configured.starts_with("# before\n"));
+        assert!(configured.ends_with("# after\n"));
+        assert_eq!(super::profile_with_path(&configured, false), configured);
+        let profile = tmp.path().join("profile");
+        std::fs::write(&profile, configured).unwrap();
+        let result = std::process::Command::new("/bin/sh")
+            .args(["-c", "PATH=\"/usr/bin:$HOME/.local/bin\"; . \"$UNISSH_TEST_PROFILE\"; . \"$UNISSH_TEST_PROFILE\"; printf '%s' \"$PATH\""])
+            .env("HOME", tmp.path())
+            .env("UNISSH_TEST_PROFILE", profile)
+            .output().unwrap();
+        assert!(result.status.success());
+        assert!(String::from_utf8(result.stdout)
+            .unwrap()
+            .starts_with(&format!("{}/.local/bin:/usr/bin:", tmp.path().display())));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn foreign_unissh_commands_and_links_are_preserved() {
+        let tmp = tempfile::tempdir().unwrap();
+        let layout = layout(tmp.path());
+        std::fs::create_dir_all(layout.source.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(layout.binary.parent().unwrap()).unwrap();
+        std::fs::write(&layout.source, b"CLI").unwrap();
+        let launcher = layout.binary.parent().unwrap().join("unissh");
+        std::fs::write(&launcher, b"user command").unwrap();
+        assert!(layout.install_files().is_err());
+        assert!(!layout.binary.exists());
+        assert_eq!(std::fs::read(&launcher).unwrap(), b"user command");
+        std::fs::remove_file(&launcher).unwrap();
+        std::os::unix::fs::symlink(&layout.source, &launcher).unwrap();
+        assert!(layout.install_files().is_err());
+        assert!(launcher.is_symlink());
+        std::fs::remove_file(&launcher).unwrap();
+        layout.install_files().unwrap();
+        std::fs::write(&launcher, b"user-modified launcher").unwrap();
+        assert!(layout.install_files().is_err());
+        assert!(layout.remove_files().is_err());
+        assert_eq!(std::fs::read(&launcher).unwrap(), b"user-modified launcher");
+        assert!(layout.owned().unwrap());
     }
 
     #[cfg(unix)]

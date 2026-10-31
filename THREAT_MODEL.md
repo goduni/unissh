@@ -290,7 +290,10 @@ What the design does about it:
   registers that directory in the user's shell profile or Windows user PATH.
   It does not sign in, read GUI credentials or unlock either device. Updates and
   removal touch only a copy matching the recorded installed digest; a replaced
-  command or symlink is refused. The bundled binary receives the app's update
+  command or symlink is refused. Linux also installs a managed `unissh` launcher:
+  terminal commands execute the native CLI, while a leading `--gui` executes the
+  app's recorded absolute path. Desktop entries explicitly request GUI mode.
+  No GUI credentials are passed to the CLI. The bundled binary receives the app's update
   signature and release-integrity coverage; standalone downloads are included
   in signed checksums and provenance.
 - **Untrusted text stays text.** Instance and space names, server errors, host

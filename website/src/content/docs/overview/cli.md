@@ -14,12 +14,19 @@ app's core, host-key pinning and verify-before-apply sync.
 
 Desktop builds after v0.7.0 bundle the CLI. Choose **Install CLI** on the first-run
 screen, or open **Settings → General → Command-line tools** later. Installation
-is optional and needs no administrator privileges. Open a new terminal and run:
+is optional and needs no administrator privileges. Open a new terminal. On
+macOS/Windows, run:
 
 ```sh
 unissh-cli --help
 unissh-cli login pair
 ```
+
+On Linux, use `unissh --help` and `unissh login pair`. The desktop tools also
+provide `unissh --gui` to open the desktop app; its menu entry always opens the
+GUI. `unissh-cli` remains available as the direct terminal command. For an
+AppImage, `--gui` opens the AppImage used during installation; launching it
+after a move refreshes that path.
 
 The CLI signs in as its own device. Installing it does not share the desktop
 app's unlocked session. After an app update, launching the app refreshes a CLI
@@ -38,7 +45,9 @@ The macOS/Windows artifacts are added after v0.7.0. Rename your download to
 `unissh-cli` (`unissh-cli.exe` on Windows), put its directory in PATH, and on
 macOS/Linux make it executable with `chmod +x unissh-cli`. Verify the release's
 signed checksums before installing. No separate OpenSSL installation is needed.
-The examples below use `unissh`; with the desktop tools, use `unissh-cli` instead.
+The examples below use `unissh`; with macOS/Windows desktop tools, use
+`unissh-cli` instead. Standalone downloads run the CLI only; `--gui` belongs to
+the optional Linux desktop launcher.
 
 ### Linux server
 

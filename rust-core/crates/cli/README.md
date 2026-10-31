@@ -15,9 +15,11 @@ only.
 
 Desktop builds include the CLI. On the first-run screen, choose **Install CLI**,
 or install it later in **Settings → General → Command-line tools**. This is
-optional, needs no administrator privileges, and exposes `unissh-cli` in a new
-terminal. The app refreshes an opted-in copy on launch after an update; the same
-Settings section can remove it. Installing the tools does not sign the CLI in:
+optional and needs no administrator privileges. In a new terminal, run
+`unissh` on Linux or `unissh-cli` on macOS/Windows. Linux desktop tools also
+provide `unissh --gui` to open the GUI and keep `unissh-cli` as a direct CLI
+command. The GUI menu entry always opens the app. The app refreshes an opted-in
+copy on launch after an update; the same Settings section can remove it. Installing the tools does not sign the CLI in:
 pair or sign in below to create its separate device.
 
 Native release artifacts are also available without the GUI:
@@ -38,7 +40,9 @@ For a manual installation, rename the download to `unissh-cli` (Windows:
 `unissh-cli.exe`) and put its directory in PATH. On macOS/Linux, also make it
 executable with `chmod +x unissh-cli`. On a server without the GUI it can instead
 be named `unissh`; the examples below use that name. When installed through the
-app, run the same commands as `unissh-cli`, for example `unissh-cli login pair`.
+app on macOS/Windows, run the same commands as `unissh-cli`, for example
+`unissh-cli login pair`. On Linux, desktop tools expose `unissh` directly;
+`--gui` is an extension of that desktop-installed launcher and requires the GUI.
 
 From source: `cargo build --locked -p unissh-cli --bin unissh --release --features portable`.
 Source builds need a C compiler and Perl for vendored OpenSSL. On Windows, use

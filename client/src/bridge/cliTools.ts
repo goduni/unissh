@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export interface CliToolsStatus {
+  command: string;
   available: boolean;
   installed: boolean;
   updateAvailable: boolean;

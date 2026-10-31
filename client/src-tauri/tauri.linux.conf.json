@@ -1,6 +1,15 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "bundle": {
+    "linux": {
+      "deb": { "desktopTemplate": "linux/unissh.desktop.hbs" },
+      "rpm": { "desktopTemplate": "linux/unissh.desktop.hbs" },
+      "appimage": {
+        "files": {
+          "/usr/share/applications/UniSSH.desktop": "linux/unissh-appimage.desktop"
+        }
+      }
+    },
     "resources": {
       "binaries/cli/": "cli/"
     }

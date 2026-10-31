@@ -2543,7 +2543,8 @@ export const ru = {
   cliTools: {
       "optional": "По желанию: UniSSH в терминале.",
       "title": "Командная строка",
-      "description": "По желанию: установить unissh-cli и добавить команду в PATH терминала.",
+      "description": "По желанию: установить {{command}} и добавить команду в PATH терминала.",
+      "openDesktop": "Открыть приложение:",
       "installed": "CLI установлен и добавлен в PATH.",
       "install": "Установить CLI",
       "update": "Обновить CLI",
