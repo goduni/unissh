@@ -13,22 +13,22 @@
     "lint": "eslint ."
   },
   "dependencies": {
-    "i18next": "^26.4.2",
+    "i18next": "^26.5.11",
     "react": "^19",
     "react-dom": "^19",
-    "react-i18next": "^17.0.15",
-    "zustand": "^5.0.15"
+    "react-i18next": "^17.1.9",
+    "zustand": "^5.0.16"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^6",
-    "eslint": "^10.11.0",
+    "eslint": "^10.13.0",
     "eslint-plugin-react-hooks": "^7.1.1",
-    "globals": "^17.12.0",
+    "globals": "^17.13.0",
     "typescript": "^6",
-    "typescript-eslint": "^8.70.1",
-    "vite": "^8.3.1"
+    "typescript-eslint": "^8.72.1",
+    "vite": "^8.3.5"
   }
 }
